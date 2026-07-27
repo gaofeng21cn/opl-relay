@@ -3,7 +3,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+from codex_mail_workbench import cli
 from codex_mail_workbench.store import connect_email_store, upsert_email_message
 
 
@@ -135,3 +137,91 @@ def test_cli_doctor_omits_empty_legacy_keychain_service(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["keychain_services"] == ["codex-mail-workbench"]
+    assert payload["draft_db_path"].endswith("drafts.sqlite")
+
+
+def test_cli_exposes_draft_lifecycle() -> None:
+    parser = cli.build_parser()
+    for action in ["create", "adopt", "inspect", "open", "send"]:
+        if action == "create":
+            args = parser.parse_args(
+                [
+                    "draft",
+                    action,
+                    "--account",
+                    "work",
+                    "--to",
+                    "reviewer@example.test",
+                    "--subject",
+                    "Review",
+                    "--body",
+                    "Body",
+                ]
+            )
+        elif action == "adopt":
+            args = parser.parse_args(
+                [
+                    "draft",
+                    action,
+                    "--account",
+                    "work",
+                    "--apple-mail-uuid",
+                    "uuid",
+                ]
+            )
+        elif action == "send":
+            args = parser.parse_args(
+                ["draft", action, "mail-draft://apple-mail/work/uuid", "--approval", "sha256:x"]
+            )
+        else:
+            args = parser.parse_args(
+                ["draft", action, "mail-draft://apple-mail/work/uuid"]
+            )
+        assert callable(args.func)
+
+
+def test_cli_draft_create_routes_to_service(monkeypatch, capsys, tmp_path: Path) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeService:
+        def create(self, **kwargs: object) -> dict[str, object]:
+            calls.update(kwargs)
+            return {"draft_ref": "mail-draft://apple-mail/work/uuid"}
+
+    monkeypatch.setattr(
+        cli,
+        "load_account",
+        lambda path, account_id: SimpleNamespace(
+            account_id=account_id,
+            email="work@example.test",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "draft_service",
+        lambda args: (FakeService(), object()),
+    )
+
+    result = cli.main(
+        [
+            "--json",
+            "--draft-db",
+            str(tmp_path / "drafts.sqlite"),
+            "draft",
+            "create",
+            "--account",
+            "work",
+            "--to",
+            "Reviewer <reviewer@example.test>",
+            "--subject",
+            "Review request",
+            "--body",
+            "\nFirst paragraph.\n\nSecond paragraph.",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["draft"]["draft_ref"].startswith("mail-draft://")
+    assert calls["sender"] == "work@example.test"
+    assert calls["to"][0].address == "reviewer@example.test"

@@ -5,7 +5,7 @@
 <h1 align="center">Codex Mail Workbench</h1>
 
 <p align="center"><strong>Local-first email workspace for Codex and other coding agents</strong></p>
-<p align="center">IMAP Sync · SQLite Mail Store · Read-First CLI · MCP Tools</p>
+<p align="center">IMAP Sync · SQLite Mail Store · Review-Gated Apple Mail Drafts · Read-Only MCP</p>
 
 <table>
   <tr>
@@ -15,7 +15,7 @@
     </td>
     <td width="33%" valign="top">
       <strong>Interface</strong><br/>
-      Python CLI plus a read-only MCP stdio server over a local SQLite raw EML store
+      Standalone Python CLI plus a read-only MCP stdio server; this is not a graphical macOS <code>.app</code>
     </td>
     <td width="33%" valign="top">
       <strong>Privacy Boundary</strong><br/>
@@ -39,6 +39,8 @@ This repository provides the reusable tooling layer:
 - resolve credentials from macOS Keychain;
 - sync selected IMAP folders into a private SQLite store;
 - search and read stored messages through stable CLI commands;
+- create or adopt Apple Mail drafts for human review;
+- require an exact content fingerprint before a one-time send;
 - expose the same read-only surface through MCP for Codex-compatible hosts.
 
 The repository is intentionally local-first. It does not ship mailbox content,
@@ -51,7 +53,9 @@ real account configuration, or personal triage rules.
 - Search recent or historical local email by account, folder, sender, subject,
   recipient, message id, or body text.
 - Read selected messages by stable `email-store://...` references.
-- Keep agent workflows read-first until a deliberate write surface is added.
+- Review drafts in Apple Mail through stable `mail-draft://...` references.
+- Invalidate approval after any account, recipient, subject, body, or attachment
+  change and verify successful sends from the Sent mailbox.
 - Publish the tool as a normal GitHub repository without leaking local mail
   state.
 
@@ -96,6 +100,35 @@ CODEX_MAIL_HOME=./local codex-mail --json search "invoice" --account work --limi
 CODEX_MAIL_HOME=./local codex-mail --json read 'email-store://work/INBOX/12345/abcdef1234567890'
 ```
 
+Create a draft from UTF-8 plain text and open it in Apple Mail:
+
+```bash
+codex-mail --json draft create \
+  --account work \
+  --to 'Reviewer <reviewer@example.test>' \
+  --subject 'Review request' \
+  --body-file ./draft.txt
+```
+
+The result contains a stable `draft_ref` and an `approval_fingerprint`. Review
+the draft in Apple Mail, then inspect it again:
+
+```bash
+codex-mail --json draft inspect 'mail-draft://apple-mail/work/UUID'
+codex-mail --json draft open 'mail-draft://apple-mail/work/UUID'
+```
+
+Only after the user explicitly approves that exact fingerprint:
+
+```bash
+codex-mail --json draft send \
+  'mail-draft://apple-mail/work/UUID' \
+  --approval 'sha256:CURRENT_FINGERPRINT'
+```
+
+An existing Apple Mail draft can enter the same lifecycle with
+`draft adopt --account <account> --apple-mail-uuid <UUID>`.
+
 ## Runtime Model
 
 The default private state directory is:
@@ -106,6 +139,9 @@ The default private state directory is:
   mail.sqlite
   mail.sqlite-shm
   mail.sqlite-wal
+  drafts.sqlite
+  drafts.sqlite-shm
+  drafts.sqlite-wal
   sync-state/
 ```
 
@@ -130,10 +166,18 @@ codex-mail --json recent --account <account> --since <start-iso> --until <end-is
 codex-mail --json search "<query>" --account <account> --limit 20
 codex-mail --json search "<query>" --account <account> --since <start-iso> --until <end-iso> --limit 20
 codex-mail --json read 'email-store://...'
+codex-mail --json draft create --account <account> --to <address> --subject <subject> --body-file <path>
+codex-mail --json draft adopt --account <account> --apple-mail-uuid <uuid>
+codex-mail --json draft inspect 'mail-draft://...'
+codex-mail --json draft open 'mail-draft://...'
+codex-mail --json draft send 'mail-draft://...' --approval 'sha256:...'
 ```
 
-The current read path is intentionally narrow. Live send, delete, archive, and
-move operations are not exposed by default.
+The mailbox store remains read-first. The only live write path is the narrow
+Apple Mail draft lifecycle. It disables mutable account-local signatures during
+creation, keeps message content out of the ledger, rejects stale approvals,
+claims a send at most once, and records success only after Sent-mailbox readback.
+Delete, archive, move, and mark operations are not exposed.
 
 ## MCP
 
@@ -148,6 +192,9 @@ Available tools:
 - `mail_recent`
 - `mail_search`
 - `mail_read`
+
+The MCP server remains read-only. Draft creation and sending are CLI-only so an
+MCP host cannot bypass the explicit review gate.
 
 ## For Agents
 
@@ -179,6 +226,7 @@ Do not commit:
 - real `accounts.yaml`
 - `local/profile.md`
 - `mail.sqlite`, `mail.sqlite-shm`, or `mail.sqlite-wal`
+- `drafts.sqlite`, `drafts.sqlite-shm`, or `drafts.sqlite-wal`
 - `sync-state/`
 - raw EML, MBOX, Maildir exports, `.env` files, passwords, or app passwords
 - real account-specific examples

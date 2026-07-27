@@ -4,12 +4,25 @@ import argparse
 import json
 import shutil
 import sys
+from email.utils import getaddresses
 from pathlib import Path
 
 from . import __version__
-from .config import KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE, load_accounts_config
+from .apple_mail import AppleMailProvider
+from .config import (
+    KEYCHAIN_SERVICE,
+    LEGACY_KEYCHAIN_SERVICE,
+    load_account,
+    load_accounts_config,
+)
+from .drafts import DraftLedger, DraftService, Recipient
 from .message import extract_text_body
-from .paths import default_config_path, default_db_path, default_state_dir
+from .paths import (
+    default_config_path,
+    default_db_path,
+    default_drafts_db_path,
+    default_state_dir,
+)
 from .store import (
     connect_email_store,
     fetch_raw_email_by_storage_ref,
@@ -46,6 +59,7 @@ def open_conn(db: Path):
 def cmd_doctor(args: argparse.Namespace) -> int:
     config_path = Path(args.config).expanduser()
     db_path = Path(args.db).expanduser()
+    drafts_db_path = Path(args.draft_db).expanduser()
     accounts = {}
     config_error = ""
     if config_path.exists():
@@ -63,6 +77,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "config_error": config_error,
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
+        "draft_db_path": str(drafts_db_path),
+        "draft_db_exists": drafts_db_path.exists(),
+        "apple_mail_available": sys.platform == "darwin" and bool(shutil.which("osascript")),
         "accounts": sorted(accounts.keys()),
         "keychain_services": [
             svc for svc in [KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE] if svc
@@ -178,11 +195,109 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def parse_recipients(values: list[str] | None, *, required: bool = False) -> list[Recipient]:
+    parsed = [
+        Recipient(address=address.strip(), name=name.strip())
+        for name, address in getaddresses(values or [])
+        if address.strip()
+    ]
+    invalid = [item.address for item in parsed if "@" not in item.address]
+    if invalid:
+        raise ValueError("无效邮件地址: " + ", ".join(invalid))
+    if required and not parsed:
+        raise ValueError("至少需要一个收件人")
+    return parsed
+
+
+def read_body(args: argparse.Namespace) -> str:
+    if args.body_file == "-":
+        return sys.stdin.read()
+    if args.body_file:
+        return Path(args.body_file).expanduser().read_text(encoding="utf-8-sig")
+    return str(args.body or "")
+
+
+def draft_service(args: argparse.Namespace) -> tuple[DraftService, AppleMailProvider]:
+    provider = AppleMailProvider()
+    ledger = DraftLedger(Path(args.draft_db).expanduser())
+    return DraftService(ledger, provider), provider
+
+
+def cmd_draft_create(args: argparse.Namespace) -> int:
+    account = load_account(Path(args.config).expanduser(), args.account)
+    attachments = [Path(value).expanduser() for value in args.attach]
+    missing = [str(path) for path in attachments if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("附件不存在: " + ", ".join(missing))
+    service, _ = draft_service(args)
+    payload = service.create(
+        account_id=account.account_id,
+        sender=account.email,
+        to=parse_recipients(args.to, required=True),
+        cc=parse_recipients(args.cc),
+        bcc=parse_recipients(args.bcc),
+        subject=args.subject,
+        body_text=read_body(args),
+        attachments=attachments,
+        visible=args.open,
+    )
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
+
+
+def cmd_draft_adopt(args: argparse.Namespace) -> int:
+    account = load_account(Path(args.config).expanduser(), args.account)
+    service, provider = draft_service(args)
+    provider_account = provider.resolve_account(account.email)
+    payload = service.adopt(
+        account_id=account.account_id,
+        provider_account=provider_account,
+        provider_uuid=args.apple_mail_uuid,
+    )
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
+
+
+def cmd_draft_inspect(args: argparse.Namespace) -> int:
+    service, _ = draft_service(args)
+    emit(
+        {"ok": True, "draft": service.inspect(args.draft_ref)},
+        as_json=args.json,
+    )
+    return 0
+
+
+def cmd_draft_open(args: argparse.Namespace) -> int:
+    service, _ = draft_service(args)
+    emit(
+        {"ok": True, "draft": service.open(args.draft_ref)},
+        as_json=args.json,
+    )
+    return 0
+
+
+def cmd_draft_send(args: argparse.Namespace) -> int:
+    service, _ = draft_service(args)
+    emit(
+        {
+            "ok": True,
+            "draft": service.send(args.draft_ref, approval=args.approval),
+        },
+        as_json=args.json,
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex-mail")
     parser.add_argument("--json", action="store_true", help="输出稳定 JSON")
     parser.add_argument("--config", default=str(default_config_path()), help="accounts.yaml 路径")
     parser.add_argument("--db", default=str(default_db_path()), help="SQLite 邮件库路径")
+    parser.add_argument(
+        "--draft-db",
+        default=str(default_drafts_db_path()),
+        help="本地草稿审批 ledger 路径",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     doctor = sub.add_parser("doctor", help="检查配置、数据库和安装状态")
@@ -221,6 +336,45 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--limit-per-folder", type=int, default=None)
     sync.add_argument("--dry-run", action="store_true")
     sync.set_defaults(func=cmd_sync)
+
+    draft = sub.add_parser("draft", help="Apple Mail 草稿审核与受控发送")
+    draft_actions = draft.add_subparsers(dest="draft_action", required=True)
+
+    draft_create = draft_actions.add_parser("create", help="创建并保存 Apple Mail 草稿")
+    draft_create.add_argument("--account", required=True)
+    draft_create.add_argument("--to", action="append", required=True)
+    draft_create.add_argument("--cc", action="append", default=[])
+    draft_create.add_argument("--bcc", action="append", default=[])
+    draft_create.add_argument("--subject", required=True)
+    body_source = draft_create.add_mutually_exclusive_group(required=True)
+    body_source.add_argument("--body")
+    body_source.add_argument("--body-file")
+    draft_create.add_argument("--attach", action="append", default=[])
+    draft_create.add_argument(
+        "--open",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="创建后在 Apple Mail 中显示草稿",
+    )
+    draft_create.set_defaults(func=cmd_draft_create)
+
+    draft_adopt = draft_actions.add_parser("adopt", help="登记现有 Apple Mail 草稿")
+    draft_adopt.add_argument("--account", required=True)
+    draft_adopt.add_argument("--apple-mail-uuid", required=True)
+    draft_adopt.set_defaults(func=cmd_draft_adopt)
+
+    draft_inspect = draft_actions.add_parser("inspect", help="回读草稿并生成审批指纹")
+    draft_inspect.add_argument("draft_ref")
+    draft_inspect.set_defaults(func=cmd_draft_inspect)
+
+    draft_open = draft_actions.add_parser("open", help="在 Apple Mail 中打开草稿")
+    draft_open.add_argument("draft_ref")
+    draft_open.set_defaults(func=cmd_draft_open)
+
+    draft_send = draft_actions.add_parser("send", help="使用当前审批指纹单次发送")
+    draft_send.add_argument("draft_ref")
+    draft_send.add_argument("--approval", required=True)
+    draft_send.set_defaults(func=cmd_draft_send)
 
     return parser
 

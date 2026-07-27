@@ -25,5 +25,9 @@ def default_db_path() -> Path:
     return default_state_dir() / "mail.sqlite"
 
 
+def default_drafts_db_path() -> Path:
+    return default_state_dir() / "drafts.sqlite"
+
+
 def default_sync_state_dir() -> Path:
     return default_state_dir() / "sync-state"

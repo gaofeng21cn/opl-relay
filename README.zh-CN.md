@@ -3,14 +3,20 @@
 本仓库是一个给 Codex 和其他 coding agent 使用的本地邮件工作台。
 
 它把 IMAP 邮箱同步到本机 SQLite raw EML store，提供 read-first CLI，并可通过
-MCP stdio server 暴露只读邮件查询工具。真实账号配置、邮件库、同步游标和个人
-triage 规则不进入 Git，放在 ignored 的本地 profile 中。
+MCP stdio server 暴露只读邮件查询工具；同时提供受审核约束的 Apple Mail
+草稿闭环。真实账号配置、邮件库、草稿 ledger、同步游标和个人 triage 规则不进入
+Git，放在 ignored 的本地 profile 中。
+
+它是一个通用、独立的本地 Python CLI/MCP 应用包，不是带窗口的 macOS `.app`。
+Apple Mail 是草稿审核界面，Workbench 负责稳定身份、审批指纹和发送凭证。
 
 ## 适用场景
 
 - 让 Codex 查询本地邮箱，而不是优先依赖 Apple Mail UI 自动化。
 - 按账号、文件夹、发件人、主题、收件人、message id 或正文搜索本地邮件。
 - 通过稳定的 `email-store://...` 引用读取选定邮件。
+- 通过稳定的 `mail-draft://...` 引用创建或接管 Apple Mail 草稿。
+- 用户审核后，以当前内容指纹执行至多一次发送并回读 Sent 凭证。
 - 为 agent 邮件 triage 提供一个可复用、可发布、隐私边界清楚的工具层。
 
 ## 快速开始
@@ -64,6 +70,9 @@ CODEX_MAIL_HOME=./local codex-mail --json read 'email-store://work/INBOX/12345/a
   mail.sqlite
   mail.sqlite-shm
   mail.sqlite-wal
+  drafts.sqlite
+  drafts.sqlite-shm
+  drafts.sqlite-wal
   sync-state/
 ```
 
@@ -87,10 +96,20 @@ codex-mail --json recent --account <account> --since <start-iso> --until <end-is
 codex-mail --json search "<query>" --account <account> --limit 20
 codex-mail --json search "<query>" --account <account> --since <start-iso> --until <end-iso> --limit 20
 codex-mail --json read 'email-store://...'
+codex-mail --json draft create --account <account> --to <address> --subject <subject> --body-file <path>
+codex-mail --json draft adopt --account <account> --apple-mail-uuid <uuid>
+codex-mail --json draft inspect 'mail-draft://...'
+codex-mail --json draft open 'mail-draft://...'
+codex-mail --json draft send 'mail-draft://...' --approval 'sha256:...'
 ```
 
-当前默认只开放读取路径。发送、删除、归档、移动等写操作应作为单独、可审计、
-需要明确用户请求的命令面再加入。
+推荐用 UTF-8 纯文本文件创建草稿。`draft create` 默认在 Apple Mail 中显示草稿，
+并返回稳定的 `draft_ref` 和 `approval_fingerprint`。用户在 Apple Mail 审核后，
+再次运行 `draft inspect`；只有用户明确确认该指纹，才可把它传给 `draft send`。
+
+任一账号、发件人、To/Cc/Bcc、主题、正文或附件变化都会使旧指纹失效。发送开始前
+会原子占位，未知结果不会自动重试；只有 Sent 邮箱回读成功才记录为 `sent`。草稿
+ledger 不保存正文或收件人。MCP 继续保持只读，删除、归档、移动、标记仍不开放。
 
 ## MCP
 
@@ -103,6 +122,8 @@ MCP 当前暴露：
 - `mail_recent`
 - `mail_search`
 - `mail_read`
+
+草稿与发送命令只在 CLI 中提供，MCP host 不能绕过人工审核门禁。
 
 ## 给 Agent 的使用方式
 
@@ -128,6 +149,7 @@ UI discovery 元数据位于
 - 真实 `accounts.yaml`
 - `local/profile.md`
 - `mail.sqlite`、`mail.sqlite-shm`、`mail.sqlite-wal`
+- `drafts.sqlite`、`drafts.sqlite-shm`、`drafts.sqlite-wal`
 - `sync-state/`
 - raw EML、MBOX、Maildir 导出、`.env`、密码或 app password
 - 真实账号相关示例

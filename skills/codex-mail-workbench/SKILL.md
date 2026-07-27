@@ -1,6 +1,6 @@
 ---
 name: codex-mail-workbench
-description: Inspect or triage configured local mailboxes through the codex-mail CLI or codex-mail-mcp, including IMAP-to-SQLite sync, date-bounded recent mail, local search, and reading messages by storage_ref. Use when mailbox facts should come from the local workbench rather than Apple Mail automation.
+description: Inspect or triage configured local mailboxes and manage review-gated Apple Mail drafts through codex-mail. Use for IMAP-to-SQLite sync, local search/read, or create-review-approve-send workflows where mailbox facts and draft mutations need stable local identities.
 ---
 
 # Codex Mail Workbench
@@ -59,13 +59,52 @@ grouped by account. For each proposed reminder, reply, draft, or archive candida
 include why it matters and the best local identifier. State per-account sync and
 read coverage; do not quote long message bodies.
 
+## Draft, Review, And Send
+
+Drafting does not grant send authority. Use this sequence:
+
+```bash
+codex-mail --json draft create \
+  --account <account> \
+  --to 'Recipient <recipient@example.test>' \
+  --subject '<subject>' \
+  --body-file <utf8-plain-text-file>
+codex-mail --json draft inspect 'mail-draft://apple-mail/<account>/<uuid>'
+codex-mail --json draft open 'mail-draft://apple-mail/<account>/<uuid>'
+```
+
+1. Apply the private overlay before writing the body.
+2. Prefer `--body-file` for multiline text. Do not hard-wrap prose; use one
+   blank line only between intended paragraphs.
+3. Give the user the Apple Mail draft for review. Do not treat draft creation,
+   opening, or a previous fingerprint as approval.
+4. After the user explicitly confirms the current draft, run `draft inspect`
+   again and use only its current `approval_fingerprint`.
+5. Send exactly once:
+
+```bash
+codex-mail --json draft send \
+  'mail-draft://apple-mail/<account>/<uuid>' \
+  --approval 'sha256:<current-fingerprint>'
+```
+
+Any account, sender, To/Cc/Bcc, subject, body, or attachment change invalidates
+the old fingerprint. A send result marked `unknown` must not be retried; use
+`draft inspect` for read-only Sent reconciliation. Only a returned Sent receipt
+proves delivery submission. To bring an existing Apple Mail draft into the
+lifecycle, use `draft adopt --account <account> --apple-mail-uuid <uuid>`.
+Adopt, inspect, and send reconcile Sent by UUID first so a residual or missing
+Draft cannot cause a duplicate send.
+
 ## Boundaries
 
 - Prefer local search and `storage_ref`; query SQLite directly only when the CLI
   cannot answer the request.
-- Do not send, delete, archive, move, mark, or otherwise change mailbox state
-  unless the current user request explicitly authorizes that exact action.
+- Do not send unless the current user explicitly approves the exact fingerprint.
+  Do not delete, archive, move, mark, or otherwise change mailbox state unless
+  the current request explicitly authorizes that exact action.
 - Treat private overlay rules as judgment and policy, not independent permission
   for externally visible writes.
-- Use Apple Mail automation only when the task specifically requires UI-local
-  behavior unavailable from the workbench.
+- MCP remains read-only. Apple Mail automation for drafts must go through the
+  Workbench lifecycle so stable identity, at-most-once state, and Sent evidence
+  are retained.

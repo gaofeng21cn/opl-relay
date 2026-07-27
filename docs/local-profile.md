@@ -15,6 +15,9 @@ The default private state directory is:
   mail.sqlite
   mail.sqlite-shm
   mail.sqlite-wal
+  drafts.sqlite
+  drafts.sqlite-shm
+  drafts.sqlite-wal
   sync-state/
 ```
 
@@ -31,6 +34,7 @@ With `CODEX_MAIL_HOME=./local`, the workbench reads:
 ```text
 local/accounts.yaml
 local/mail.sqlite
+local/drafts.sqlite
 local/sync-state/
 ```
 
@@ -93,10 +97,11 @@ as an agent workflow:
 6. Return proposed actions with `storage_ref`, reason, confidence, and any
    required confirmation.
 
-The default boundary is read-first. Archive, delete, send, or other mailbox
-writes should require explicit user confirmation unless the private overlay
-defines a narrow, reversible, auditable action surface and the user has enabled
-it.
+The default boundary is read-first. The Apple Mail draft lifecycle is the one
+narrow write surface: content may be drafted and opened without send authority,
+while `draft send` requires a fresh fingerprint that the user explicitly
+approved. Archive, delete, move, mark, or any other mailbox write still requires
+a separate contract and explicit authorization.
 
 ## accounts.yaml
 
