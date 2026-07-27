@@ -16,9 +16,16 @@ in another directory selected with `CODEX_MAIL_HOME`.
    `(account_id, folder_slug, uid)`, with raw EML retained locally.
 4. Draft layer: Apple Mail stores the editable draft while a separate private
    SQLite ledger stores only stable identity, state, fingerprints, and receipts.
-5. CLI layer: read commands plus `draft create/adopt/inspect/open/send`.
-6. MCP layer: read-only `mail_recent`, `mail_search`, and `mail_read`.
-7. Skill layer: Codex uses the CLI first and the MCP server when the host app
+5. Memory layer: `memory.sqlite` stores entities, evidence-backed memories, and
+   explicit candidate/approved/superseded/rejected/forgotten states.
+6. Knowledge layer: configured read-only providers index private source
+   documents; Phase 1 ships an Obsidian Markdown provider.
+7. Context layer: a bounded package combines approved memory, selected raw-mail
+   evidence, and indexed knowledge excerpts for one drafting task.
+8. CLI layer: mail reads, local memory/knowledge management, context building,
+   and `draft create/adopt/inspect/open/send`.
+9. MCP layer: read-only mail, approved-memory, and context tools.
+10. Skill layer: Codex uses the CLI first and the MCP server when the host app
    configures it.
 
 ## Store Reference
@@ -58,6 +65,35 @@ Apple Mail account signatures are disabled for Workbench-created drafts. The
 reviewed input body is the complete message body, preventing account-local
 signature changes from bypassing approval.
 
+## Memory Reference And Evidence
+
+Entities and memories are addressed as:
+
+```text
+mail-memory://entity/<uuid>
+mail-memory://fact/<uuid>
+```
+
+Every memory requires one or more source references. Email-derived memory uses
+the original `email-store://...` reference and raw SHA-256 as provenance.
+Candidate memories never appear in drafting context. Approval is an explicit
+CLI transition; replacement facts point to the earlier memory and mark it
+`superseded`. Reject and forget retain provenance instead of silently deleting
+history.
+
+Codex performs open-ended interpretation and proposes structured candidates.
+The Workbench enforces identity, evidence, deduplication, lifecycle, and
+retrieval boundaries. It does not claim that a generated inference is an
+observed fact.
+
+## Knowledge Providers And Context
+
+`sources.yaml` preconfigures provider roots. The Obsidian provider reads
+Markdown and writes only a derived index to the private `memory.sqlite`; it
+never edits the vault. `context build` retrieves a bounded number of approved
+memories, relevant mail messages, and knowledge excerpts. Mail and knowledge
+content are untrusted data, never executable agent instructions.
+
 ## Public and Private Boundary
 
 Public repository contents:
@@ -78,6 +114,9 @@ Private local profile contents:
   metadata and raw EML content.
 - `drafts.sqlite`, `drafts.sqlite-shm`, and `drafts.sqlite-wal` with private
   draft lifecycle metadata and receipts.
+- `memory.sqlite`, `memory.sqlite-shm`, and `memory.sqlite-wal` with identities,
+  memories, evidence, and derived knowledge content.
+- `sources.yaml` with private provider paths and filters.
 
 The normal default state directory is `~/.codex-mail-workbench`. For a repo-local
 private profile, run commands with `CODEX_MAIL_HOME=./local`. The repository
@@ -85,7 +124,10 @@ contract is that `local/` is private working state and must not be published.
 
 ## Write Boundary
 
-The implemented write path is limited to Apple Mail drafts:
+Local-only CLI writes include entity and memory lifecycle changes plus rebuildable
+knowledge indexing. These writes do not change the mailbox or Obsidian vault.
+
+The externally visible write path is limited to Apple Mail drafts:
 
 - `draft create`
 - `draft adopt`

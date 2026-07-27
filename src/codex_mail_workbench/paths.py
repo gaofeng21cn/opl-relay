@@ -29,5 +29,13 @@ def default_drafts_db_path() -> Path:
     return default_state_dir() / "drafts.sqlite"
 
 
+def default_memory_db_path() -> Path:
+    return default_state_dir() / "memory.sqlite"
+
+
+def default_sources_config_path() -> Path:
+    return default_state_dir() / "sources.yaml"
+
+
 def default_sync_state_dir() -> Path:
     return default_state_dir() / "sync-state"

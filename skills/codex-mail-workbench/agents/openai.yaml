@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Mail Workbench"
-  short_description: "Inspect and triage local mail safely"
-  default_prompt: "Use $codex-mail-workbench to inspect or triage configured local mailboxes with explicit freshness and read coverage."
+  short_description: "Use local mail, private memory, and drafting context safely"
+  default_prompt: "Use $codex-mail-workbench to inspect configured mailboxes, retrieve approved private memory and knowledge context, and preserve explicit freshness, evidence, and review gates."

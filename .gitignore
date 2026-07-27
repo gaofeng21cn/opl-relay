@@ -11,6 +11,7 @@ local/
 accounts.yaml
 accounts.local.yaml
 accounts.private.yaml
+sources.yaml
 config/accounts.local.yaml
 config/accounts.private.yaml
 sync-state/

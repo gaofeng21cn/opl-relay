@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from codex_mail_workbench.memory import MemoryStore
 from codex_mail_workbench.mcp_server import dispatch_tool
 from codex_mail_workbench.store import connect_email_store, upsert_email_message
 
@@ -78,3 +79,45 @@ def test_mcp_dispatch_recent_filters_by_date_window(tmp_path: Path) -> None:
 
     assert payload["ok"] is True
     assert [row["subject"] for row in payload["messages"]] == ["new mcp"]
+
+
+def test_mcp_memory_search_returns_only_approved_memory(tmp_path: Path) -> None:
+    memory_db = tmp_path / "memory.sqlite"
+    store = MemoryStore(memory_db)
+    entity = store.upsert_entity(kind="person", canonical_name="Professor Example")
+    approved = store.propose_memory(
+        entity_ref=entity["entity_ref"],
+        category="fact",
+        content="The professor leads the consortium.",
+        sources=[
+            {
+                "source_ref": "user://statement/1",
+                "source_kind": "user",
+            }
+        ],
+    )
+    store.approve(approved["memory_ref"])
+    store.propose_memory(
+        entity_ref=entity["entity_ref"],
+        category="inference",
+        content="This candidate is not approved.",
+        sources=[
+            {
+                "source_ref": "model://codex/run-3",
+                "source_kind": "model",
+            }
+        ],
+    )
+
+    result = dispatch_tool(
+        "memory_search",
+        {"entity": "Professor Example"},
+        tmp_path / "mail.sqlite",
+        memory_db_path=memory_db,
+        sources_config_path=tmp_path / "sources.yaml",
+    )
+    payload = json.loads(result["content"][0]["text"])
+
+    assert [item["content"] for item in payload["memories"]] == [
+        "The professor leads the consortium."
+    ]

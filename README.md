@@ -5,7 +5,7 @@
 <h1 align="center">Codex Mail Workbench</h1>
 
 <p align="center"><strong>Local-first email workspace for Codex and other coding agents</strong></p>
-<p align="center">IMAP Sync · SQLite Mail Store · Review-Gated Apple Mail Drafts · Read-Only MCP</p>
+<p align="center">IMAP Sync · Evidence-Backed Private Memory · Obsidian Context · Review-Gated Apple Mail Drafts</p>
 
 <table>
   <tr>
@@ -39,6 +39,11 @@ This repository provides the reusable tooling layer:
 - resolve credentials from macOS Keychain;
 - sync selected IMAP folders into a private SQLite store;
 - search and read stored messages through stable CLI commands;
+- maintain approved people, relationship, project, and commitment memories with
+  source references;
+- index preconfigured Obsidian folders as a read-only knowledge source;
+- build a bounded drafting context from approved memory, selected mail, and
+  knowledge excerpts;
 - create or adopt Apple Mail drafts for human review;
 - require an exact content fingerprint before a one-time send;
 - expose the same read-only surface through MCP for Codex-compatible hosts.
@@ -53,6 +58,10 @@ real account configuration, or personal triage rules.
 - Search recent or historical local email by account, folder, sender, subject,
   recipient, message id, or body text.
 - Read selected messages by stable `email-store://...` references.
+- Reuse approved relationship memory without rereading an entire correspondence
+  history on every draft.
+- Keep candidate, approved, superseded, rejected, and forgotten memory distinct.
+- Preconfigure Obsidian sources once and query their local derived index.
 - Review drafts in Apple Mail through stable `mail-draft://...` references.
 - Invalidate approval after any account, recipient, subject, body, or attachment
   change and verify successful sends from the Sent mailbox.
@@ -100,6 +109,38 @@ CODEX_MAIL_HOME=./local codex-mail --json search "invoice" --account work --limi
 CODEX_MAIL_HOME=./local codex-mail --json read 'email-store://work/INBOX/12345/abcdef1234567890'
 ```
 
+Configure and index an optional Obsidian source:
+
+```bash
+cp config/sources.example.yaml local/sources.yaml
+CODEX_MAIL_HOME=./local codex-mail --json sources list
+CODEX_MAIL_HOME=./local codex-mail --json sources index
+```
+
+Create an identity, propose an evidence-backed memory, and approve it only after
+review:
+
+```bash
+CODEX_MAIL_HOME=./local codex-mail --json memory entity upsert \
+  --kind person --name 'Professor Example' --email 'person@example.test'
+CODEX_MAIL_HOME=./local codex-mail --json memory propose \
+  --entity 'Professor Example' \
+  --category event \
+  --content 'We met at the annual consortium meeting.' \
+  --source 'email-store://work/INBOX/12345/abcdef1234567890'
+CODEX_MAIL_HOME=./local codex-mail --json memory candidates --entity 'Professor Example'
+CODEX_MAIL_HOME=./local codex-mail --json memory approve 'mail-memory://fact/UUID'
+```
+
+Build the context package before drafting:
+
+```bash
+CODEX_MAIL_HOME=./local codex-mail --json context build \
+  --person 'Professor Example' \
+  --project 'Example Consortium' \
+  --query 'annual invitation'
+```
+
 Create a draft from UTF-8 plain text and open it in Apple Mail:
 
 ```bash
@@ -142,6 +183,10 @@ The default private state directory is:
   drafts.sqlite
   drafts.sqlite-shm
   drafts.sqlite-wal
+  memory.sqlite
+  memory.sqlite-shm
+  memory.sqlite-wal
+  sources.yaml
   sync-state/
 ```
 
@@ -166,6 +211,18 @@ codex-mail --json recent --account <account> --since <start-iso> --until <end-is
 codex-mail --json search "<query>" --account <account> --limit 20
 codex-mail --json search "<query>" --account <account> --since <start-iso> --until <end-iso> --limit 20
 codex-mail --json read 'email-store://...'
+codex-mail --json memory entity upsert --kind person --name <name> --email <address>
+codex-mail --json memory propose --entity <name-or-ref> --category <category> --content <text> --source 'email-store://...'
+codex-mail --json memory candidates
+codex-mail --json memory inspect 'mail-memory://fact/...'
+codex-mail --json memory approve 'mail-memory://fact/...'
+codex-mail --json memory reject 'mail-memory://fact/...'
+codex-mail --json memory forget 'mail-memory://fact/...'
+codex-mail --json memory search "<query>"
+codex-mail --json sources list
+codex-mail --json sources index
+codex-mail --json sources search "<query>"
+codex-mail --json context build --person <name> --project <name> --query <task>
 codex-mail --json draft create --account <account> --to <address> --subject <subject> --body-file <path>
 codex-mail --json draft adopt --account <account> --apple-mail-uuid <uuid>
 codex-mail --json draft inspect 'mail-draft://...'
@@ -173,18 +230,20 @@ codex-mail --json draft open 'mail-draft://...'
 codex-mail --json draft send 'mail-draft://...' --approval 'sha256:...'
 ```
 
-The mailbox store remains read-first. The only live write path is the narrow
-Apple Mail draft lifecycle. It disables mutable account-local signatures during
-creation, keeps message content out of the ledger, rejects stale approvals,
-claims a send at most once, and records success only after Sent-mailbox readback.
-Delete, archive, move, and mark operations are not exposed.
+The mailbox store remains read-first. Local memory writes are CLI-only and
+preserve evidence and lifecycle history; `forget` is a state transition, not a
+silent hard delete. The only externally visible write path is the narrow Apple
+Mail draft lifecycle. Delete, archive, move, and mark operations are not exposed.
 
 ## MCP
 
 Run the read-only MCP server against the local SQLite store:
 
 ```bash
-CODEX_MAIL_HOME=./local codex-mail-mcp --db ./local/mail.sqlite
+CODEX_MAIL_HOME=./local codex-mail-mcp \
+  --db ./local/mail.sqlite \
+  --memory-db ./local/memory.sqlite \
+  --sources-config ./local/sources.yaml
 ```
 
 Available tools:
@@ -192,9 +251,11 @@ Available tools:
 - `mail_recent`
 - `mail_search`
 - `mail_read`
+- `memory_search`
+- `context_build`
 
-The MCP server remains read-only. Draft creation and sending are CLI-only so an
-MCP host cannot bypass the explicit review gate.
+The MCP server remains read-only. Memory approval, rejection, forgetting,
+knowledge indexing, draft creation, and sending are CLI-only.
 
 ## For Agents
 
@@ -209,8 +270,10 @@ Recommended operating pattern:
 4. Use `--since` and `--until` for explicit date windows such as "last three
    days".
 5. Search metadata before opening message bodies.
-6. Read selected messages by `storage_ref`.
-7. Report account coverage and freshness gaps.
+6. For drafting, build a bounded context before rereading whole threads.
+7. Treat only approved memory as active; verify high-risk facts against source
+   references.
+8. Read selected messages by `storage_ref` and report freshness gaps.
 
 The companion skill lives at
 [`skills/codex-mail-workbench/SKILL.md`](skills/codex-mail-workbench/SKILL.md),
@@ -227,6 +290,8 @@ Do not commit:
 - `local/profile.md`
 - `mail.sqlite`, `mail.sqlite-shm`, or `mail.sqlite-wal`
 - `drafts.sqlite`, `drafts.sqlite-shm`, or `drafts.sqlite-wal`
+- `memory.sqlite`, `memory.sqlite-shm`, or `memory.sqlite-wal`
+- real `sources.yaml`, Obsidian paths, indexed content, or relationship memory
 - `sync-state/`
 - raw EML, MBOX, Maildir exports, `.env` files, passwords, or app passwords
 - real account-specific examples

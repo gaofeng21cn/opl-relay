@@ -138,6 +138,62 @@ def test_cli_doctor_omits_empty_legacy_keychain_service(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["keychain_services"] == ["codex-mail-workbench"]
     assert payload["draft_db_path"].endswith("drafts.sqlite")
+    assert payload["memory_db_path"].endswith("memory.sqlite")
+    assert payload["sources_config_path"].endswith("sources.yaml")
+
+
+def test_cli_memory_candidate_approval_flow(tmp_path: Path) -> None:
+    db = tmp_path / "mail.sqlite"
+    memory_db = tmp_path / "memory.sqlite"
+    entity_result = run_cli(
+        db,
+        "--memory-db",
+        str(memory_db),
+        "memory",
+        "entity",
+        "upsert",
+        "--kind",
+        "person",
+        "--name",
+        "Professor Example",
+        "--email",
+        "person@example.test",
+    )
+    assert entity_result.returncode == 0, entity_result.stderr
+    entity_ref = json.loads(entity_result.stdout)["entity"]["entity_ref"]
+
+    proposal = run_cli(
+        db,
+        "--memory-db",
+        str(memory_db),
+        "memory",
+        "propose",
+        "--entity",
+        entity_ref,
+        "--category",
+        "event",
+        "--content",
+        "We met at the annual consortium meeting.",
+        "--source",
+        "user://statement/2026-07-27",
+    )
+    assert proposal.returncode == 0, proposal.stderr
+    memory_ref = json.loads(proposal.stdout)["memory"]["memory_ref"]
+
+    before = run_cli(db, "--memory-db", str(memory_db), "memory", "search")
+    approved = run_cli(
+        db,
+        "--memory-db",
+        str(memory_db),
+        "memory",
+        "approve",
+        memory_ref,
+    )
+    after = run_cli(db, "--memory-db", str(memory_db), "memory", "search")
+
+    assert json.loads(before.stdout)["memories"] == []
+    assert json.loads(approved.stdout)["memory"]["status"] == "approved"
+    assert json.loads(after.stdout)["memories"][0]["memory_ref"] == memory_ref
 
 
 def test_cli_exposes_draft_lifecycle() -> None:
@@ -177,6 +233,21 @@ def test_cli_exposes_draft_lifecycle() -> None:
             args = parser.parse_args(
                 ["draft", action, "mail-draft://apple-mail/work/uuid"]
             )
+        assert callable(args.func)
+
+
+def test_cli_exposes_memory_sources_and_context_commands() -> None:
+    parser = cli.build_parser()
+    commands = [
+        ["memory", "candidates"],
+        ["memory", "search"],
+        ["sources", "list"],
+        ["sources", "index"],
+        ["sources", "search", "query"],
+        ["context", "build", "--person", "Professor Example"],
+    ]
+    for command in commands:
+        args = parser.parse_args(command)
         assert callable(args.func)
 
 

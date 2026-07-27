@@ -18,6 +18,10 @@ The default private state directory is:
   drafts.sqlite
   drafts.sqlite-shm
   drafts.sqlite-wal
+  memory.sqlite
+  memory.sqlite-shm
+  memory.sqlite-wal
+  sources.yaml
   sync-state/
 ```
 
@@ -35,12 +39,55 @@ With `CODEX_MAIL_HOME=./local`, the workbench reads:
 local/accounts.yaml
 local/mail.sqlite
 local/drafts.sqlite
+local/memory.sqlite
+local/sources.yaml
 local/sync-state/
 ```
 
 `profile.md` is optional. It is for human-readable local notes such as preferred
 triage categories, important senders, or response conventions. The current CLI
 does not require it.
+
+`memory.sqlite` is the private structured layer for people, organizations,
+projects, approved relationship memory, evidence references, and the derived
+knowledge index. `sources.yaml` registers optional external knowledge roots.
+
+## Obsidian Source
+
+Start from the generic example:
+
+```bash
+cp config/sources.example.yaml local/sources.yaml
+```
+
+Set `path` to the vault or a narrower folder. Prefer explicit `include` paths
+such as `People/**/*.md` and `Projects/**/*.md` rather than indexing unrelated
+notes. Then inspect and index:
+
+```bash
+CODEX_MAIL_HOME=./local codex-mail --json sources list
+CODEX_MAIL_HOME=./local codex-mail --json sources index
+CODEX_MAIL_HOME=./local codex-mail --json sources search "<person or project>"
+```
+
+The provider is read-only. Indexing copies selected Markdown into the private,
+rebuildable local index and never changes the source vault.
+
+## Memory Review
+
+Codex may propose a memory after reading selected mail, but a candidate is not
+active memory. Review with:
+
+```bash
+CODEX_MAIL_HOME=./local codex-mail --json memory candidates
+CODEX_MAIL_HOME=./local codex-mail --json memory inspect 'mail-memory://fact/...'
+CODEX_MAIL_HOME=./local codex-mail --json memory approve 'mail-memory://fact/...'
+CODEX_MAIL_HOME=./local codex-mail --json memory reject 'mail-memory://fact/...'
+CODEX_MAIL_HOME=./local codex-mail --json memory forget 'mail-memory://fact/...'
+```
+
+Use `--supersedes` when proposing a changed fact. Approval then retires the
+earlier approved memory without erasing its evidence.
 
 ## Private Agent Overlay
 
@@ -92,9 +139,11 @@ as an agent workflow:
 3. Sync relevant accounts when freshness matters.
 4. Search and read recent mail through `codex-mail`, using `--since` and
    `--until` for explicit date windows.
-5. Apply private text policies to classify reminders, archive candidates, and
+5. Build a person/project context and verify high-risk facts against its source
+   references.
+6. Apply private text policies to classify reminders, archive candidates, and
    draft candidates.
-6. Return proposed actions with `storage_ref`, reason, confidence, and any
+7. Return proposed actions with `storage_ref`, reason, confidence, and any
    required confirmation.
 
 The default boundary is read-first. The Apple Mail draft lifecycle is the one
@@ -191,6 +240,10 @@ Do not commit:
 - `local/mail.sqlite`
 - `local/mail.sqlite-shm`
 - `local/mail.sqlite-wal`
+- `local/memory.sqlite`
+- `local/memory.sqlite-shm`
+- `local/memory.sqlite-wal`
+- `local/sources.yaml`
 - `local/sync-state/`
 - any copied mailbox export, raw EML, credentials, app passwords, or real
   account-specific examples
