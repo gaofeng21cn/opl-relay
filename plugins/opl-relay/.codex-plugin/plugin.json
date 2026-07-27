@@ -5,7 +5,7 @@
   "author": {
     "name": "OPL"
   },
-  "repository": "https://github.com/gaofeng21cn/codex-mail-workbench",
+  "repository": "https://github.com/gaofeng21cn/opl-relay",
   "license": "MIT",
   "keywords": ["mail", "memory", "obsidian", "apple-mail", "local-first"],
   "skills": "./skills/",

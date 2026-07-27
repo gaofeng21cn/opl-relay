@@ -6,7 +6,7 @@
   "version": "0.4.0",
   "source": "first_party",
   "package_role": "framework_capability_package",
-  "source_repo": "https://github.com/gaofeng21cn/codex-mail-workbench",
+  "source_repo": "https://github.com/gaofeng21cn/opl-relay",
   "machine_boundary": "This Package declares Relay capabilities and role-neutral App contributions. It does not own private mail, memory, workspace, credential, approval, installed, or runtime truth.",
   "capability_abi": {
     "id": "opl-relay.capabilities",
@@ -34,7 +34,7 @@
       ".codex-plugin/plugin.json",
       "skills/opl-relay/SKILL.md"
     ],
-    "digest": "sha256:dc28411e282e67a0d342e04b09d1f36b682c28b340446b6d97c5f818b6dbf4b1"
+    "digest": "sha256:afcda475c398111c33438a952c66fb8936d7145497446f771d66a9f7880c0097"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

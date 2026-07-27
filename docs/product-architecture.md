@@ -34,7 +34,7 @@ Codex / OPL app-server runtime
 
 | Repository | Keep/Create | Responsibility |
 | --- | --- | --- |
-| `opl-relay` | Rename current repo | Mail engine, CLI, Relay Skill/plugin, future Package adapter |
+| `opl-relay` | Renamed from the Codex Mail Workbench repo | Mail engine, CLI, Relay Skill/plugin, future Package adapter |
 | `opl-persona` | Create now | PI context, provenance, review-gated proposals, and cross-domain Skills |
 | `one-person-lab` | Keep | Generic Package/runtime/workspace contracts |
 | `one-person-lab-app` | Keep | App product shell and role-neutral contribution UX |

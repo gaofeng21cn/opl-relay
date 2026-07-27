@@ -7,7 +7,7 @@ and manages review-gated Apple Mail drafts.
 
 This repository is the direct successor to Codex Mail Workbench. The Python
 module and `codex-mail` command remain compatible while the product, package,
-and plugin identity move to `opl-relay`.
+plugin, and repository identity use `opl-relay`.
 
 ## Runtime Model
 
