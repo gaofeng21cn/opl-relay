@@ -24,6 +24,7 @@ from .memory import (
     MemoryStore,
 )
 from .message import extract_text_body
+from .persona import load_persona_mail_context
 from .paths import (
     default_config_path,
     default_db_path,
@@ -436,6 +437,14 @@ def cmd_context_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_persona_draft_context(args: argparse.Namespace) -> int:
+    emit(
+        load_persona_mail_context(Path(args.input).expanduser()),
+        as_json=args.json,
+    )
+    return 0
+
+
 def parse_recipients(values: list[str] | None, *, required: bool = False) -> list[Recipient]:
     parsed = [
         Recipient(address=address.strip(), name=name.strip())
@@ -676,6 +685,15 @@ def build_parser() -> argparse.ArgumentParser:
     context_build.add_argument("--memory-limit", type=int, default=20)
     context_build.add_argument("--knowledge-limit", type=int, default=6)
     context_build.set_defaults(func=cmd_context_build)
+
+    persona = sub.add_parser("persona", help="读取跨域 Persona 提案")
+    persona_actions = persona.add_subparsers(dest="persona_action", required=True)
+    persona_context = persona_actions.add_parser(
+        "draft-context",
+        help="读取 Persona 的邮件草稿上下文，不创建或发送草稿",
+    )
+    persona_context.add_argument("--input", required=True)
+    persona_context.set_defaults(func=cmd_persona_draft_context)
 
     workspace = sub.add_parser("workspace", help="检查、初始化或迁移 Relay workspace")
     workspace_actions = workspace.add_subparsers(dest="workspace_action", required=True)
