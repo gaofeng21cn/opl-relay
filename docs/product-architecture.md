@@ -2,23 +2,22 @@
 
 ## Decision
 
-Use one long-lived mail repo now: `opl-relay`. Create `opl-persona` only after a
-first non-mail domain proves that cross-domain orchestration is a real product
-boundary. Keep OPL App as the long-term user entry rather than building a second
-Persona-specific macOS shell.
+Use two business repos: `opl-relay` owns communication and `opl-persona` owns
+cross-domain PI context and proposal orchestration. Keep OPL App as the
+long-term user entry rather than building a second Persona-specific macOS shell.
 
 ## Product Model
 
 ```text
 OPL App
-  visual mail, memory, knowledge, approval, and work views
+  visual mail, memory, knowledge, Persona proposal, and work views
   generic Package contribution host
         |
         v
 Codex / OPL app-server runtime
   chat-first reasoning, tools, approvals, session continuity
         |
-        +--> OPL Persona Skills (future cross-domain orchestration)
+        +--> OPL Persona Plugin / Package
         |
         +--> OPL Relay Plugin / Package
                |
@@ -36,7 +35,7 @@ Codex / OPL app-server runtime
 | Repository | Keep/Create | Responsibility |
 | --- | --- | --- |
 | `opl-relay` | Rename current repo | Mail engine, CLI, Relay Skill/plugin, future Package adapter |
-| `opl-persona` | Defer | Cross-domain Persona Skills and orchestration after a second domain exists |
+| `opl-persona` | Create now | PI context, provenance, review-gated proposals, and cross-domain Skills |
 | `one-person-lab` | Keep | Generic Package/runtime/workspace contracts |
 | `one-person-lab-app` | Keep | App product shell and role-neutral contribution UX |
 | `opl-aion-shell` | Keep | Desktop shell projection and navigation |
@@ -116,12 +115,14 @@ This avoids two bad couplings:
    adapter in the existing OPL repos.
 3. Add OPL App mail, memory, and approval views backed by Relay's existing
    identities and read models.
-4. Create Persona only when a second non-mail domain needs shared orchestration.
-5. Decide whether Persona itself needs a Package after actual cross-domain
-   behavior exists.
+4. Use `opl-persona` for publication-to-knowledge/website proposals and
+   Obsidian-memo-to-website/mail proposals.
+5. Add adapters only at the authority that owns the target system; Persona
+   remains proposal-first and does not become a central CMS or mail store.
 
-The current repository implements step 1 and the Relay-owned half of step 2:
-the Codex Plugin, stable capability exports, and declarative Package
-contributions now live together without owning user data. Framework admission,
-OPL App rendering, and Shell navigation remain host-owned work in their
-respective repositories; steps 3-5 are not smuggled into the Relay engine.
+The current repository implements the Relay-owned half of this model: the Codex
+Plugin, stable capability exports, declarative Package contributions, and the
+read-only bridge that consumes Persona mail-draft context without sending.
+Persona owns the cross-domain proposal contract; `gflab_web` owns its
+proposal-only Hugo adapter. Framework admission, OPL App rendering, and Shell
+navigation remain host-owned work in their respective repositories.

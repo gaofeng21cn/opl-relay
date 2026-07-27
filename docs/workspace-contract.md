@@ -9,7 +9,8 @@
 3. A workspace is explicit, replaceable human context. Switching it does not
    fork or move the mail database.
 4. Credentials remain in the platform credential store, never in either root.
-5. Codex App and OPL App share the configured Relay authority for one user.
+5. Codex App, OPL App, and OPL Persona share configured user-owned runtime
+   roots without moving those roots into an installed Package or plugin cache.
 
 ## Resolution
 
@@ -44,6 +45,11 @@ own installation directory or process working directory.
 | Context, templates, notes | Workspace | Only in a deliberately private repo |
 | Exports | Workspace | User decides |
 
+Persona proposal bundles are structured, evidence-linked review artifacts. They
+may be stored under the Persona data root, but they are not accepted as a
+website publication, vault write, or mail send until the target adapter
+re-reads the exact proposal and the user approves it.
+
 ## Host Contract
 
 A host integrates Relay by providing:
@@ -55,5 +61,6 @@ A host integrates Relay by providing:
 - secure credential-store availability.
 
 Relay continues to own mail identities, memory evidence rules, draft
-fingerprints, and send receipts. A host may visualize these contracts but must
-not recreate them as a second source of truth.
+fingerprints, and send receipts. Persona owns cross-domain provenance and
+proposal state. A host may visualize these contracts but must not recreate them
+as a second source of truth.
