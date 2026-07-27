@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import subprocess
 import sys
@@ -26,6 +27,39 @@ def run_cli(db: Path, *args: str) -> subprocess.CompletedProcess[str]:
         check=False,
         capture_output=True,
         text=True,
+        env=env,
+    )
+
+
+def run_app_contribution(
+    db: Path,
+    request: dict[str, object],
+    *,
+    memory_db: Path | None = None,
+    sources_config: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    root = Path(__file__).resolve().parents[1]
+    env["PYTHONPATH"] = str(root / "src")
+    command = [
+        sys.executable,
+        "-m",
+        "codex_mail_workbench.cli",
+        "--db",
+        str(db),
+        "--json",
+    ]
+    if memory_db is not None:
+        command.extend(["--memory-db", str(memory_db)])
+    if sources_config is not None:
+        command.extend(["--sources-config", str(sources_config)])
+    command.append("app-contribution")
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        input=json.dumps(request),
         env=env,
     )
 
@@ -82,6 +116,153 @@ def test_cli_recent_search_and_read_json(tmp_path: Path) -> None:
     assert recent_payload["messages"][0]["subject"] == "Research thread"
     assert search_payload["messages"][0]["storage_ref"] == storage_ref
     assert "Please review" in read_payload["message"]["body_text"]
+
+
+def test_app_contribution_abi_describes_declared_refs_and_reads_package_owned_data(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "mail.sqlite"
+    seed_message(db)
+    schema = "opl-package-app-contribution-request.v1"
+
+    describe = run_app_contribution(
+        db,
+        {
+            "schema_version": schema,
+            "operation": "describe",
+            "ref": "communications.mail.v1#draft.send",
+        },
+    )
+    recent = run_app_contribution(
+        db,
+        {
+            "schema_version": schema,
+            "operation": "read",
+            "ref": "communications.mail.v1#recent",
+            "input": {"account": "work", "limit": 10},
+        },
+    )
+    memory = run_app_contribution(
+        db,
+        {
+            "schema_version": schema,
+            "operation": "read",
+            "ref": "personal.memory.v1#search",
+        },
+        memory_db=tmp_path / "memory.sqlite",
+    )
+
+    assert describe.returncode == 0, describe.stderr
+    assert recent.returncode == 0, recent.stderr
+    assert memory.returncode == 0, memory.stderr
+    described = json.loads(describe.stdout)
+    recent_payload = json.loads(recent.stdout)
+    memory_payload = json.loads(memory.stdout)
+    assert described["schema_version"] == "opl-package-app-contribution-response.v1"
+    assert described["result"]["abi"] == "opl-package-app-contribution-cli.v1"
+    assert described["result"]["operations"] == [{
+        "operation": "execute",
+        "confirmation_required": True,
+        "input": {
+        "draft_ref": {"type": "string", "required": True},
+        "approval": {"type": "string", "required": True},
+        },
+        "result": "communications.mail.v1#draft.send.result",
+    }]
+    assert recent_payload["result"]["messages"][0]["storage_ref"].startswith("email-store://")
+    assert memory_payload["result"] == {"memories": []}
+
+
+def test_app_contribution_abi_rejects_undeclared_refs_and_cross_kind_calls(tmp_path: Path) -> None:
+    db = tmp_path / "mail.sqlite"
+    unknown = run_app_contribution(
+        db,
+        {
+            "schema_version": "opl-package-app-contribution-request.v1",
+            "operation": "read",
+            "ref": "communications.mail.v1#unknown",
+        },
+    )
+    wrong_kind = run_app_contribution(
+        db,
+        {
+            "schema_version": "opl-package-app-contribution-request.v1",
+            "operation": "execute",
+            "ref": "communications.mail.v1#recent",
+        },
+    )
+    unsupported_input = run_app_contribution(
+        db,
+        {
+            "schema_version": "opl-package-app-contribution-request.v1",
+            "operation": "read",
+            "ref": "communications.mail.v1#recent",
+            "input": {"private_path": "/tmp/relay.sqlite"},
+        },
+    )
+
+    for result in [unknown, wrong_kind, unsupported_input]:
+        assert result.returncode == 2
+        payload = json.loads(result.stdout)
+        assert payload["schema_version"] == "opl-package-app-contribution-response.v1"
+        assert payload["ok"] is False
+        assert payload["error"]["code"] == "invalid_request"
+
+
+def test_app_contribution_abi_describes_shared_read_and_execute_ref(tmp_path: Path) -> None:
+    result = run_app_contribution(
+        tmp_path / "mail.sqlite",
+        {
+            "schema_version": "opl-package-app-contribution-request.v1",
+            "operation": "describe",
+            "ref": "communications.mail.v1#draft.inspect",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert [entry["operation"] for entry in payload["result"]["operations"]] == [
+        "read",
+        "execute",
+    ]
+
+
+def test_app_contribution_abi_routes_send_only_with_package_owned_approval(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    calls: dict[str, str] = {}
+
+    class FakeService:
+        def send(self, draft_ref: str, *, approval: str) -> dict[str, str]:
+            calls["draft_ref"] = draft_ref
+            calls["approval"] = approval
+            return {"draft_ref": draft_ref, "state": "sent"}
+
+    monkeypatch.setattr(cli, "draft_service", lambda args: (FakeService(), object()))
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "schema_version": "opl-package-app-contribution-request.v1",
+                    "operation": "execute",
+                    "ref": "communications.mail.v1#draft.send",
+                    "input": {
+                        "draft_ref": "mail-draft://apple-mail/work/uuid",
+                        "approval": "sha256:current-approval",
+                    },
+                }
+            )
+        ),
+    )
+
+    assert cli.main(["--json", "--draft-db", str(tmp_path / "drafts.sqlite"), "app-contribution"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert calls == {
+        "draft_ref": "mail-draft://apple-mail/work/uuid",
+        "approval": "sha256:current-approval",
+    }
+    assert payload["result"]["draft"]["state"] == "sent"
 
 
 def test_cli_recent_filters_by_date_window(tmp_path: Path) -> None:

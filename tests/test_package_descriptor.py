@@ -28,6 +28,12 @@ ACTION_REFS = {
     "personal.memory.v1#inspect",
 }
 
+DATA_REFS = {
+    "communications.mail.v1#recent",
+    "communications.mail.v1#draft.inspect",
+    "personal.memory.v1#search",
+}
+
 
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -74,6 +80,7 @@ def test_package_content_lock_matches_plugin_bytes() -> None:
 
 def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions() -> None:
     contributions = load_json(PACKAGE_PATH)["app_contributions"]
+    abi = load_json(PACKAGE_PATH)["codex_surface"]["app_contribution_abi"]
 
     assert contributions["schema_version"] == "opl-app-contributions.v1"
     assert set(contributions) <= {
@@ -99,6 +106,14 @@ def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions()
         for command_id in view.get("command_ids", [])
     } <= set(command_ids)
     assert {item["action_ref"] for item in contributions["commands"]} == ACTION_REFS
+    assert {item["data_ref"] for item in contributions["views"]} == DATA_REFS
+    assert abi == {
+        "schema_version": "opl-package-app-contribution-cli.v1",
+        "transport": "stdin_json_stdout_json",
+        "argv": ["opl-relay", "--json", "app-contribution"],
+        "request_schema": "opl-package-app-contribution-request.v1",
+        "response_schema": "opl-package-app-contribution-response.v1",
+    }
     commands_by_id = {
         item["command_id"]: item for item in contributions["commands"]
     }

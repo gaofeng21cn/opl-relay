@@ -47,6 +47,114 @@ from .sync import sync_account
 from .workspace import initialize_workspace, inspect_workspace, migrate_workspace
 
 
+APP_CONTRIBUTION_ABI = "opl-package-app-contribution-cli.v1"
+APP_CONTRIBUTION_REQUEST_SCHEMA = "opl-package-app-contribution-request.v1"
+APP_CONTRIBUTION_RESPONSE_SCHEMA = "opl-package-app-contribution-response.v1"
+
+APP_CONTRIBUTION_DATA_CONTRACTS = {
+    "communications.mail.v1#recent": {
+        "operation": "read",
+        "input": {
+            "account": {"type": "string", "required": False},
+            "folder": {"type": "string", "required": False},
+            "since": {"type": "string", "required": False},
+            "until": {"type": "string", "required": False},
+            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 2000},
+        },
+        "result": "communications.mail.v1#recent.result",
+    },
+    "communications.mail.v1#draft.inspect": {
+        "operation": "read",
+        "input": {
+            "draft_ref": {"type": "string", "required": True},
+        },
+        "result": "communications.mail.v1#draft.inspect.result",
+    },
+    "personal.memory.v1#search": {
+        "operation": "read",
+        "input": {
+            "entity": {"type": "string", "required": False},
+            "query": {"type": "string", "required": False},
+            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
+        },
+        "result": "personal.memory.v1#search.result",
+    },
+}
+
+APP_CONTRIBUTION_ACTION_CONTRACTS = {
+    "communications.mail.v1#sync.incremental": {
+        "operation": "execute",
+        "confirmation_required": False,
+        "input": {
+            "account": {"type": "string", "required": True},
+            "limit_per_folder": {"type": "integer", "required": False, "minimum": 1},
+            "dry_run": {"type": "boolean", "required": False},
+        },
+        "result": "communications.mail.v1#sync.incremental.result",
+    },
+    "communications.mail.v1#draft.create": {
+        "operation": "execute",
+        "confirmation_required": False,
+        "input": {
+            "account": {"type": "string", "required": True},
+            "to": {"type": "string[]", "required": True, "min_items": 1},
+            "cc": {"type": "string[]", "required": False},
+            "bcc": {"type": "string[]", "required": False},
+            "subject": {"type": "string", "required": True},
+            "body": {"type": "string", "required": True},
+            "open": {"type": "boolean", "required": False},
+        },
+        "result": "communications.mail.v1#draft.create.result",
+    },
+    "communications.mail.v1#draft.inspect": {
+        "operation": "execute",
+        "confirmation_required": False,
+        "input": {
+            "draft_ref": {"type": "string", "required": True},
+        },
+        "result": "communications.mail.v1#draft.inspect.result",
+    },
+    "communications.mail.v1#draft.open": {
+        "operation": "execute",
+        "confirmation_required": False,
+        "input": {
+            "draft_ref": {"type": "string", "required": True},
+        },
+        "result": "communications.mail.v1#draft.open.result",
+    },
+    "communications.mail.v1#draft.send": {
+        "operation": "execute",
+        "confirmation_required": True,
+        "input": {
+            "draft_ref": {"type": "string", "required": True},
+            "approval": {"type": "string", "required": True},
+        },
+        "result": "communications.mail.v1#draft.send.result",
+    },
+    "personal.context.v1#build": {
+        "operation": "execute",
+        "confirmation_required": False,
+        "input": {
+            "person": {"type": "string", "required": False},
+            "project": {"type": "string", "required": False},
+            "query": {"type": "string", "required": False},
+            "mail_limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 200},
+            "memory_limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
+            "knowledge_limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 200},
+        },
+        "result": "personal.context.v1#build.result",
+    },
+    "personal.memory.v1#inspect": {
+        "operation": "execute",
+        "confirmation_required": False,
+        "input": {
+            "memory_ref": {"type": "string", "required": True},
+        },
+        "result": "personal.memory.v1#inspect.result",
+    },
+}
+
+
 def emit(payload: object, *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -64,6 +172,316 @@ def fail(message: str, *, as_json: bool, code: int = 1) -> int:
     else:
         print(f"ERROR: {message}", file=sys.stderr)
     return code
+
+
+def _app_contribution_error(ref: str | None, code: str, message: str) -> dict[str, object]:
+    return {
+        "schema_version": APP_CONTRIBUTION_RESPONSE_SCHEMA,
+        "ok": False,
+        "ref": ref,
+        "error": {"code": code, "message": message},
+    }
+
+
+def _app_contribution_response(ref: str, operation: str, result: object) -> dict[str, object]:
+    return {
+        "schema_version": APP_CONTRIBUTION_RESPONSE_SCHEMA,
+        "ok": True,
+        "ref": ref,
+        "operation": operation,
+        "result": result,
+    }
+
+
+def _app_contribution_input(value: object) -> dict[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("input must be an object")
+    return value
+
+
+def _app_contribution_string(value: object, field: str, *, required: bool = False) -> str:
+    if value is None and not required:
+        return ""
+    if not isinstance(value, str) or (required and not value.strip()):
+        raise ValueError(f"input.{field} must be a non-empty string")
+    return value.strip()
+
+
+def _app_contribution_bool(value: object, field: str, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"input.{field} must be a boolean")
+    return value
+
+
+def _app_contribution_integer(
+    value: object,
+    field: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+        raise ValueError(f"input.{field} must be an integer from {minimum} to {maximum}")
+    return value
+
+
+def _app_contribution_strings(value: object, field: str, *, required: bool = False) -> list[str]:
+    if value is None:
+        if required:
+            raise ValueError(f"input.{field} must be a non-empty string array")
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+        raise ValueError(f"input.{field} must be a string array")
+    values = [item.strip() for item in value]
+    if required and not values:
+        raise ValueError(f"input.{field} must be a non-empty string array")
+    return values
+
+
+def _app_contribution_input_keys(
+    payload: dict[str, object],
+    contract: dict[str, object],
+) -> None:
+    fields = contract["input"]
+    assert isinstance(fields, dict)
+    unexpected = sorted(set(payload) - set(fields))
+    if unexpected:
+        raise ValueError("input contains unsupported fields: " + ", ".join(unexpected))
+    for name, schema in fields.items():
+        assert isinstance(name, str)
+        assert isinstance(schema, dict)
+        required = schema.get("required") is True
+        if name not in payload:
+            if required:
+                raise ValueError(f"input.{name} is required")
+            continue
+        value = payload[name]
+        value_type = schema.get("type")
+        if value_type == "string":
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"input.{name} must be a non-empty string")
+        elif value_type == "boolean":
+            if not isinstance(value, bool):
+                raise ValueError(f"input.{name} must be a boolean")
+        elif value_type == "integer":
+            minimum = schema.get("minimum", -sys.maxsize)
+            maximum = schema.get("maximum", sys.maxsize)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not isinstance(minimum, int)
+                or not isinstance(maximum, int)
+                or not minimum <= value <= maximum
+            ):
+                raise ValueError(f"input.{name} must be an integer from {minimum} to {maximum}")
+        elif value_type == "string[]":
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) and item.strip() for item in value
+            ):
+                raise ValueError(f"input.{name} must be a string array")
+            minimum_items = schema.get("min_items", 0)
+            if not isinstance(minimum_items, int) or len(value) < minimum_items:
+                raise ValueError(f"input.{name} must contain at least {minimum_items} items")
+        else:
+            raise ValueError(f"unsupported input type for {name}")
+
+
+def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str, object]) -> object:
+    if ref == "communications.mail.v1#recent":
+        conn = connect_email_store(Path(args.db).expanduser())
+        try:
+            return {
+                "messages": list_messages(
+                    conn,
+                    account_ids=[_app_contribution_string(payload.get("account"), "account")]
+                    if payload.get("account") is not None
+                    else None,
+                    folder_slug=_app_contribution_string(payload.get("folder"), "folder") or None,
+                    since=_app_contribution_string(payload.get("since"), "since") or None,
+                    until=_app_contribution_string(payload.get("until"), "until") or None,
+                    limit=_app_contribution_integer(
+                        payload.get("limit"), "limit", default=20, minimum=1, maximum=2000
+                    ),
+                )
+            }
+        finally:
+            conn.close()
+    if ref == "communications.mail.v1#draft.inspect":
+        draft_ref = _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True)
+        service, _ = draft_service(args)
+        return {"draft": service.inspect(draft_ref)}
+    if ref == "personal.memory.v1#search":
+        return {
+            "memories": memory_store(args).list_memories(
+                entity=_app_contribution_string(payload.get("entity"), "entity"),
+                query=_app_contribution_string(payload.get("query"), "query"),
+                limit=_app_contribution_integer(
+                    payload.get("limit"), "limit", default=50, minimum=1, maximum=500
+                ),
+            )
+        }
+    raise ValueError("unsupported data ref")
+
+
+def _app_contribution_action(args: argparse.Namespace, ref: str, payload: dict[str, object]) -> object:
+    if ref == "communications.mail.v1#sync.incremental":
+        return sync_account(
+            config_path=Path(args.config).expanduser(),
+            db_path=Path(args.db).expanduser(),
+            account_id=_app_contribution_string(payload.get("account"), "account", required=True),
+            mode="incremental",
+            limit_per_folder=(
+                _app_contribution_integer(
+                    payload.get("limit_per_folder"),
+                    "limit_per_folder",
+                    default=1,
+                    minimum=1,
+                    maximum=100000,
+                )
+                if payload.get("limit_per_folder") is not None
+                else None
+            ),
+            dry_run=_app_contribution_bool(payload.get("dry_run"), "dry_run", default=False),
+        )
+    if ref == "communications.mail.v1#draft.create":
+        account = load_account(
+            Path(args.config).expanduser(),
+            _app_contribution_string(payload.get("account"), "account", required=True),
+        )
+        service, _ = draft_service(args)
+        return {
+            "draft": service.create(
+                account_id=account.account_id,
+                sender=account.email,
+                to=parse_recipients(_app_contribution_strings(payload.get("to"), "to", required=True), required=True),
+                cc=parse_recipients(_app_contribution_strings(payload.get("cc"), "cc")),
+                bcc=parse_recipients(_app_contribution_strings(payload.get("bcc"), "bcc")),
+                subject=_app_contribution_string(payload.get("subject"), "subject", required=True),
+                body_text=_app_contribution_string(payload.get("body"), "body", required=True),
+                attachments=[],
+                visible=_app_contribution_bool(payload.get("open"), "open", default=True),
+            )
+        }
+    if ref == "communications.mail.v1#draft.inspect":
+        service, _ = draft_service(args)
+        return {
+            "draft": service.inspect(
+                _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True)
+            )
+        }
+    if ref == "communications.mail.v1#draft.open":
+        service, _ = draft_service(args)
+        return {
+            "draft": service.open(
+                _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True)
+            )
+        }
+    if ref == "communications.mail.v1#draft.send":
+        service, _ = draft_service(args)
+        return {
+            "draft": service.send(
+                _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True),
+                approval=_app_contribution_string(payload.get("approval"), "approval", required=True),
+            )
+        }
+    if ref == "personal.context.v1#build":
+        return ContextBuilder(
+            mail_db_path=Path(args.db).expanduser(),
+            memory_db_path=Path(args.memory_db).expanduser(),
+            sources_config_path=Path(args.sources_config).expanduser(),
+        ).build(
+            person=_app_contribution_string(payload.get("person"), "person"),
+            project=_app_contribution_string(payload.get("project"), "project"),
+            query=_app_contribution_string(payload.get("query"), "query"),
+            mail_limit=_app_contribution_integer(
+                payload.get("mail_limit"), "mail_limit", default=6, minimum=1, maximum=200
+            ),
+            memory_limit=_app_contribution_integer(
+                payload.get("memory_limit"), "memory_limit", default=20, minimum=1, maximum=500
+            ),
+            knowledge_limit=_app_contribution_integer(
+                payload.get("knowledge_limit"), "knowledge_limit", default=6, minimum=1, maximum=200
+            ),
+        )
+    if ref == "personal.memory.v1#inspect":
+        return {
+            "memory": memory_store(args).get_memory(
+                _app_contribution_string(payload.get("memory_ref"), "memory_ref", required=True)
+            )
+        }
+    raise ValueError("unsupported action ref")
+
+
+def cmd_app_contribution(args: argparse.Namespace) -> int:
+    try:
+        request = json.load(sys.stdin)
+        if not isinstance(request, dict):
+            raise ValueError("request must be an object")
+        unexpected = sorted(set(request) - {"schema_version", "operation", "ref", "input"})
+        if unexpected:
+            raise ValueError("request contains unsupported fields: " + ", ".join(unexpected))
+        if request.get("schema_version") != APP_CONTRIBUTION_REQUEST_SCHEMA:
+            raise ValueError(f"schema_version must be {APP_CONTRIBUTION_REQUEST_SCHEMA}")
+        operation = request.get("operation")
+        ref = request.get("ref")
+        if not isinstance(operation, str) or operation not in {"describe", "read", "execute"}:
+            raise ValueError("operation must be describe, read, or execute")
+        if not isinstance(ref, str) or not ref:
+            raise ValueError("ref must be a non-empty string")
+        data_contract = APP_CONTRIBUTION_DATA_CONTRACTS.get(ref)
+        action_contract = APP_CONTRIBUTION_ACTION_CONTRACTS.get(ref)
+        if data_contract is None and action_contract is None:
+            raise ValueError("ref is not declared by this package")
+        if operation == "describe":
+            if "input" in request:
+                raise ValueError("describe does not accept input")
+            emit(
+                _app_contribution_response(
+                    ref,
+                    operation,
+                    {
+                        "abi": APP_CONTRIBUTION_ABI,
+                        "request_schema": APP_CONTRIBUTION_REQUEST_SCHEMA,
+                        "response_schema": APP_CONTRIBUTION_RESPONSE_SCHEMA,
+                        "ref": ref,
+                        "operations": [
+                            contract
+                            for contract in (data_contract, action_contract)
+                            if contract is not None
+                        ],
+                    },
+                ),
+                as_json=True,
+            )
+            return 0
+        contract = data_contract if operation == "read" else action_contract
+        if contract is None:
+            raise ValueError(f"{ref} does not support {operation}")
+        payload = _app_contribution_input(request.get("input"))
+        _app_contribution_input_keys(payload, contract)
+        result = (
+            _app_contribution_data(args, ref, payload)
+            if operation == "read"
+            else _app_contribution_action(args, ref, payload)
+        )
+        emit(_app_contribution_response(ref, operation, result), as_json=True)
+        return 0
+    except Exception as exc:
+        ref = None
+        try:
+            if isinstance(locals().get("request"), dict) and isinstance(request.get("ref"), str):
+                ref = request["ref"]
+        except UnboundLocalError:
+            pass
+        emit(_app_contribution_error(ref, "invalid_request", str(exc)), as_json=True)
+        return 2
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -567,6 +985,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = sub.add_parser("doctor", help="检查配置、数据库和安装状态")
     doctor.set_defaults(func=cmd_doctor)
+
+    app_contribution = sub.add_parser(
+        "app-contribution",
+        help="执行 Package-owned app contribution JSON ABI",
+    )
+    app_contribution.set_defaults(func=cmd_app_contribution)
 
     accounts = sub.add_parser("accounts", help="列出配置账号")
     accounts.set_defaults(func=cmd_accounts)
