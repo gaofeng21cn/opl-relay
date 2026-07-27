@@ -1,0 +1,191 @@
+{
+  "surface_kind": "opl_capability_package_manifest.v2",
+  "package_id": "opl-relay",
+  "display_name": "OPL Relay",
+  "publisher": "one-person-lab",
+  "version": "0.4.0",
+  "source": "first_party",
+  "package_role": "framework_capability_package",
+  "source_repo": "https://github.com/gaofeng21cn/codex-mail-workbench",
+  "machine_boundary": "This Package declares Relay capabilities and role-neutral App contributions. It does not own private mail, memory, workspace, credential, approval, installed, or runtime truth.",
+  "capability_abi": {
+    "id": "opl-relay.capabilities",
+    "version": "1.0.0",
+    "compatibility_policy": "same_major"
+  },
+  "exports": {
+    "core_skill_ids": [
+      "opl-relay"
+    ],
+    "core_module_ids": [
+      "communications.mail.v1",
+      "personal.context.v1",
+      "personal.memory.v1",
+      "knowledge.obsidian.v1"
+    ],
+    "optional_skill_policy_ref": "packages/opl-relay/package.json#/exports",
+    "optional_skills_installed_by_default": true,
+    "default_materialization_policy": "all_exported_skills"
+  },
+  "content_lock": {
+    "algorithm": "sha256",
+    "canonicalization": "ordered_path_nul_file_bytes",
+    "paths": [
+      ".codex-plugin/plugin.json",
+      "skills/opl-relay/SKILL.md"
+    ],
+    "digest": "sha256:dc28411e282e67a0d342e04b09d1f36b682c28b340446b6d97c5f818b6dbf4b1"
+  },
+  "codex_surface": {
+    "plugin_id": "opl-relay",
+    "plugin_source_path": "../../plugins/opl-relay",
+    "carrier_source_commit": "21a88c619785c43614d35cf8fe6cff9c5844ea68",
+    "codex_default_exposure": false,
+    "optional_install_policy": "all_exported_skills"
+  },
+  "app_contributions": {
+    "schema_version": "opl-app-contributions.v1",
+    "navigation": [
+      {
+        "navigation_id": "relay.inbox",
+        "label_i18n": {
+          "zh-CN": "收件箱",
+          "en-US": "Inbox"
+        },
+        "view_id": "relay.inbox",
+        "sort_order": 100
+      },
+      {
+        "navigation_id": "relay.drafts",
+        "label_i18n": {
+          "zh-CN": "草稿",
+          "en-US": "Drafts"
+        },
+        "view_id": "relay.drafts",
+        "sort_order": 110
+      },
+      {
+        "navigation_id": "relay.people",
+        "label_i18n": {
+          "zh-CN": "联系人",
+          "en-US": "People"
+        },
+        "view_id": "relay.people",
+        "sort_order": 120
+      }
+    ],
+    "views": [
+      {
+        "view_id": "relay.inbox",
+        "view_type": "list_detail",
+        "title_i18n": {
+          "zh-CN": "收件箱",
+          "en-US": "Inbox"
+        },
+        "data_ref": "communications.mail.v1#recent",
+        "command_ids": [
+          "relay.mail.sync"
+        ],
+        "empty_state_i18n": {
+          "zh-CN": "没有可显示的本地邮件",
+          "en-US": "No local mail to show"
+        }
+      },
+      {
+        "view_id": "relay.drafts",
+        "view_type": "approval_diff",
+        "title_i18n": {
+          "zh-CN": "草稿审核",
+          "en-US": "Draft review"
+        },
+        "data_ref": "communications.mail.v1#draft.inspect",
+        "command_ids": [
+          "relay.draft.create",
+          "relay.draft.inspect",
+          "relay.draft.open",
+          "relay.draft.send"
+        ],
+        "empty_state_i18n": {
+          "zh-CN": "没有待审核草稿",
+          "en-US": "No drafts awaiting review"
+        }
+      },
+      {
+        "view_id": "relay.people",
+        "view_type": "timeline",
+        "title_i18n": {
+          "zh-CN": "联系人",
+          "en-US": "People"
+        },
+        "data_ref": "personal.memory.v1#search",
+        "command_ids": [
+          "relay.context.build",
+          "relay.memory.inspect"
+        ],
+        "empty_state_i18n": {
+          "zh-CN": "没有已批准的关系记忆",
+          "en-US": "No approved relationship memory"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command_id": "relay.mail.sync",
+        "label_i18n": {
+          "zh-CN": "同步邮件",
+          "en-US": "Sync mail"
+        },
+        "action_ref": "communications.mail.v1#sync.incremental"
+      },
+      {
+        "command_id": "relay.draft.create",
+        "label_i18n": {
+          "zh-CN": "新建草稿",
+          "en-US": "Create draft"
+        },
+        "action_ref": "communications.mail.v1#draft.create"
+      },
+      {
+        "command_id": "relay.draft.inspect",
+        "label_i18n": {
+          "zh-CN": "回读草稿",
+          "en-US": "Inspect draft"
+        },
+        "action_ref": "communications.mail.v1#draft.inspect"
+      },
+      {
+        "command_id": "relay.draft.open",
+        "label_i18n": {
+          "zh-CN": "在 Apple Mail 中打开",
+          "en-US": "Open in Apple Mail"
+        },
+        "action_ref": "communications.mail.v1#draft.open"
+      },
+      {
+        "command_id": "relay.draft.send",
+        "label_i18n": {
+          "zh-CN": "发送已批准草稿",
+          "en-US": "Send approved draft"
+        },
+        "action_ref": "communications.mail.v1#draft.send",
+        "confirmation_required": true
+      },
+      {
+        "command_id": "relay.context.build",
+        "label_i18n": {
+          "zh-CN": "构建往来上下文",
+          "en-US": "Build relationship context"
+        },
+        "action_ref": "personal.context.v1#build"
+      },
+      {
+        "command_id": "relay.memory.inspect",
+        "label_i18n": {
+          "zh-CN": "查看记忆证据",
+          "en-US": "Inspect memory evidence"
+        },
+        "action_ref": "personal.memory.v1#inspect"
+      }
+    ]
+  }
+}

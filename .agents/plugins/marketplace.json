@@ -1,0 +1,20 @@
+{
+  "name": "opl-relay",
+  "interface": {
+    "displayName": "OPL Relay"
+  },
+  "plugins": [
+    {
+      "name": "opl-relay",
+      "source": {
+        "source": "local",
+        "path": "./plugins/opl-relay"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

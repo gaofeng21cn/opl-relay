@@ -45,6 +45,28 @@ Do not create separate repositories for the Relay plugin, shared core, Relay UI,
 or Persona App. Those boundaries would duplicate lifecycle and distribution
 before they have independent owners.
 
+## Package, Plugin, And Workspace Boundary
+
+Relay exposes one capability through three deliberately different surfaces:
+
+| Surface | Authority | Must not own |
+| --- | --- | --- |
+| Relay Core | Mail identities, evidence, memory rules, draft fingerprints, send receipts | Host navigation or plugin installation |
+| Codex Plugin | Codex discovery and the `opl-relay` Skill | Package lifecycle or user data |
+| OPL Package | Stable capability IDs and role-neutral `app_contributions` | Private state, credentials, approvals, or runtime truth |
+
+The source Package descriptor is
+`packages/opl-relay/package.json`. Its content lock covers the installable
+plugin manifest and Skill, while its App contributions contain declarative
+views and opaque action references only. It never embeds executable UI code.
+
+All three surfaces resolve the same user-owned runtime:
+
+- `OPL_RELAY_HOME` is the long-lived private data authority;
+- `OPL_RELAY_WORKSPACE` is the replaceable human context;
+- a source checkout, installed Package, or Codex plugin cache is never either
+  authority.
+
 ## OPL App Integration
 
 Relay and Persona are not OPL standard agents. OPL App should consume them
@@ -98,5 +120,8 @@ This avoids two bad couplings:
 5. Decide whether Persona itself needs a Package after actual cross-domain
    behavior exists.
 
-The current repository implements step 1. Steps 2-5 are intentionally not
-smuggled into the Relay engine.
+The current repository implements step 1 and the Relay-owned half of step 2:
+the Codex Plugin, stable capability exports, and declarative Package
+contributions now live together without owning user data. Framework admission,
+OPL App rendering, and Shell navigation remain host-owned work in their
+respective repositories; steps 3-5 are not smuggled into the Relay engine.

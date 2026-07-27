@@ -3,10 +3,13 @@ PREFIX ?= $(HOME)/.local
 BIN_DIR := $(PREFIX)/bin
 ROOT := $(CURDIR)
 
-.PHONY: test install-local migrate-mail-store
+.PHONY: test validate-package install-local migrate-mail-store
 
 test:
 	$(PYTHON) -m pytest -q
+
+validate-package:
+	$(PYTHON) -m pytest -q tests/test_package_descriptor.py
 
 install-local:
 	mkdir -p "$(BIN_DIR)"
