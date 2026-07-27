@@ -59,10 +59,12 @@ Relay exposes one capability through three deliberately different surfaces:
 | Codex Plugin | Codex discovery and the `opl-relay` Skill | Package lifecycle or user data |
 | OPL Package | Stable capability IDs and role-neutral `app_contributions` | Private state, credentials, approvals, or runtime truth |
 
-The source Package descriptor is
-`packages/opl-relay/package.json`. Its content lock covers the installable
-plugin manifest and Skill, while its App contributions contain declarative
-views and opaque action references only. It never embeds executable UI code.
+The source Package descriptor is the carrier-root
+`plugins/opl-relay/opl-package.json`. The installable Codex Plugin therefore
+carries the owner descriptor without a second catalog. Its content lock covers
+the plugin manifest and Skill, while deliberately excluding the descriptor
+itself to avoid a recursive digest. App contributions contain declarative views
+and opaque action references only; they never embed executable UI code.
 
 All three surfaces resolve the same user-owned runtime:
 

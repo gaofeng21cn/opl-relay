@@ -3,7 +3,7 @@
   "package_id": "opl-relay",
   "display_name": "OPL Relay",
   "publisher": "one-person-lab",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "source": "first_party",
   "package_role": "framework_capability_package",
   "source_repo": "https://github.com/gaofeng21cn/opl-relay",
@@ -23,7 +23,7 @@
       "personal.memory.v1",
       "knowledge.obsidian.v1"
     ],
-    "optional_skill_policy_ref": "packages/opl-relay/package.json#/exports",
+    "optional_skill_policy_ref": "opl-package.json#/exports",
     "optional_skills_installed_by_default": true,
     "default_materialization_policy": "all_exported_skills"
   },
@@ -34,11 +34,11 @@
       ".codex-plugin/plugin.json",
       "skills/opl-relay/SKILL.md"
     ],
-    "digest": "sha256:afcda475c398111c33438a952c66fb8936d7145497446f771d66a9f7880c0097"
+    "digest": "sha256:75cd527c2bd40de11a3f4da79ecd88d01c2a8818562a7537af8b7aa66bfde7d2"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
-    "plugin_source_path": "../../plugins/opl-relay",
+    "plugin_source_path": ".",
     "carrier_source_commit": "21a88c619785c43614d35cf8fe6cff9c5844ea68",
     "codex_default_exposure": false,
     "optional_install_policy": "all_exported_skills"

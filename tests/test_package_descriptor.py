@@ -5,8 +5,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-PACKAGE_PATH = ROOT / "packages" / "opl-relay" / "package.json"
 PLUGIN_ROOT = ROOT / "plugins" / "opl-relay"
+PACKAGE_PATH = PLUGIN_ROOT / "opl-package.json"
+LEGACY_PACKAGE_PATH = ROOT / "packages" / "opl-relay" / "package.json"
 PLUGIN_PATH = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
 SKILL_PATH = PLUGIN_ROOT / "skills" / "opl-relay" / "SKILL.md"
 
@@ -50,6 +51,11 @@ def test_package_identity_capabilities_and_plugin_version_are_aligned() -> None:
     assert "app_contributions" not in plugin
 
 
+def test_package_descriptor_has_one_carrier_root_authority() -> None:
+    assert PACKAGE_PATH.is_file()
+    assert not LEGACY_PACKAGE_PATH.exists()
+
+
 def test_package_content_lock_matches_plugin_bytes() -> None:
     package = load_json(PACKAGE_PATH)
     content_lock = package["content_lock"]
@@ -57,6 +63,7 @@ def test_package_content_lock_matches_plugin_bytes() -> None:
 
     assert content_lock["algorithm"] == "sha256"
     assert content_lock["canonicalization"] == "ordered_path_nul_file_bytes"
+    assert "opl-package.json" not in content_lock["paths"]
     for relative_path in content_lock["paths"]:
         digest.update(relative_path.encode("utf-8"))
         digest.update(b"\0")

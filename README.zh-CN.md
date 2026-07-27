@@ -59,9 +59,11 @@ opl-relay --json draft open 'mail-draft://apple-mail/work/UUID'
 
 ## 插件与 OPL App
 
-可安装 Codex Plugin 位于 [`plugins/opl-relay`](plugins/opl-relay)。插件只携带
-能力说明，不拥有数据。未来 OPL Package 应通过角色无关的 App contributions
-把相同能力交给 OPL App；OPL App 负责统一入口和可视化，不重写第二套邮件引擎。
+可安装 Codex Plugin 位于 [`plugins/opl-relay`](plugins/opl-relay)。插件携带能力
+说明与 carrier-root [`opl-package.json`](plugins/opl-relay/opl-package.json) owner
+descriptor，但不拥有用户数据或运行态真相。OPL Package 通过角色无关的 App
+contributions 把相同能力交给 OPL App；OPL App 负责统一入口和可视化，不重写第二套
+邮件引擎。
 
 ## 隐私与安全
 

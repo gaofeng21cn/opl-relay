@@ -78,9 +78,10 @@ automatically retried.
 ## Plugin
 
 The installable Codex Plugin scaffold is under
-[`plugins/opl-relay`](plugins/opl-relay). It ships capability instructions only
-and never owns user data. The OPL Package exposes the same capability through
-role-neutral App contributions.
+[`plugins/opl-relay`](plugins/opl-relay). It ships capability instructions and
+the carrier-root [`opl-package.json`](plugins/opl-relay/opl-package.json) owner
+descriptor, but never owns user data or runtime truth. The OPL Package exposes
+the same capability through role-neutral App contributions.
 
 ## Privacy And Safety
 
