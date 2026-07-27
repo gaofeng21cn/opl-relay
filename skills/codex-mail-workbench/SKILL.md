@@ -1,9 +1,9 @@
 ---
 name: codex-mail-workbench
-description: Inspect configured local mailboxes, retrieve evidence-backed private memory and Obsidian context, and manage review-gated Apple Mail drafts through codex-mail.
+description: Compatibility skill for OPL Relay mail, private memory, Obsidian context, and review-gated Apple Mail drafts.
 ---
 
-# Codex Mail Workbench
+# Codex Mail Workbench Compatibility
 
 Use the local workbench as the mailbox authority. Keep inspection read-first and
 separate mailbox facts from user-specific judgment.
@@ -12,10 +12,12 @@ separate mailbox facts from user-specific judgment.
 
 - Treat `codex-mail --json accounts` as current account truth. Do not infer
   account ids from examples or memory.
-- Resolve state from `CODEX_MAIL_HOME` when set; otherwise use
-  `~/.codex-mail-workbench`. A checkout may use the ignored `./local` directory.
+- Prefer `OPL_RELAY_HOME` for long-lived state and `OPL_RELAY_WORKSPACE` for
+  profile, policies, context, skills, templates, and exports.
+- `CODEX_MAIL_HOME` and `~/.codex-mail-workbench` remain supported for existing
+  installations. Do not use a source checkout or plugin cache as new storage.
 - Read any private overlay before triage or drafting judgments. Start with
-  `<state>/AGENTS.md`, then follow its references to `profile.md`, `skills/`,
+  `<workspace>/AGENTS.md`, then follow its references to `profile.md`, `skills/`,
   `policies/`, `context/`, or `templates/` as needed.
 - Keep accounts, SQLite data, raw mail, cursors, and overlay content private.
   Never copy private rules into public repository files.
@@ -27,8 +29,8 @@ separate mailbox facts from user-specific judgment.
 Use one evidence path:
 
 ```bash
-command -v codex-mail
-codex-mail --json doctor
+command -v opl-relay || command -v codex-mail
+opl-relay --json doctor
 codex-mail --json accounts
 codex-mail --json sync --account <account> --mode incremental
 codex-mail --json recent --account <account> --limit 20

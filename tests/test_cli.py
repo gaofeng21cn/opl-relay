@@ -137,9 +137,22 @@ def test_cli_doctor_reports_current_private_paths(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["keychain_services"] == ["codex-mail-workbench"]
+    assert payload["product"] == "opl-relay"
+    assert payload["workspace"]["path"]
     assert payload["draft_db_path"].endswith("drafts.sqlite")
     assert payload["memory_db_path"].endswith("memory.sqlite")
     assert payload["sources_config_path"].endswith("sources.toml")
+
+
+def test_cli_exposes_workspace_commands() -> None:
+    parser = cli.build_parser()
+    for command in [
+        ["workspace", "inspect"],
+        ["workspace", "init"],
+        ["workspace", "migrate", "--from", "/tmp/legacy-overlay"],
+    ]:
+        args = parser.parse_args(command)
+        assert callable(args.func)
 
 
 def test_cli_memory_candidate_approval_flow(tmp_path: Path) -> None:

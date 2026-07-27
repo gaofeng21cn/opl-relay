@@ -1,5 +1,5 @@
-"""Codex Mail Workbench."""
+"""OPL Relay mail engine with Codex Mail Workbench compatibility."""
 
 __all__ = ["__version__"]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

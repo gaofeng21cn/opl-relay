@@ -1,0 +1,4 @@
+interface:
+  display_name: "OPL Relay"
+  short_description: "Private mail, memory, knowledge, and draft workflows."
+  default_prompt: "Use $opl-relay to inspect my configured mail, build evidence-backed context, and prepare review-gated drafts."

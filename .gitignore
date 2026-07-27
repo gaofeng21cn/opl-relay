@@ -4,9 +4,10 @@ __pycache__/
 .mypy_cache/
 *.pyc
 
-# Local/private mail state. Keep real accounts, mail stores, and profile notes
-# out of the public repository.
+# Local/private Relay state. New installs keep it outside the checkout; these
+# entries prevent accidental publication during compatibility or development.
 local/
+.opl-relay/
 .codex-mail-workbench/
 accounts.yaml
 accounts.local.yaml

@@ -3,14 +3,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codex-mail-workbench"
-version = "0.3.0"
-description = "Local mail workbench for Codex: IMAP sync, evidence-backed private memory, Obsidian context, review-gated Apple Mail drafts, and CLI."
+name = "opl-relay"
+version = "0.4.0"
+description = "Local-first personal communication relay for Codex and OPL."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
+opl-relay = "codex_mail_workbench.cli:main"
 codex-mail = "codex_mail_workbench.cli:main"
 
 [tool.hatch.build.targets.wheel]

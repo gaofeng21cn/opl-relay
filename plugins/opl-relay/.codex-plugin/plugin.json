@@ -1,0 +1,25 @@
+{
+  "name": "opl-relay",
+  "version": "0.1.0",
+  "description": "Local-first mail, relationship memory, Obsidian context, and review-gated drafting for Codex.",
+  "author": {
+    "name": "OPL"
+  },
+  "repository": "https://github.com/gaofeng21cn/codex-mail-workbench",
+  "license": "MIT",
+  "keywords": ["mail", "memory", "obsidian", "apple-mail", "local-first"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "OPL Relay",
+    "shortDescription": "A private communication relay for Codex.",
+    "longDescription": "Manage local mail evidence, approved relationship memory, Obsidian context, and Apple Mail drafts without storing user data in the plugin.",
+    "developerName": "OPL",
+    "category": "Productivity",
+    "capabilities": ["Mail", "Memory", "Knowledge", "Drafting"],
+    "defaultPrompt": [
+      "检查最近三天的邮件并告诉我需要决定什么。",
+      "结合往来邮件和记忆，为这个联系人起草回复。",
+      "在 Apple Mail 建立草稿，等我审核后再发送。"
+    ]
+  }
+}

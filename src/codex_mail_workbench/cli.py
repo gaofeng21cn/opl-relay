@@ -31,6 +31,9 @@ from .paths import (
     default_memory_db_path,
     default_sources_config_path,
     default_state_dir,
+    default_workspace_dir,
+    state_dir_source,
+    workspace_dir_source,
 )
 from .store import (
     connect_email_store,
@@ -40,6 +43,7 @@ from .store import (
     search_messages,
 )
 from .sync import sync_account
+from .workspace import initialize_workspace, inspect_workspace, migrate_workspace
 
 
 def emit(payload: object, *, as_json: bool) -> None:
@@ -67,6 +71,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     drafts_db_path = Path(args.draft_db).expanduser()
     memory_db_path = Path(args.memory_db).expanduser()
     sources_config_path = Path(args.sources_config).expanduser()
+    workspace = inspect_workspace(Path(args.workspace))
     accounts = {}
     config_error = ""
     sources_error = ""
@@ -82,9 +87,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             sources_error = str(exc)
     payload = {
         "ok": not config_error and not sources_error,
+        "product": "opl-relay",
         "version": __version__,
         "command": shutil.which("codex-mail"),
+        "commands": {
+            "opl-relay": shutil.which("opl-relay"),
+            "codex-mail": shutil.which("codex-mail"),
+        },
         "state_dir": str(default_state_dir()),
+        "state_dir_source": state_dir_source(),
+        "workspace": workspace,
+        "workspace_dir_source": workspace_dir_source(),
         "config_path": str(config_path),
         "config_exists": config_path.exists(),
         "config_error": config_error,
@@ -101,6 +114,32 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "accounts": sorted(accounts.keys()),
         "keychain_services": [KEYCHAIN_SERVICE],
     }
+    emit(payload, as_json=args.json)
+    return 0 if payload["ok"] else 1
+
+
+def cmd_workspace_inspect(args: argparse.Namespace) -> int:
+    emit(
+        {"ok": True, "workspace": inspect_workspace(Path(args.workspace))},
+        as_json=args.json,
+    )
+    return 0
+
+
+def cmd_workspace_init(args: argparse.Namespace) -> int:
+    emit(
+        {"ok": True, "workspace": initialize_workspace(Path(args.workspace))},
+        as_json=args.json,
+    )
+    return 0
+
+
+def cmd_workspace_migrate(args: argparse.Namespace) -> int:
+    payload = migrate_workspace(
+        Path(args.from_path),
+        Path(args.workspace),
+        apply=args.apply,
+    )
     emit(payload, as_json=args.json)
     return 0 if payload["ok"] else 1
 
@@ -491,7 +530,7 @@ def cmd_draft_send(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="codex-mail")
+    parser = argparse.ArgumentParser(prog="opl-relay")
     parser.add_argument("--json", action="store_true", help="输出稳定 JSON")
     parser.add_argument("--config", default=str(default_config_path()), help="accounts.toml 路径")
     parser.add_argument("--db", default=str(default_db_path()), help="SQLite 邮件库路径")
@@ -509,6 +548,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--sources-config",
         default=str(default_sources_config_path()),
         help="外部知识源 sources.toml 路径",
+    )
+    parser.add_argument(
+        "--workspace",
+        default=str(default_workspace_dir()),
+        help="人类可编辑的 Relay workspace 路径",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -632,6 +676,24 @@ def build_parser() -> argparse.ArgumentParser:
     context_build.add_argument("--memory-limit", type=int, default=20)
     context_build.add_argument("--knowledge-limit", type=int, default=6)
     context_build.set_defaults(func=cmd_context_build)
+
+    workspace = sub.add_parser("workspace", help="检查、初始化或迁移 Relay workspace")
+    workspace_actions = workspace.add_subparsers(dest="workspace_action", required=True)
+    workspace_inspect = workspace_actions.add_parser("inspect", help="只读检查 workspace")
+    workspace_inspect.set_defaults(func=cmd_workspace_inspect)
+    workspace_init = workspace_actions.add_parser("init", help="初始化 workspace 目录")
+    workspace_init.set_defaults(func=cmd_workspace_init)
+    workspace_migrate = workspace_actions.add_parser(
+        "migrate",
+        help="从旧 private overlay 复制到当前 workspace",
+    )
+    workspace_migrate.add_argument("--from", dest="from_path", required=True)
+    workspace_migrate.add_argument(
+        "--apply",
+        action="store_true",
+        help="执行复制；省略时只输出计划",
+    )
+    workspace_migrate.set_defaults(func=cmd_workspace_migrate)
 
     draft = sub.add_parser("draft", help="Apple Mail 草稿审核与受控发送")
     draft_actions = draft.add_subparsers(dest="draft_action", required=True)

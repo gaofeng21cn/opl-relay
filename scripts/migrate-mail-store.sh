@@ -2,7 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STATE_DIR="${CODEX_MAIL_HOME:-${HOME}/.codex-mail-workbench}"
+if [[ -n "${OPL_RELAY_HOME:-}" ]]; then
+  STATE_DIR="${OPL_RELAY_HOME}"
+elif [[ -n "${CODEX_MAIL_HOME:-}" ]]; then
+  STATE_DIR="${CODEX_MAIL_HOME}"
+elif [[ -d "${HOME}/.codex-mail-workbench" && ! -e "${HOME}/.opl-relay/accounts.toml" ]]; then
+  STATE_DIR="${HOME}/.codex-mail-workbench"
+else
+  STATE_DIR="${HOME}/.opl-relay"
+fi
 SOURCE_STORE="${CODEX_MAIL_SOURCE_STORE:-}"
 SOURCE_SYNC_STATE="${CODEX_MAIL_SOURCE_SYNC_STATE:-}"
 
@@ -11,7 +19,8 @@ usage() {
 Usage: migrate-mail-store --store <mail.sqlite> [--sync-state <dir>]
 
 Environment:
-  CODEX_MAIL_HOME               Target state directory.
+  OPL_RELAY_HOME                Target state directory.
+  CODEX_MAIL_HOME               Legacy target state directory fallback.
   CODEX_MAIL_SOURCE_STORE       Source SQLite mail store path.
   CODEX_MAIL_SOURCE_SYNC_STATE  Optional source sync-state directory.
 EOF
@@ -62,7 +71,9 @@ fi
 
 mkdir -p "${STATE_DIR}"
 
-install -m 600 "${ROOT_DIR}/config/accounts.example.toml" "${STATE_DIR}/accounts.toml"
+if [[ ! -e "${STATE_DIR}/accounts.toml" ]]; then
+  install -m 600 "${ROOT_DIR}/config/accounts.example.toml" "${STATE_DIR}/accounts.toml"
+fi
 
 install -m 600 "${SOURCE_STORE}" "${STATE_DIR}/mail.sqlite"
 for suffix in -wal -shm; do

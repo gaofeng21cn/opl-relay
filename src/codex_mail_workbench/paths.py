@@ -4,13 +4,73 @@ import os
 from pathlib import Path
 
 
+CURRENT_HOME_ENV = "OPL_RELAY_HOME"
+LEGACY_HOME_ENV = "CODEX_MAIL_HOME"
+WORKSPACE_ENV = "OPL_RELAY_WORKSPACE"
+
+
+def current_state_dir() -> Path:
+    return Path.home() / ".opl-relay"
+
+
+def legacy_state_dir() -> Path:
+    return Path.home() / ".codex-mail-workbench"
+
+
+def _has_runtime_state(path: Path) -> bool:
+    return any(
+        (path / name).exists()
+        for name in (
+            "accounts.toml",
+            "mail.sqlite",
+            "drafts.sqlite",
+            "memory.sqlite",
+            "sources.toml",
+            "sync-state",
+        )
+    )
+
+
 def default_state_dir() -> Path:
-    # CODEX_MAIL_HOME intentionally supports repo-local ignored profiles such
-    # as ./local while keeping the package default outside the repository.
-    configured = os.environ.get("CODEX_MAIL_HOME")
+    configured = os.environ.get(CURRENT_HOME_ENV)
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".codex-mail-workbench"
+    legacy_configured = os.environ.get(LEGACY_HOME_ENV)
+    if legacy_configured:
+        return Path(legacy_configured).expanduser()
+
+    current = current_state_dir()
+    legacy = legacy_state_dir()
+    if _has_runtime_state(current):
+        return current
+    if legacy.exists():
+        return legacy
+    return current
+
+
+def state_dir_source() -> str:
+    if os.environ.get(CURRENT_HOME_ENV):
+        return CURRENT_HOME_ENV
+    if os.environ.get(LEGACY_HOME_ENV):
+        return LEGACY_HOME_ENV
+    if _has_runtime_state(current_state_dir()):
+        return "current_default"
+    if legacy_state_dir().exists():
+        return "legacy_default"
+    return "current_default"
+
+
+def default_workspace_dir() -> Path:
+    configured = os.environ.get(WORKSPACE_ENV)
+    if configured:
+        return Path(configured).expanduser()
+    return current_state_dir() / "workspaces" / "default"
+
+
+def workspace_dir_source() -> str:
+    if os.environ.get(WORKSPACE_ENV):
+        return WORKSPACE_ENV
+    return "current_default"
 
 
 def default_config_path() -> Path:
