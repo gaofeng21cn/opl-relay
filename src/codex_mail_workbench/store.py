@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
+
+from .message import extract_text_body
 
 
 def ensure_email_store_schema(conn: sqlite3.Connection) -> None:
@@ -52,6 +54,14 @@ def connect_email_store(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=120000")
     ensure_email_store_schema(conn)
+    return conn
+
+
+def connect_email_store_readonly(path: Path) -> sqlite3.Connection | None:
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
@@ -125,14 +135,6 @@ def upsert_email_message(
     )
     conn.commit()
     return storage_ref
-
-
-def storage_ref_exists(conn: sqlite3.Connection, storage_ref: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM email_messages WHERE storage_ref=? AND deleted=0 LIMIT 1",
-        (storage_ref,),
-    ).fetchone()
-    return row is not None
 
 
 def fetch_raw_email_by_storage_ref(
@@ -269,6 +271,63 @@ def list_messages_with_raw(
             raw = bytes(raw)
         out.append((meta, raw))
     return out
+
+
+def search_messages(
+    conn: sqlite3.Connection,
+    *,
+    queries: Iterable[str],
+    account_ids: list[str] | None = None,
+    folder_slug: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    include_body: bool = True,
+    max_scan: int = 500,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    terms = list(dict.fromkeys(term.strip() for term in queries if term.strip()))
+    if not terms:
+        return []
+
+    bounded_limit = max(1, min(int(limit), 500))
+    rows_by_ref: dict[str, dict[str, Any]] = {}
+    for term in terms:
+        for row in list_messages(
+            conn,
+            account_ids=account_ids,
+            folder_slug=folder_slug,
+            query=term,
+            since=since,
+            until=until,
+            limit=max(bounded_limit * 2, 10),
+        ):
+            rows_by_ref[row["storage_ref"]] = row
+
+    if include_body and len(rows_by_ref) < bounded_limit:
+        folded_terms = [term.casefold() for term in terms]
+        for meta, raw in list_messages_with_raw(
+            conn,
+            account_ids=account_ids,
+            folder_slug=folder_slug,
+            since=since,
+            until=until,
+            limit=max_scan,
+        ):
+            if meta["storage_ref"] in rows_by_ref:
+                continue
+            body = extract_text_body(raw).casefold()
+            if not any(term in body for term in folded_terms):
+                continue
+            meta["body_hit"] = True
+            rows_by_ref[meta["storage_ref"]] = meta
+            if len(rows_by_ref) >= bounded_limit:
+                break
+
+    return sorted(
+        rows_by_ref.values(),
+        key=lambda item: (item["date"], item["ingest_ts"], item["uid"]),
+        reverse=True,
+    )[:bounded_limit]
 
 
 def get_message_by_storage_ref(

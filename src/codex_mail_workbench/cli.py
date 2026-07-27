@@ -11,7 +11,6 @@ from . import __version__
 from .apple_mail import AppleMailProvider
 from .config import (
     KEYCHAIN_SERVICE,
-    LEGACY_KEYCHAIN_SERVICE,
     load_account,
     load_accounts_config,
 )
@@ -37,8 +36,8 @@ from .store import (
     connect_email_store,
     fetch_raw_email_by_storage_ref,
     get_message_by_storage_ref,
-    list_messages_with_raw,
     list_messages,
+    search_messages,
 )
 from .sync import sync_account
 
@@ -60,10 +59,6 @@ def fail(message: str, *, as_json: bool, code: int = 1) -> int:
     else:
         print(f"ERROR: {message}", file=sys.stderr)
     return code
-
-
-def open_conn(db: Path):
-    return connect_email_store(db)
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -104,9 +99,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "sources_config_error": sources_error,
         "apple_mail_available": sys.platform == "darwin" and bool(shutil.which("osascript")),
         "accounts": sorted(accounts.keys()),
-        "keychain_services": [
-            svc for svc in [KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE] if svc
-        ],
+        "keychain_services": [KEYCHAIN_SERVICE],
     }
     emit(payload, as_json=args.json)
     return 0 if payload["ok"] else 1
@@ -122,7 +115,6 @@ def cmd_accounts(args: argparse.Namespace) -> int:
                     "account_id": account.account_id,
                     "email": account.email,
                     "imap_host": account.imap.host,
-                    "smtp_host": account.smtp.host,
                     "include_folders": account.include_folders,
                     "exclude_folders": account.exclude_folders,
                 }
@@ -135,7 +127,7 @@ def cmd_accounts(args: argparse.Namespace) -> int:
 
 
 def cmd_recent(args: argparse.Namespace) -> int:
-    conn = open_conn(Path(args.db).expanduser())
+    conn = connect_email_store(Path(args.db).expanduser())
     try:
         rows = list_messages(
             conn,
@@ -152,37 +144,19 @@ def cmd_recent(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    conn = open_conn(Path(args.db).expanduser())
+    conn = connect_email_store(Path(args.db).expanduser())
     try:
-        rows = list_messages(
+        rows = search_messages(
             conn,
+            queries=[args.query],
             account_ids=[args.account] if args.account else None,
             folder_slug=args.folder,
-            query=args.query,
             since=args.since,
             until=args.until,
+            include_body=args.include_body,
+            max_scan=args.max_scan,
             limit=args.limit,
         )
-        if args.include_body and len(rows) < args.limit:
-            seen = {row["storage_ref"] for row in rows}
-            query = args.query.lower()
-            for meta, raw in list_messages_with_raw(
-                conn,
-                account_ids=[args.account] if args.account else None,
-                folder_slug=args.folder,
-                since=args.since,
-                until=args.until,
-                limit=args.max_scan,
-            ):
-                if meta["storage_ref"] in seen:
-                    continue
-                if query not in extract_text_body(raw).lower():
-                    continue
-                meta["body_hit"] = True
-                rows.append(meta)
-                seen.add(meta["storage_ref"])
-                if len(rows) >= args.limit:
-                    break
     finally:
         conn.close()
     emit({"ok": True, "messages": rows}, as_json=args.json)
@@ -190,7 +164,7 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_read(args: argparse.Namespace) -> int:
-    conn = open_conn(Path(args.db).expanduser())
+    conn = connect_email_store(Path(args.db).expanduser())
     try:
         meta = get_message_by_storage_ref(conn, args.storage_ref)
         raw = fetch_raw_email_by_storage_ref(conn, args.storage_ref)
@@ -267,7 +241,7 @@ def _memory_sources(args: argparse.Namespace) -> list[dict[str, str]]:
         db_path = Path(args.db).expanduser()
         if not db_path.exists():
             raise FileNotFoundError(f"mail database not found: {db_path}")
-        conn = open_conn(db_path)
+        conn = connect_email_store(db_path)
         try:
             for source_ref in email_refs:
                 meta = get_message_by_storage_ref(conn, source_ref)
@@ -519,7 +493,7 @@ def cmd_draft_send(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex-mail")
     parser.add_argument("--json", action="store_true", help="输出稳定 JSON")
-    parser.add_argument("--config", default=str(default_config_path()), help="accounts.yaml 路径")
+    parser.add_argument("--config", default=str(default_config_path()), help="accounts.toml 路径")
     parser.add_argument("--db", default=str(default_db_path()), help="SQLite 邮件库路径")
     parser.add_argument(
         "--draft-db",
@@ -534,7 +508,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sources-config",
         default=str(default_sources_config_path()),
-        help="外部知识源 sources.yaml 路径",
+        help="外部知识源 sources.toml 路径",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

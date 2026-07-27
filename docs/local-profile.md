@@ -10,7 +10,7 @@ The default private state directory is:
 
 ```text
 ~/.codex-mail-workbench/
-  accounts.yaml
+  accounts.toml
   profile.md
   mail.sqlite
   mail.sqlite-shm
@@ -21,7 +21,7 @@ The default private state directory is:
   memory.sqlite
   memory.sqlite-shm
   memory.sqlite-wal
-  sources.yaml
+  sources.toml
   sync-state/
 ```
 
@@ -36,11 +36,11 @@ codex-mail --json doctor
 With `CODEX_MAIL_HOME=./local`, the workbench reads:
 
 ```text
-local/accounts.yaml
+local/accounts.toml
 local/mail.sqlite
 local/drafts.sqlite
 local/memory.sqlite
-local/sources.yaml
+local/sources.toml
 local/sync-state/
 ```
 
@@ -50,14 +50,14 @@ does not require it.
 
 `memory.sqlite` is the private structured layer for people, organizations,
 projects, approved relationship memory, evidence references, and the derived
-knowledge index. `sources.yaml` registers optional external knowledge roots.
+knowledge index. `sources.toml` registers optional external knowledge roots.
 
 ## Obsidian Source
 
 Start from the generic example:
 
 ```bash
-cp config/sources.example.yaml local/sources.yaml
+cp config/sources.example.toml local/sources.toml
 ```
 
 Set `path` to the vault or a narrower folder. Prefer explicit `include` paths
@@ -101,7 +101,7 @@ Recommended layout:
 local/
   AGENTS.md
   profile.md
-  accounts.yaml
+  accounts.toml
   skills/
     personal-mail-assistant/
       SKILL.md
@@ -152,51 +152,43 @@ while `draft send` requires a fresh fingerprint that the user explicitly
 approved. Archive, delete, move, mark, or any other mailbox write still requires
 a separate contract and explicit authorization.
 
-## accounts.yaml
+## accounts.toml
 
-Create `local/accounts.yaml` with placeholder-free local account ids. Account ids
+Create `local/accounts.toml` with placeholder-free local account ids. Account ids
 should be stable labels such as `work` or `personal`; they do not need to expose
 the real email address.
 
-```yaml
-accounts:
-  - account_id: work
-    email: user@example.com
-    imap:
-      host: imap.example.com
-      port: 993
-      security: ssl
-      username: user@example.com
-      credential_ref: work-imap
-    smtp:
-      host: smtp.example.com
-      port: 465
-      security: ssl
-      username: user@example.com
-      credential_ref: work-smtp
-    folders:
-      include:
-        - INBOX
-      exclude: []
+```toml
+version = 1
+
+[[accounts]]
+account_id = "work"
+email = "user@example.com"
+
+[accounts.imap]
+host = "imap.example.com"
+port = 993
+security = "ssl"
+username = "user@example.com"
+credential_ref = "work-imap"
+
+[accounts.folders]
+include = ["INBOX"]
+exclude = []
 ```
 
 Store passwords or app passwords in macOS Keychain under service
-`codex-mail-workbench`; do not place secrets in YAML:
+`codex-mail-workbench`; do not place secrets in TOML:
 
 ```bash
 security add-generic-password -s codex-mail-workbench -a work-imap -w '<app-password>'
-security add-generic-password -s codex-mail-workbench -a work-smtp -w '<app-password>'
 ```
 
-Use different `credential_ref` values for each account or credential. Existing
-local profiles that still use `secret_ref` remain supported for compatibility.
-If you are migrating from an older private Keychain service name, set
-`CODEX_MAIL_LEGACY_KEYCHAIN_SERVICE=<service-name>` locally instead of editing
-the public repository.
+Use different `credential_ref` values for each account credential.
 
 ## Initialize State
 
-After creating `accounts.yaml`, check the configuration:
+After creating `accounts.toml`, check the configuration:
 
 ```bash
 CODEX_MAIL_HOME=./local codex-mail --json doctor
@@ -235,7 +227,7 @@ git ls-files local
 
 Do not commit:
 
-- `local/accounts.yaml`
+- `local/accounts.toml`
 - `local/profile.md`
 - `local/mail.sqlite`
 - `local/mail.sqlite-shm`
@@ -243,7 +235,7 @@ Do not commit:
 - `local/memory.sqlite`
 - `local/memory.sqlite-shm`
 - `local/memory.sqlite-wal`
-- `local/sources.yaml`
+- `local/sources.toml`
 - `local/sync-state/`
 - any copied mailbox export, raw EML, credentials, app passwords, or real
   account-specific examples

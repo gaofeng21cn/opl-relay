@@ -4,15 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codex-mail-workbench"
-version = "0.2.0"
-description = "Local mail workbench for Codex: IMAP sync, evidence-backed private memory, Obsidian context, review-gated Apple Mail drafts, CLI, and MCP."
+version = "0.3.0"
+description = "Local mail workbench for Codex: IMAP sync, evidence-backed private memory, Obsidian context, review-gated Apple Mail drafts, and CLI."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
 codex-mail = "codex_mail_workbench.cli:main"
-codex-mail-mcp = "codex_mail_workbench.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/codex_mail_workbench"]

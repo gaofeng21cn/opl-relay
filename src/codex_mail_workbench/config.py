@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import json
-import os
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 
 KEYCHAIN_SERVICE = "codex-mail-workbench"
-LEGACY_KEYCHAIN_SERVICE = os.environ.get("CODEX_MAIL_LEGACY_KEYCHAIN_SERVICE", "")
 
 
 @dataclass(frozen=True)
@@ -26,27 +24,15 @@ class MailAccount:
     account_id: str
     email: str
     imap: MailEndpoint
-    smtp: MailEndpoint
     include_folders: list[str]
     exclude_folders: list[str]
 
 
-def load_yaml(path: Path) -> dict[str, Any]:
+def load_toml(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"配置文件不存在: {path}")
-    ruby = [
-        "ruby",
-        "-ryaml",
-        "-rjson",
-        "-e",
-        "data = YAML.safe_load(File.read(ARGV[0]), aliases: true) || {}; puts JSON.generate(data)",
-        str(path),
-    ]
-    result = subprocess.run(ruby, check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
-        raise RuntimeError(f"YAML 解析失败: {detail}")
-    parsed = json.loads(result.stdout)
+    with path.open("rb") as handle:
+        parsed = tomllib.load(handle)
     if not isinstance(parsed, dict):
         raise ValueError("配置根节点必须是对象")
     return parsed
@@ -79,18 +65,17 @@ def _string_list(value: Any, field: str, default: list[str]) -> list[str]:
 
 
 def _endpoint(raw: dict[str, Any], field: str) -> MailEndpoint:
-    credential_ref = raw.get("credential_ref", raw.get("secret_ref"))
     return MailEndpoint(
         host=_str(raw.get("host"), f"{field}.host"),
         port=_int(raw.get("port"), f"{field}.port"),
         security=_str(raw.get("security"), f"{field}.security").lower(),
         username=_str(raw.get("username"), f"{field}.username"),
-        credential_ref=_str(credential_ref, f"{field}.credential_ref"),
+        credential_ref=_str(raw.get("credential_ref"), f"{field}.credential_ref"),
     )
 
 
 def load_accounts_config(path: Path) -> dict[str, MailAccount]:
-    data = load_yaml(path)
+    data = load_toml(path)
     accounts_raw = data.get("accounts")
     if not isinstance(accounts_raw, list):
         raise ValueError("accounts 必须是数组")
@@ -103,7 +88,6 @@ def load_accounts_config(path: Path) -> dict[str, MailAccount]:
             account_id=account_id,
             email=_str(raw.get("email"), f"accounts[{idx}].email"),
             imap=_endpoint(_dict(raw.get("imap"), f"accounts[{idx}].imap"), f"accounts[{idx}].imap"),
-            smtp=_endpoint(_dict(raw.get("smtp"), f"accounts[{idx}].smtp"), f"accounts[{idx}].smtp"),
             include_folders=_string_list(
                 folders.get("include"), f"accounts[{idx}].folders.include", ["*"]
             ),
@@ -128,13 +112,9 @@ def keychain_get_secret(
     credential_ref: str,
     *,
     service: str = KEYCHAIN_SERVICE,
-    legacy_service: str | None = LEGACY_KEYCHAIN_SERVICE,
 ) -> str:
-    for svc in [service, legacy_service]:
-        if not svc:
-            continue
-        cmd = ["security", "find-generic-password", "-s", svc, "-a", credential_ref, "-w"]
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
+    cmd = ["security", "find-generic-password", "-s", service, "-a", credential_ref, "-w"]
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode == 0:
+        return result.stdout.strip()
     raise RuntimeError(f"Keychain 读取失败: account={credential_ref}")

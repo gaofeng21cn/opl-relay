@@ -62,7 +62,7 @@ fi
 
 mkdir -p "${STATE_DIR}"
 
-install -m 600 "${ROOT_DIR}/config/accounts.example.yaml" "${STATE_DIR}/accounts.yaml"
+install -m 600 "${ROOT_DIR}/config/accounts.example.toml" "${STATE_DIR}/accounts.toml"
 
 install -m 600 "${SOURCE_STORE}" "${STATE_DIR}/mail.sqlite"
 for suffix in -wal -shm; do

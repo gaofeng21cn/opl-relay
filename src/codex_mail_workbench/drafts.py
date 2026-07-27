@@ -519,6 +519,39 @@ class DraftService:
         self.ledger = ledger
         self.provider = provider
 
+    @staticmethod
+    def _sent_payload(draft_ref: str, record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "draft_ref": draft_ref,
+            "account_id": record["account_id"],
+            "provider": "apple-mail",
+            "state": "sent",
+            "sent_at": record["sent_at"],
+            "sent_receipt": record["sent_receipt"],
+        }
+
+    def _reconcile_sent(
+        self,
+        draft_ref: str,
+        record: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if record["state"] == "sent":
+            return self._sent_payload(draft_ref, record)
+        receipt = self.provider.find_sent(
+            provider_account=record["provider_account"],
+            provider_uuid=record["provider_uuid"],
+            provider_message_id=record["provider_message_id"],
+            timeout_seconds=0,
+        )
+        if not receipt:
+            return None
+        self.ledger.mark_sent(
+            draft_ref,
+            provider_message_id=str(receipt.get("message_id") or ""),
+            receipt=receipt,
+        )
+        return self._sent_payload(draft_ref, self.ledger.get(draft_ref))
+
     def create(
         self,
         *,
@@ -588,14 +621,7 @@ class DraftService:
                 provider_uuid=provider_uuid,
                 receipt=prior_receipt,
             )
-            return {
-                "draft_ref": record["draft_ref"],
-                "account_id": account_id,
-                "provider": "apple-mail",
-                "state": "sent",
-                "sent_at": record["sent_at"],
-                "sent_receipt": record["sent_receipt"],
-            }
+            return self._sent_payload(record["draft_ref"], record)
         snapshot = self.provider.inspect(
             provider_account=provider_account,
             provider_uuid=provider_uuid,
@@ -605,19 +631,9 @@ class DraftService:
             snapshot=snapshot,
             event_type="adopted",
         )
-        receipt = self.provider.find_sent(
-            provider_account=snapshot.provider_account,
-            provider_uuid=snapshot.provider_uuid,
-            provider_message_id=snapshot.provider_message_id,
-            timeout_seconds=0,
-        )
-        if receipt:
-            self.ledger.mark_sent(
-                record["draft_ref"],
-                provider_message_id=str(receipt.get("message_id") or ""),
-                receipt=receipt,
-            )
-            return self.inspect(record["draft_ref"])
+        sent = self._reconcile_sent(record["draft_ref"], record)
+        if sent:
+            return sent
         return snapshot_payload(
             account_id,
             record["draft_ref"],
@@ -627,29 +643,9 @@ class DraftService:
 
     def inspect(self, draft_ref: str) -> dict[str, Any]:
         record = self.ledger.get(draft_ref)
-        if record["state"] == "sent":
-            return {
-                "draft_ref": draft_ref,
-                "account_id": record["account_id"],
-                "provider": "apple-mail",
-                "state": "sent",
-                "sent_at": record["sent_at"],
-                "sent_receipt": record["sent_receipt"],
-            }
-
-        receipt = self.provider.find_sent(
-            provider_account=record["provider_account"],
-            provider_uuid=record["provider_uuid"],
-            provider_message_id=record["provider_message_id"],
-            timeout_seconds=0,
-        )
-        if receipt:
-            self.ledger.mark_sent(
-                draft_ref,
-                provider_message_id=str(receipt.get("message_id") or ""),
-                receipt=receipt,
-            )
-            return self.inspect(draft_ref)
+        sent = self._reconcile_sent(draft_ref, record)
+        if sent:
+            return sent
 
         snapshot = self.provider.inspect(
             provider_account=record["provider_account"],
@@ -691,18 +687,7 @@ class DraftService:
             raise DraftAlreadyClaimed(
                 f"草稿不可再次发送，当前状态: {record['state']}"
             )
-        prior_receipt = self.provider.find_sent(
-            provider_account=record["provider_account"],
-            provider_uuid=record["provider_uuid"],
-            provider_message_id=record["provider_message_id"],
-            timeout_seconds=0,
-        )
-        if prior_receipt:
-            self.ledger.mark_sent(
-                draft_ref,
-                provider_message_id=str(prior_receipt.get("message_id") or ""),
-                receipt=prior_receipt,
-            )
+        if self._reconcile_sent(draft_ref, record):
             raise DraftAlreadyClaimed(
                 "Apple Mail Sent 邮箱已存在同一草稿身份，已锁定为 sent"
             )

@@ -8,7 +8,7 @@ in another directory selected with `CODEX_MAIL_HOME`.
 
 ## Layers
 
-1. Configuration layer: account metadata from `accounts.yaml`, with secrets
+1. Configuration layer: account metadata from `accounts.toml`, with secrets
    resolved from macOS Keychain service `codex-mail-workbench`.
 2. Protocol layer: IMAP sync using the configured account endpoints and folder
    include/exclude rules.
@@ -24,9 +24,7 @@ in another directory selected with `CODEX_MAIL_HOME`.
    evidence, and indexed knowledge excerpts for one drafting task.
 8. CLI layer: mail reads, local memory/knowledge management, context building,
    and `draft create/adopt/inspect/open/send`.
-9. MCP layer: read-only mail, approved-memory, and context tools.
-10. Skill layer: Codex uses the CLI first and the MCP server when the host app
-   configures it.
+9. Skill layer: Codex uses the CLI as the single Workbench interface.
 
 ## Store Reference
 
@@ -88,7 +86,7 @@ observed fact.
 
 ## Knowledge Providers And Context
 
-`sources.yaml` preconfigures provider roots. The Obsidian provider reads
+`sources.toml` preconfigures provider roots. The Obsidian provider reads
 Markdown and writes only a derived index to the private `memory.sqlite`; it
 never edits the vault. `context build` retrieves a bounded number of approved
 memories, relevant mail messages, and knowledge excerpts. Mail and knowledge
@@ -106,8 +104,8 @@ Public repository contents:
 
 Private local profile contents:
 
-- `accounts.yaml` with real account ids, email addresses, IMAP/SMTP hosts,
-  folder filters, usernames, and Keychain secret references;
+- `accounts.toml` with real account ids, email addresses, IMAP hosts, folder
+  filters, usernames, and Keychain credential references;
 - `profile.md` with the user's mailbox triage preferences or response style;
 - `sync-state/` JSON files with per-account IMAP sync cursors;
 - `mail.sqlite`, `mail.sqlite-shm`, and `mail.sqlite-wal` with synced message
@@ -116,7 +114,7 @@ Private local profile contents:
   draft lifecycle metadata and receipts.
 - `memory.sqlite`, `memory.sqlite-shm`, and `memory.sqlite-wal` with identities,
   memories, evidence, and derived knowledge content.
-- `sources.yaml` with private provider paths and filters.
+- `sources.toml` with private provider paths and filters.
 
 The normal default state directory is `~/.codex-mail-workbench`. For a repo-local
 private profile, run commands with `CODEX_MAIL_HOME=./local`. The repository
@@ -135,8 +133,8 @@ The externally visible write path is limited to Apple Mail drafts:
 - `draft open`
 - `draft send --approval <fingerprint>`
 
-MCP remains read-only. Future `mark`, `move`, `archive`, or delete operations
-require separate contracts and authorization.
+Future `mark`, `move`, `archive`, or delete operations require separate
+contracts and authorization.
 
 Live `send` requires an explicit user request, rejects any post-review edit,
 executes at most once, and records a local Sent receipt.

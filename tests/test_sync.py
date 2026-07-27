@@ -31,13 +31,6 @@ def test_limited_incremental_sync_advances_only_to_fetched_uid(
             username="work@example.test",
             credential_ref="work-imap",
         ),
-        smtp=MailEndpoint(
-            host="smtp.example.test",
-            port=465,
-            security="ssl",
-            username="work@example.test",
-            credential_ref="work-smtp",
-        ),
         include_folders=["INBOX"],
         exclude_folders=[],
     )
@@ -96,7 +89,7 @@ def test_limited_incremental_sync_advances_only_to_fetched_uid(
     )
 
     payload = sync_module.sync_account(
-        config_path=tmp_path / "accounts.yaml",
+        config_path=tmp_path / "accounts.toml",
         db_path=tmp_path / "mail.sqlite",
         state_dir=state_dir,
         account_id="work",
@@ -124,13 +117,6 @@ def test_limited_incremental_sync_does_not_advance_when_fetch_fails(
             security="ssl",
             username="work@example.test",
             credential_ref="work-imap",
-        ),
-        smtp=MailEndpoint(
-            host="smtp.example.test",
-            port=465,
-            security="ssl",
-            username="work@example.test",
-            credential_ref="work-smtp",
         ),
         include_folders=["INBOX"],
         exclude_folders=[],
@@ -178,7 +164,7 @@ def test_limited_incremental_sync_does_not_advance_when_fetch_fails(
     )
 
     payload = sync_module.sync_account(
-        config_path=tmp_path / "accounts.yaml",
+        config_path=tmp_path / "accounts.toml",
         db_path=tmp_path / "mail.sqlite",
         state_dir=state_dir,
         account_id="work",

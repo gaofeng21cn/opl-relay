@@ -15,7 +15,7 @@
     </td>
     <td width="33%" valign="top">
       <strong>Interface</strong><br/>
-      Standalone Python CLI plus a read-only MCP stdio server; this is not a graphical macOS <code>.app</code>
+      Standalone Python CLI; this is not a graphical macOS <code>.app</code>
     </td>
     <td width="33%" valign="top">
       <strong>Privacy Boundary</strong><br/>
@@ -35,7 +35,7 @@ Agents are useful for mailbox triage, thread lookup, and context recovery, but
 they should not need a live mail client session or pasted mailbox credentials.
 This repository provides the reusable tooling layer:
 
-- configure IMAP/SMTP account metadata in a local YAML file;
+- configure IMAP account metadata in a local TOML file;
 - resolve credentials from macOS Keychain;
 - sync selected IMAP folders into a private SQLite store;
 - search and read stored messages through stable CLI commands;
@@ -45,8 +45,7 @@ This repository provides the reusable tooling layer:
 - build a bounded drafting context from approved memory, selected mail, and
   knowledge excerpts;
 - create or adopt Apple Mail drafts for human review;
-- require an exact content fingerprint before a one-time send;
-- expose the same read-only surface through MCP for Codex-compatible hosts.
+- require an exact content fingerprint before a one-time send.
 
 The repository is intentionally local-first. It does not ship mailbox content,
 real account configuration, or personal triage rules.
@@ -82,11 +81,11 @@ Create a private repo-local profile:
 
 ```bash
 mkdir -p local/sync-state
-cp config/accounts.example.yaml local/accounts.yaml
+cp config/accounts.example.toml local/accounts.toml
 ```
 
-Edit `local/accounts.yaml` with your real account metadata. Keep passwords or
-app passwords in macOS Keychain, using the `credential_ref` values from the YAML:
+Edit `local/accounts.toml` with your real account metadata. Keep passwords or
+app passwords in macOS Keychain, using the `credential_ref` values from TOML:
 
 ```bash
 security add-generic-password -s codex-mail-workbench -a keychain.work.imap -w '<app-password>'
@@ -112,7 +111,7 @@ CODEX_MAIL_HOME=./local codex-mail --json read 'email-store://work/INBOX/12345/a
 Configure and index an optional Obsidian source:
 
 ```bash
-cp config/sources.example.yaml local/sources.yaml
+cp config/sources.example.toml local/sources.toml
 CODEX_MAIL_HOME=./local codex-mail --json sources list
 CODEX_MAIL_HOME=./local codex-mail --json sources index
 ```
@@ -176,7 +175,7 @@ The default private state directory is:
 
 ```text
 ~/.codex-mail-workbench/
-  accounts.yaml
+  accounts.toml
   mail.sqlite
   mail.sqlite-shm
   mail.sqlite-wal
@@ -186,7 +185,7 @@ The default private state directory is:
   memory.sqlite
   memory.sqlite-shm
   memory.sqlite-wal
-  sources.yaml
+  sources.toml
   sync-state/
 ```
 
@@ -235,31 +234,9 @@ preserve evidence and lifecycle history; `forget` is a state transition, not a
 silent hard delete. The only externally visible write path is the narrow Apple
 Mail draft lifecycle. Delete, archive, move, and mark operations are not exposed.
 
-## MCP
-
-Run the read-only MCP server against the local SQLite store:
-
-```bash
-CODEX_MAIL_HOME=./local codex-mail-mcp \
-  --db ./local/mail.sqlite \
-  --memory-db ./local/memory.sqlite \
-  --sources-config ./local/sources.yaml
-```
-
-Available tools:
-
-- `mail_recent`
-- `mail_search`
-- `mail_read`
-- `memory_search`
-- `context_build`
-
-The MCP server remains read-only. Memory approval, rejection, forgetting,
-knowledge indexing, draft creation, and sending are CLI-only.
-
 ## For Agents
 
-Use the CLI or MCP server instead of scraping a mail client UI.
+Use the CLI instead of scraping a mail client UI.
 
 Recommended operating pattern:
 
@@ -286,12 +263,12 @@ This repository is designed to be public-safe.
 
 Do not commit:
 
-- real `accounts.yaml`
+- real `accounts.toml`
 - `local/profile.md`
 - `mail.sqlite`, `mail.sqlite-shm`, or `mail.sqlite-wal`
 - `drafts.sqlite`, `drafts.sqlite-shm`, or `drafts.sqlite-wal`
 - `memory.sqlite`, `memory.sqlite-shm`, or `memory.sqlite-wal`
-- real `sources.yaml`, Obsidian paths, indexed content, or relationship memory
+- real `sources.toml`, Obsidian paths, indexed content, or relationship memory
 - `sync-state/`
 - raw EML, MBOX, Maildir exports, `.env` files, passwords, or app passwords
 - real account-specific examples

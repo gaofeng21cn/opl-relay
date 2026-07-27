@@ -232,6 +232,17 @@ def test_existing_sent_receipt_blocks_duplicate_send(tmp_path: Path) -> None:
     assert service.ledger.get(draft_ref)["state"] == "sent"
 
 
+def test_inspect_reconciles_existing_sent_receipt(tmp_path: Path) -> None:
+    service, provider, draft_ref = registered_service(tmp_path)
+    provider.receipt = provider.sent_receipt
+
+    result = service.inspect(draft_ref)
+
+    assert result["state"] == "sent"
+    assert result["sent_receipt"]["message_id"] == provider.current.provider_message_id
+    assert service.ledger.get(draft_ref)["state"] == "sent"
+
+
 def test_adopt_recovers_sent_identity_without_live_draft(tmp_path: Path) -> None:
     current = snapshot()
     provider = FakeProvider(current)

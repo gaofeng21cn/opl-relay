@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
 
-from .config import load_yaml
+from .config import load_toml
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ def utc_now() -> str:
 def load_sources_config(path: Path) -> dict[str, KnowledgeSource]:
     if not path.exists():
         return {}
-    data = load_yaml(path)
+    data = load_toml(path)
     raw_sources = data.get("sources", [])
     if not isinstance(raw_sources, list):
         raise ValueError("sources must be a list")

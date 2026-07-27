@@ -8,7 +8,11 @@ from typing import Any
 from .knowledge import KnowledgeIndex, load_sources_config
 from .memory import MemoryStore
 from .message import extract_text_body
-from .store import fetch_raw_email_by_storage_ref, list_messages, list_messages_with_raw
+from .store import (
+    connect_email_store_readonly,
+    fetch_raw_email_by_storage_ref,
+    search_messages,
+)
 
 
 def utc_now() -> str:
@@ -30,14 +34,6 @@ def _excerpt(content: str, terms: list[str], *, max_chars: int = 800) -> str:
     return ("..." if start else "") + compact[start:end] + (
         "..." if end < len(compact) else ""
     )
-
-
-def _open_mail_readonly(path: Path) -> sqlite3.Connection | None:
-    if not path.exists():
-        return None
-    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
 
 
 class ContextBuilder:
@@ -111,41 +107,17 @@ class ContextBuilder:
             warnings.append("memory_store_missing")
 
         mail_evidence: list[dict[str, Any]] = []
-        mail_conn = _open_mail_readonly(self.mail_db_path)
+        mail_conn = connect_email_store_readonly(self.mail_db_path)
         if mail_conn is None:
             warnings.append("mail_store_missing")
         else:
             try:
-                rows_by_ref: dict[str, dict[str, Any]] = {}
-                for term in mail_terms:
-                    for row in list_messages(
-                        mail_conn,
-                        query=term,
-                        limit=max(mail_limit * 2, 10),
-                    ):
-                        rows_by_ref[row["storage_ref"]] = row
-                if len(rows_by_ref) < mail_limit:
-                    for meta, raw in list_messages_with_raw(
-                        mail_conn, limit=max(mail_limit * 20, 100)
-                    ):
-                        body = extract_text_body(raw)
-                        haystack = " ".join(
-                            [
-                                meta["subject"],
-                                meta["from"],
-                                meta["to"],
-                                body,
-                            ]
-                        ).casefold()
-                        if any(term.casefold() in haystack for term in mail_terms):
-                            rows_by_ref[meta["storage_ref"]] = meta
-                        if len(rows_by_ref) >= mail_limit * 3:
-                            break
-                rows = sorted(
-                    rows_by_ref.values(),
-                    key=lambda item: (item["date"], item["ingest_ts"], item["uid"]),
-                    reverse=True,
-                )[: max(1, min(int(mail_limit), 50))]
+                rows = search_messages(
+                    mail_conn,
+                    queries=mail_terms,
+                    limit=max(1, min(int(mail_limit), 50)),
+                    max_scan=max(mail_limit * 20, 100),
+                )
                 for row in rows:
                     raw = fetch_raw_email_by_storage_ref(mail_conn, row["storage_ref"])
                     item = dict(row)

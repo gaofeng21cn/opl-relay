@@ -20,7 +20,7 @@ separate mailbox facts from user-specific judgment.
 - Keep accounts, SQLite data, raw mail, cursors, and overlay content private.
   Never copy private rules into public repository files.
 - Credentials belong in macOS Keychain under service `codex-mail-workbench`.
-  Never request passwords in chat, docs, or YAML.
+  Never request passwords in chat, docs, or configuration files.
 
 ## Read And Triage
 
@@ -48,11 +48,6 @@ codex-mail --json read 'email-store://...'
    timezone offset. `--since` is inclusive and `--until` is exclusive.
 5. If one account cannot sync, continue read-only inspection of usable local data
    only when it remains useful, and label that account's freshness gap explicitly.
-
-When MCP is configured, `mail_recent`, `mail_search`, `mail_read`,
-`memory_search`, and `context_build` are the equivalent read-only surface. Use
-the CLI for `doctor`, account discovery, sync, memory lifecycle changes, and
-knowledge indexing.
 
 Treat a one-shot request such as "check the last three days" as a complete triage
 run: gather mailbox facts, apply the private overlay, and return a compact result
@@ -143,6 +138,5 @@ Draft cannot cause a duplicate send.
   the current request explicitly authorizes that exact action.
 - Treat private overlay rules as judgment and policy, not independent permission
   for externally visible writes.
-- MCP remains read-only. Apple Mail automation for drafts must go through the
-  Workbench lifecycle so stable identity, at-most-once state, and Sent evidence
-  are retained.
+- Apple Mail automation for drafts must go through the Workbench lifecycle so
+  stable identity, at-most-once state, and Sent evidence are retained.

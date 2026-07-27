@@ -4,10 +4,6 @@ import os
 from pathlib import Path
 
 
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
 def default_state_dir() -> Path:
     # CODEX_MAIL_HOME intentionally supports repo-local ignored profiles such
     # as ./local while keeping the package default outside the repository.
@@ -18,7 +14,7 @@ def default_state_dir() -> Path:
 
 
 def default_config_path() -> Path:
-    return default_state_dir() / "accounts.yaml"
+    return default_state_dir() / "accounts.toml"
 
 
 def default_db_path() -> Path:
@@ -34,7 +30,7 @@ def default_memory_db_path() -> Path:
 
 
 def default_sources_config_path() -> Path:
-    return default_state_dir() / "sources.yaml"
+    return default_state_dir() / "sources.toml"
 
 
 def default_sync_state_dir() -> Path:

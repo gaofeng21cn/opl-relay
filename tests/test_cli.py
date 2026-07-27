@@ -130,7 +130,7 @@ def test_cli_recent_filters_by_date_window(tmp_path: Path) -> None:
     assert [row["subject"] for row in payload["messages"]] == ["current thread"]
 
 
-def test_cli_doctor_omits_empty_legacy_keychain_service(tmp_path: Path) -> None:
+def test_cli_doctor_reports_current_private_paths(tmp_path: Path) -> None:
     db = tmp_path / "mail.sqlite"
     result = run_cli(db, "doctor")
 
@@ -139,7 +139,7 @@ def test_cli_doctor_omits_empty_legacy_keychain_service(tmp_path: Path) -> None:
     assert payload["keychain_services"] == ["codex-mail-workbench"]
     assert payload["draft_db_path"].endswith("drafts.sqlite")
     assert payload["memory_db_path"].endswith("memory.sqlite")
-    assert payload["sources_config_path"].endswith("sources.yaml")
+    assert payload["sources_config_path"].endswith("sources.toml")
 
 
 def test_cli_memory_candidate_approval_flow(tmp_path: Path) -> None:

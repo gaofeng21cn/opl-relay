@@ -11,9 +11,15 @@ local/
 accounts.yaml
 accounts.local.yaml
 accounts.private.yaml
+accounts.toml
+accounts.local.toml
+accounts.private.toml
 sources.yaml
+sources.toml
 config/accounts.local.yaml
 config/accounts.private.yaml
+config/accounts.local.toml
+config/accounts.private.toml
 sync-state/
 .env
 .env.*

@@ -4,10 +4,10 @@
 
 它把 IMAP 邮箱同步到本机 SQLite raw EML store，在原始证据之上维护可审核的
 私有人物/项目记忆，并可把预配置的 Obsidian 目录作为只读知识源；同时提供
-read-first CLI、只读 MCP 和受审核约束的 Apple Mail 草稿闭环。真实账号配置、
+read-first CLI 和受审核约束的 Apple Mail 草稿闭环。真实账号配置、
 邮件库、记忆、知识索引、草稿 ledger、同步游标和个人规则不进入 Git。
 
-它是一个通用、独立的本地 Python CLI/MCP 应用包，不是带窗口的 macOS `.app`。
+它是一个通用、独立的本地 Python CLI 应用包，不是带窗口的 macOS `.app`。
 Apple Mail 是草稿审核界面，Workbench 负责稳定身份、审批指纹和发送凭证。
 
 ## 适用场景
@@ -36,11 +36,11 @@ make install-local
 
 ```bash
 mkdir -p local/sync-state
-cp config/accounts.example.yaml local/accounts.yaml
+cp config/accounts.example.toml local/accounts.toml
 ```
 
-编辑 `local/accounts.yaml`，写入真实账号元数据。密码或 app password 放入
-macOS Keychain，不写进 YAML：
+编辑 `local/accounts.toml`，写入真实账号元数据。密码或 app password 放入
+macOS Keychain，不写进 TOML：
 
 ```bash
 security add-generic-password -s codex-mail-workbench -a keychain.work.imap -w '<app-password>'
@@ -66,7 +66,7 @@ CODEX_MAIL_HOME=./local codex-mail --json read 'email-store://work/INBOX/12345/a
 配置知识源并建立索引：
 
 ```bash
-cp config/sources.example.yaml local/sources.yaml
+cp config/sources.example.toml local/sources.toml
 CODEX_MAIL_HOME=./local codex-mail --json sources list
 CODEX_MAIL_HOME=./local codex-mail --json sources index
 ```
@@ -97,7 +97,7 @@ CODEX_MAIL_HOME=./local codex-mail --json context build \
 
 ```text
 ~/.codex-mail-workbench/
-  accounts.yaml
+  accounts.toml
   mail.sqlite
   mail.sqlite-shm
   mail.sqlite-wal
@@ -107,7 +107,7 @@ CODEX_MAIL_HOME=./local codex-mail --json context build \
   memory.sqlite
   memory.sqlite-shm
   memory.sqlite-wal
-  sources.yaml
+  sources.toml
   sync-state/
 ```
 
@@ -117,7 +117,7 @@ CODEX_MAIL_HOME=./local codex-mail --json context build \
 CODEX_MAIL_HOME=./local
 ```
 
-`local/` 中可以放真实 `accounts.yaml`、`profile.md`、邮件库和同步状态；这些内容
+`local/` 中可以放真实 `accounts.toml`、`profile.md`、邮件库和同步状态；这些内容
 不应提交到公开仓库。
 
 ## CLI
@@ -158,26 +158,7 @@ codex-mail --json draft send 'mail-draft://...' --approval 'sha256:...'
 状态和来源；`forget` 不会无痕物理删除。任一账号、发件人、To/Cc/Bcc、主题、
 正文或附件变化都会使旧指纹失效。发送开始前
 会原子占位，未知结果不会自动重试；只有 Sent 邮箱回读成功才记录为 `sent`。草稿
-ledger 不保存正文或收件人。MCP 继续保持只读，删除、归档、移动、标记仍不开放。
-
-## MCP
-
-```bash
-CODEX_MAIL_HOME=./local codex-mail-mcp \
-  --db ./local/mail.sqlite \
-  --memory-db ./local/memory.sqlite \
-  --sources-config ./local/sources.yaml
-```
-
-MCP 当前暴露：
-
-- `mail_recent`
-- `mail_search`
-- `mail_read`
-- `memory_search`
-- `context_build`
-
-记忆审批、知识索引、草稿与发送命令只在 CLI 中提供，MCP host 不能绕过审核门禁。
+ledger 不保存正文或收件人。删除、归档、移动、标记仍不开放。
 
 ## 给 Agent 的使用方式
 
@@ -201,12 +182,12 @@ UI discovery 元数据位于
 
 不要提交：
 
-- 真实 `accounts.yaml`
+- 真实 `accounts.toml`
 - `local/profile.md`
 - `mail.sqlite`、`mail.sqlite-shm`、`mail.sqlite-wal`
 - `drafts.sqlite`、`drafts.sqlite-shm`、`drafts.sqlite-wal`
 - `memory.sqlite`、`memory.sqlite-shm`、`memory.sqlite-wal`
-- 真实 `sources.yaml`、Obsidian 路径、索引内容或人物关系记忆
+- 真实 `sources.toml`、Obsidian 路径、索引内容或人物关系记忆
 - `sync-state/`
 - raw EML、MBOX、Maildir 导出、`.env`、密码或 app password
 - 真实账号相关示例

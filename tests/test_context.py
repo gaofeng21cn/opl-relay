@@ -72,13 +72,13 @@ def test_context_builds_bounded_evidence_package(tmp_path: Path) -> None:
         "# Example Consortium\n\nThe consortium focuses on shared research.",
         encoding="utf-8",
     )
-    sources_config = tmp_path / "sources.yaml"
+    sources_config = tmp_path / "sources.toml"
     sources_config.write_text(
         f"""
-sources:
-  - source_id: vault
-    type: obsidian
-    path: {vault}
+[[sources]]
+source_id = "vault"
+type = "obsidian"
+path = "{vault}"
 """.strip(),
         encoding="utf-8",
     )
@@ -105,7 +105,7 @@ def test_context_read_does_not_create_missing_private_stores(tmp_path: Path) -> 
     payload = ContextBuilder(
         mail_db_path=mail_db,
         memory_db_path=memory_db,
-        sources_config_path=tmp_path / "missing-sources.yaml",
+        sources_config_path=tmp_path / "missing-sources.toml",
     ).build(query="example")
 
     assert payload["mail_evidence"] == []
@@ -118,9 +118,9 @@ def test_context_does_not_use_stale_index_without_configured_source(tmp_path: Pa
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "note.md").write_text("Retired source content", encoding="utf-8")
-    config = tmp_path / "sources.yaml"
+    config = tmp_path / "sources.toml"
     config.write_text(
-        f"sources:\n  - source_id: retired\n    type: obsidian\n    path: {vault}\n",
+        f'[[sources]]\nsource_id = "retired"\ntype = "obsidian"\npath = "{vault}"\n',
         encoding="utf-8",
     )
     memory_db = tmp_path / "memory.sqlite"
@@ -170,7 +170,7 @@ def test_context_expands_known_person_to_email_for_mail_lookup(tmp_path: Path) -
     payload = ContextBuilder(
         mail_db_path=mail_db,
         memory_db_path=memory_db,
-        sources_config_path=tmp_path / "sources.yaml",
+        sources_config_path=tmp_path / "sources.toml",
     ).build(person="Professor Example")
 
     assert payload["mail_evidence"][0]["storage_ref"] == storage_ref

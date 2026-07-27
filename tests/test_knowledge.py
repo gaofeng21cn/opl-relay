@@ -16,16 +16,16 @@ def test_obsidian_source_indexes_searches_and_removes_documents(tmp_path: Path) 
         "This should not be indexed.",
         encoding="utf-8",
     )
-    config = tmp_path / "sources.yaml"
+    config = tmp_path / "sources.toml"
     config.write_text(
         f"""
-version: 1
-sources:
-  - source_id: personal-vault
-    type: obsidian
-    path: {vault}
-    include: ["*.md", "**/*.md"]
-    exclude: [".obsidian/**", "**/.obsidian/**"]
+version = 1
+[[sources]]
+source_id = "personal-vault"
+type = "obsidian"
+path = "{vault}"
+include = ["*.md", "**/*.md"]
+exclude = [".obsidian/**", "**/.obsidian/**"]
 """.strip(),
         encoding="utf-8",
     )
@@ -47,7 +47,7 @@ sources:
 
 
 def test_missing_sources_config_is_an_empty_optional_provider(tmp_path: Path) -> None:
-    assert load_sources_config(tmp_path / "missing.yaml") == {}
+    assert load_sources_config(tmp_path / "missing.toml") == {}
 
 
 def test_source_include_patterns_do_not_cross_directories_without_double_star(
@@ -59,14 +59,14 @@ def test_source_include_patterns_do_not_cross_directories_without_double_star(
     (vault / "root.md").write_text("Root note", encoding="utf-8")
     (vault / "People" / "person.md").write_text("Person note", encoding="utf-8")
     (vault / "Archive" / "old.md").write_text("Archived note", encoding="utf-8")
-    config = tmp_path / "sources.yaml"
+    config = tmp_path / "sources.toml"
     config.write_text(
         f"""
-sources:
-  - source_id: scoped
-    type: obsidian
-    path: {vault}
-    include: ["*.md", "People/**/*.md"]
+[[sources]]
+source_id = "scoped"
+type = "obsidian"
+path = "{vault}"
+include = ["*.md", "People/**/*.md"]
 """.strip(),
         encoding="utf-8",
     )

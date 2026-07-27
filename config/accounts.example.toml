@@ -1,0 +1,31 @@
+version = 1
+
+[[accounts]]
+account_id = "work"
+email = "work@example.com"
+
+[accounts.imap]
+host = "imap.example.com"
+port = 993
+security = "ssl"
+username = "work@example.com"
+credential_ref = "keychain.work.imap"
+
+[accounts.folders]
+include = ["*"]
+exclude = ["Archive"]
+
+[[accounts]]
+account_id = "personal"
+email = "personal@example.test"
+
+[accounts.imap]
+host = "imap.example.test"
+port = 993
+security = "ssl"
+username = "personal@example.test"
+credential_ref = "keychain.personal.imap"
+
+[accounts.folders]
+include = ["INBOX"]
+exclude = []
