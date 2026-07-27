@@ -1,5 +1,10 @@
 # OPL Relay, Persona, And App Product Architecture
 
+The cross-repository design authority is
+`opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
+repository. This document records the Relay-specific consequences of that
+guidance.
+
 ## Decision
 
 Use two business repos: `opl-relay` owns communication and `opl-persona` owns
@@ -34,8 +39,8 @@ Codex / OPL app-server runtime
 
 | Repository | Keep/Create | Responsibility |
 | --- | --- | --- |
-| `opl-relay` | Renamed from the Codex Mail Workbench repo | Mail engine, CLI, Relay Skill/plugin, future Package adapter |
-| `opl-persona` | Create now | PI context, provenance, review-gated proposals, and cross-domain Skills |
+| `opl-relay` | Renamed from the Codex Mail Workbench repo; current mail repository | Mail engine, CLI, Relay Skill/plugin, Package adapter, and mail-context bridge |
+| `opl-persona` | Current cross-domain repository | PI context, provenance, review-gated proposals, and cross-domain Skills |
 | `one-person-lab` | Keep | Generic Package/runtime/workspace contracts |
 | `one-person-lab-app` | Keep | App product shell and role-neutral contribution UX |
 | `opl-aion-shell` | Keep | Desktop shell projection and navigation |
@@ -97,9 +102,9 @@ identity, fingerprint, and receipt contract.
 ## Persona Relationship
 
 Relay is independently useful and independently installable. Persona may call
-Relay but does not own its mail store or safety model. Persona's future job is
-cross-domain judgment: deciding which capability to invoke, maintaining the
-user's working context, and coordinating longer-running personal work.
+Relay but does not own its mail store or safety model. Persona's current job is
+cross-domain judgment: maintaining the user's working context, preserving
+provenance, and coordinating longer-running personal work through proposals.
 
 This avoids two bad couplings:
 

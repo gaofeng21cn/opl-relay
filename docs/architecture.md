@@ -1,5 +1,9 @@
 # OPL Relay Architecture
 
+For the cross-repository product and authority model, read
+`opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
+repository first. This document is the Relay-specific implementation view.
+
 OPL Relay is the mail capability module in the planned personal digital
 delegate stack. It is local-first, evidence-backed, and useful independently of
 OPL Persona or OPL App.
@@ -15,8 +19,8 @@ OPL Persona or OPL App.
 4. OPL App is the long-term user entry and visual management surface. It calls
    Relay through the same runtime boundary as Codex rather than implementing a
    second mail engine.
-5. OPL Persona is a future orchestration product that may call Relay together
-   with other domain modules. It does not absorb Relay's mail truth.
+5. OPL Persona is the cross-domain orchestration product that may call Relay
+   together with other domain modules. It does not absorb Relay's mail truth.
 
 ## Engine Modules
 

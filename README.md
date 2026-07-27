@@ -9,6 +9,11 @@ This repository is the direct successor to Codex Mail Workbench. The Python
 module and `codex-mail` command remain compatible while the product, package,
 plugin, and repository identity use `opl-relay`.
 
+The cross-repository design authority is maintained at
+`opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
+repository. Use it before changing Relay's ownership boundary or adding a new
+adapter.
+
 ## Runtime Model
 
 Relay separates three surfaces:
@@ -74,8 +79,8 @@ automatically retried.
 
 The installable Codex Plugin scaffold is under
 [`plugins/opl-relay`](plugins/opl-relay). It ships capability instructions only
-and never owns user data. A future OPL Package should expose the same capability
-through role-neutral App contributions.
+and never owns user data. The OPL Package exposes the same capability through
+role-neutral App contributions.
 
 ## Privacy And Safety
 
