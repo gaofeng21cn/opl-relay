@@ -23,6 +23,20 @@ Never put accounts, SQLite files, raw mail, sync cursors, memories, private
 policies, or credentials in the plugin cache or source checkout. Credentials
 remain in macOS Keychain service `codex-mail-workbench` for compatibility.
 
+## Capability Contract
+
+The OPL Package exports four stable capability contracts:
+
+- `communications.mail.v1`: local mailbox evidence, sync, retrieval, and
+  review-gated Apple Mail drafts;
+- `personal.context.v1`: bounded drafting context assembled from evidence;
+- `personal.memory.v1`: proposed and explicitly approved relationship memory;
+- `knowledge.obsidian.v1`: read-only indexing and retrieval from configured
+  Obsidian sources.
+
+These identifiers describe available contracts. They do not grant new mailbox
+writes or move private data into the plugin.
+
 ## Mail And Context
 
 Use `accounts` as account truth. Sync explicitly when freshness matters, then

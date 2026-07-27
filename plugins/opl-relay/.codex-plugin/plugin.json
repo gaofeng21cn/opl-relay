@@ -1,6 +1,6 @@
 {
   "name": "opl-relay",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Local-first mail, relationship memory, Obsidian context, and review-gated drafting for Codex.",
   "author": {
     "name": "OPL"
@@ -15,7 +15,13 @@
     "longDescription": "Manage local mail evidence, approved relationship memory, Obsidian context, and Apple Mail drafts without storing user data in the plugin.",
     "developerName": "OPL",
     "category": "Productivity",
-    "capabilities": ["Mail", "Memory", "Knowledge", "Drafting"],
+    "capabilities": [
+      "Mail evidence",
+      "Relationship context",
+      "Approved memory",
+      "Obsidian knowledge",
+      "Review-gated drafting"
+    ],
     "defaultPrompt": [
       "检查最近三天的邮件并告诉我需要决定什么。",
       "结合往来邮件和记忆，为这个联系人起草回复。",
