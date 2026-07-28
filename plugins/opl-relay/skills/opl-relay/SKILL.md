@@ -45,6 +45,31 @@ Before drafting for a known person or project, run `context build`. Use only
 approved memories as active relationship memory and re-read raw mail for
 high-risk dates, roles, commitments, or invitations.
 
+## External Web Decisions
+
+For an explicitly authorized action on an authenticated editorial, submission,
+or other external website:
+
+1. Resolve the exact target from Relay evidence before opening the site: service,
+   manuscript or record id, title, revision date, and requested decision.
+2. Prefer Codex browser-client control and an existing authenticated Chrome
+   session when available. Honor an explicit browser choice. Use Playwright only
+   as a deterministic DOM-inspection or UI-debugging fallback, not as a second
+   independent session.
+3. Inspect the complete form before submitting. Required fields may include
+   author comments, editor notes, ethics answers, reviewer counts, signatures,
+   or an explicit decision radio. A selected option or successful click is not
+   submission evidence.
+4. Handle confirmation dialogs explicitly. Treat the operation as pending until
+   a real submit response, navigation, or equivalent owner-surface change is
+   observed; do not retry an unknown result blindly.
+5. Reopen or reread the owner surface after submission. Report success only when
+   the final decision/status is visible and the editable submission form is
+   closed, locked, or otherwise replaced by a recorded result.
+
+Keep website credentials and session state outside the repository. Do not copy
+external-site content into public skill files.
+
 ## Draft Approval
 
 `draft create` may create and open an Apple Mail draft. It does not authorize

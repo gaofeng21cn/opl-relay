@@ -57,6 +57,17 @@ grouped by account. For each proposed reminder, reply, draft, or archive candida
 include why it matters and the best local identifier. State per-account sync and
 read coverage; do not quote long message bodies.
 
+For an explicitly authorized action on an authenticated editorial or submission
+website, resolve the exact service, record/manuscript id, title, revision date,
+and requested decision before opening the site. Prefer Codex browser-client
+control with the existing authenticated Chrome session when available; use
+Playwright only as a deterministic DOM/debugging fallback, not as a second
+session. Inspect all required fields, including author comments, signatures,
+ethics answers, reviewer counts, and decision controls. A selected option or
+successful click is not submission evidence: handle confirmation dialogs, observe
+the real submit response, then reopen/read the owner page and require a recorded
+final status with the editable form closed or locked before reporting success.
+
 ## Memory, Knowledge, And Drafting Context
 
 Before drafting for a known person or project, prefer a bounded context package:
