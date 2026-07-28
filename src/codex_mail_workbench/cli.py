@@ -37,10 +37,8 @@ from .paths import (
     default_profile_workspace,
     default_sources_config_path,
     default_state_dir,
-    default_workspace_dir,
     profile_workspace_source,
     state_dir_source,
-    workspace_dir_source,
 )
 from .store import (
     connect_email_store,
@@ -76,6 +74,14 @@ APP_CONTRIBUTION_DATA_CONTRACTS = {
             "draft_ref": {"type": "string", "required": True},
         },
         "result": "communications.mail.v1#draft.inspect.result",
+    },
+    "communications.mail.v1#triage.evidence": {
+        "operation": "read",
+        "input": {
+            "source_ref": {"type": "string", "required": True},
+            "policy_refs": {"type": "string[]", "required": True, "min_items": 1},
+        },
+        "result": "communications.mail.v1#triage.evidence.result",
     },
     "personal.memory.v1#search": {
         "operation": "read",
@@ -340,6 +346,18 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
         draft_ref = _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True)
         service, _ = draft_service(args)
         return {"draft": service.inspect(draft_ref)}
+    if ref == "communications.mail.v1#triage.evidence":
+        return {
+            "evidence": build_triage_evidence(
+                mail_db_path=Path(args.db).expanduser(),
+                source_ref=_app_contribution_string(
+                    payload.get("source_ref"), "source_ref", required=True
+                ),
+                policy_refs=_app_contribution_strings(
+                    payload.get("policy_refs"), "policy_refs", required=True
+                ),
+            )
+        }
     if ref == "personal.memory.v1#search":
         return {
             "memories": memory_store(args).list_memories(
@@ -529,7 +547,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     drafts_db_path = Path(args.draft_db).expanduser()
     memory_db_path = Path(args.memory_db).expanduser()
     sources_config_path = Path(args.sources_config).expanduser()
-    workspace = inspect_workspace(Path(args.workspace))
+    workspace = inspect_workspace(default_profile_workspace())
     accounts = {}
     config_error = ""
     sources_error = ""
@@ -557,7 +575,6 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "profile_workspace": str(default_profile_workspace()),
         "profile_workspace_source": profile_workspace_source(),
         "workspace": workspace,
-        "workspace_dir_source": workspace_dir_source(),
         "config_path": str(config_path),
         "config_exists": config_path.exists(),
         "config_error": config_error,
@@ -580,7 +597,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_workspace_inspect(args: argparse.Namespace) -> int:
     emit(
-        {"ok": True, "workspace": inspect_workspace(Path(args.workspace))},
+        {"ok": True, "workspace": inspect_workspace(default_profile_workspace())},
         as_json=args.json,
     )
     return 0
@@ -588,7 +605,7 @@ def cmd_workspace_inspect(args: argparse.Namespace) -> int:
 
 def cmd_workspace_init(args: argparse.Namespace) -> int:
     emit(
-        {"ok": True, "workspace": initialize_workspace(Path(args.workspace))},
+        {"ok": True, "workspace": initialize_workspace(default_profile_workspace())},
         as_json=args.json,
     )
     return 0
@@ -597,7 +614,7 @@ def cmd_workspace_init(args: argparse.Namespace) -> int:
 def cmd_workspace_migrate(args: argparse.Namespace) -> int:
     payload = migrate_workspace(
         Path(args.from_path),
-        Path(args.workspace),
+        default_profile_workspace(),
         apply=args.apply,
     )
     emit(payload, as_json=args.json)
@@ -1101,11 +1118,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--sources-config",
         default=str(default_sources_config_path()),
         help="外部知识源 sources.toml 路径",
-    )
-    parser.add_argument(
-        "--workspace",
-        default=str(default_workspace_dir()),
-        help="人类可编辑的 Relay workspace 路径",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

@@ -34,7 +34,7 @@
       ".codex-plugin/plugin.json",
       "skills/opl-relay/SKILL.md"
     ],
-    "digest": "sha256:513d30a467d485f79e1377836c22960e5b492256f8f78fd121d598f2d3044388"
+    "digest": "sha256:04b40cb548d081b8a0eefa42f209c09230c1f047c2cb913493263ab98cb97039"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
@@ -65,6 +65,15 @@
         },
         "view_id": "relay.inbox",
         "sort_order": 100
+      },
+      {
+        "navigation_id": "relay.triage",
+        "label_i18n": {
+          "zh-CN": "邮件判断证据",
+          "en-US": "Mail triage evidence"
+        },
+        "view_id": "relay.triage",
+        "sort_order": 105
       },
       {
         "navigation_id": "relay.drafts",
@@ -100,6 +109,20 @@
         "empty_state_i18n": {
           "zh-CN": "没有可显示的本地邮件",
           "en-US": "No local mail to show"
+        }
+      },
+      {
+        "view_id": "relay.triage",
+        "view_type": "approval_diff",
+        "title_i18n": {
+          "zh-CN": "邮件判断证据",
+          "en-US": "Mail triage evidence"
+        },
+        "data_ref": "communications.mail.v1#triage.evidence",
+        "command_ids": [],
+        "empty_state_i18n": {
+          "zh-CN": "没有待交给 Persona 的邮件证据",
+          "en-US": "No mail evidence ready for Persona"
         }
       },
       {

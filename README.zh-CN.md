@@ -15,9 +15,8 @@ Markdown 作为只读知识源，并通过 Apple Mail 完成“起草、人工�
 - 工作空间：一个包含 profile、policies、context、templates、exports 及模块
   data 子树的 Profile Workspace。
 
-新合同使用共享的 `OPL_PROFILE_WORKSPACE`。`OPL_RELAY_HOME` 与
-`OPL_RELAY_WORKSPACE` 仍是兼容性覆盖。已有
-`CODEX_MAIL_HOME` 和 `~/.codex-mail-workbench` 数据继续可读，不做隐式搬迁。
+新合同只使用共享的 `OPL_PROFILE_WORKSPACE`；Relay 状态固定在
+`<profile>/data/relay`，不读取旧目录或 Relay 专用环境变量回退。
 
 ```bash
 make install-local

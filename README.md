@@ -23,9 +23,9 @@ Relay separates three surfaces:
 - workspace: one Profile Workspace containing profile, policies, context,
   templates, exports, and module data subtrees.
 
-Use `OPL_PROFILE_WORKSPACE` to select the shared user Profile Workspace.
-`OPL_RELAY_HOME` and `OPL_RELAY_WORKSPACE` remain compatibility overrides. Existing
-`CODEX_MAIL_HOME` and `~/.codex-mail-workbench` installs remain readable.
+Use `OPL_PROFILE_WORKSPACE` to select the shared user Profile Workspace. Relay
+always stores its state in `<profile>/data/relay`; no Relay-specific or legacy
+environment-variable fallback is consulted.
 
 ```bash
 make install-local

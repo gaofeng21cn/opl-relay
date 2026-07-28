@@ -15,9 +15,8 @@ instructions only; it never treats the plugin directory as user storage.
 3. Treat `profile_workspace` as the user's single Profile Workspace, Relay's
    `state_dir` as its `data/relay` child, and `workspace.path` as that same
    profile root.
-4. Honor `OPL_PROFILE_WORKSPACE`. `OPL_RELAY_HOME` and
-   `OPL_RELAY_WORKSPACE` are compatibility overrides; `CODEX_MAIL_HOME` is a
-   legacy fallback, not the new public contract.
+4. Honor `OPL_PROFILE_WORKSPACE` as the only profile root; Relay state is its
+   `data/relay` child.
 5. Read `<workspace>/AGENTS.md` when it exists, then follow its profile,
    policies, context, skills, and templates references.
 
@@ -46,6 +45,24 @@ use `recent`, `search`, and `read` through stable `email-store://` references.
 Before drafting for a known person or project, run `context build`. Use only
 approved memories as active relationship memory and re-read raw mail for
 high-risk dates, roles, commitments, or invitations.
+
+## Persona Triage Evidence
+
+Use `triage evidence` to provide Persona one facts-only mail envelope. It
+contains stable `email-store://` provenance, `From`/`To`/`Cc`/`Bcc` headers,
+recipient routing facts, raw-message hashes, freshness, and policy references.
+The `policy_digest` hashes only the ordered policy-reference set; it is never a
+private Markdown content digest. Persona must read its own Profile Workspace
+and calculate any Markdown content digest itself.
+
+```bash
+opl-relay --json triage evidence 'email-store://…' \
+  --policy-ref 'policy://persona/mail-triage/v1' > relay-evidence.json
+```
+
+This evidence cannot classify, prioritize, forward, delete, archive, move, or
+mark mail. `triage validate --input` verifies only Relay provenance and the
+read-only boundary.
 
 ## External Web Decisions
 

@@ -34,7 +34,10 @@ OPL Persona or OPL App.
 - Drafts: Apple Mail as the editable review UI plus a local lifecycle ledger and
   exact approval fingerprint. An approved Persona `mail.draft_context`
   proposal may prepare this review draft, but it never authorizes sending.
-- CLI: `opl-relay`, with `codex-mail` retained as a compatibility alias.
+- Triage evidence: a facts-only v2 envelope exposes mail headers, recipient
+  routing, and reference-set provenance. Persona owns private Markdown reading,
+  content digests, and all triage judgments.
+- CLI: `opl-relay`, with `codex-mail` retained as a command alias.
 
 ## Runtime Ownership
 
@@ -50,8 +53,8 @@ The installation root is replaceable. Deleting or upgrading a plugin must not
 delete either user-owned root. Codex App and OPL App must use the same configured
 Relay data service when they act for the same user.
 
-See [Workspace Contract](workspace-contract.md) for resolution and compatibility
-rules and [Product Architecture](product-architecture.md) for the broader OPL
+See [Workspace Contract](workspace-contract.md) for the single-root rule and
+[Product Architecture](product-architecture.md) for the broader OPL
 integration.
 
 ## Stable References

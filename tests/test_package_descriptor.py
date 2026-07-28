@@ -33,6 +33,7 @@ ACTION_REFS = {
 
 DATA_REFS = {
     "communications.mail.v1#recent",
+    "communications.mail.v1#triage.evidence",
     "communications.mail.v1#draft.inspect",
     "personal.memory.v1#search",
 }

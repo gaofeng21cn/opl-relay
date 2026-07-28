@@ -21,9 +21,8 @@ The default user-owned Profile Workspace is:
 ```
 
 Relay stores accounts, SQLite databases, sources, and sync state under
-`<profile>/data/relay`. `OPL_RELAY_HOME` selects an explicit data-root override;
-`CODEX_MAIL_HOME` and existing `~/.codex-mail-workbench` remain supported. Old
-data is never moved implicitly.
+`<profile>/data/relay`. `OPL_PROFILE_WORKSPACE` is the only runtime selector;
+Relay does not inspect old state directories or alternate environment variables.
 
 Credentials remain in macOS Keychain service `codex-mail-workbench`. The service
 name is intentionally unchanged so an upgrade does not invalidate credentials.
@@ -31,9 +30,6 @@ name is intentionally unchanged so an upgrade does not invalidate credentials.
 ## Workspace
 
 `OPL_PROFILE_WORKSPACE` selects the active Profile Workspace.
-`OPL_RELAY_WORKSPACE` may override it for compatibility. Existing
-`~/.opl-relay/workspaces/default` is retained as a legacy fallback until an
-explicit migration is approved.
 
 ```text
 <workspace>/
@@ -62,19 +58,19 @@ export OPL_PROFILE_WORKSPACE=/path/to/profile
 opl-relay --json doctor
 ```
 
-## Moving A Legacy Overlay
+## Copying An Explicit Overlay
 
 Preview first, then copy the supported human-editable overlay:
 
 ```bash
-opl-relay --workspace ~/OPL/profiles/<user> \
-  --json workspace migrate --from /path/to/old/checkout/local
-opl-relay --workspace ~/OPL/profiles/<user> \
-  --json workspace migrate --from /path/to/old/checkout/local --apply
+OPL_PROFILE_WORKSPACE=/path/to/profile \
+  opl-relay --json workspace migrate --from /path/to/source-overlay
+OPL_PROFILE_WORKSPACE=/path/to/profile \
+  opl-relay --json workspace migrate --from /path/to/source-overlay --apply
 ```
 
-The migration copies `AGENTS.md`, `profile.md`, and the `skills`, `policies`,
-`context`, `templates`, and `notes` trees. It reports and skips accounts,
+The migration copies `AGENTS.md`, `profile.md`, and the `profile`, `policies`,
+`context`, and `templates` trees. It reports and skips accounts,
 SQLite databases, `sources.toml`, and sync state. It refuses conflicting target
 bytes and verifies every copied file after writing. It does not delete the
 source; source cleanup remains an explicit, separately verified operation.
@@ -95,5 +91,4 @@ opl-relay --json sources search "<person or project>"
 
 Before committing, verify that accounts, database files, raw messages, private
 workspace content, Obsidian paths, credentials, and sync cursors are absent from
-Git. The ignored `local/` path remains only as a compatibility guard; it is not
-the recommended runtime layout.
+Git.

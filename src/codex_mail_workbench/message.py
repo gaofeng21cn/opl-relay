@@ -4,7 +4,7 @@ from email import policy
 from email.header import decode_header, make_header
 from email.message import EmailMessage, Message
 from email.parser import BytesParser
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 
 
 def decode_header_text(raw: str | None) -> str:
@@ -27,14 +27,31 @@ def parse_message_date(raw: bytes) -> str:
         return ""
 
 
-def parse_headers(raw: bytes) -> dict[str, str]:
+def parse_address_list(raw: str | None) -> list[dict[str, str]]:
+    if not raw:
+        return []
+    decoded = decode_header_text(raw)
+    return [
+        {"name": name.strip(), "address": address.strip()}
+        for name, address in getaddresses([decoded])
+        if address.strip()
+    ]
+
+
+def parse_headers(raw: bytes) -> dict[str, object]:
     msg = BytesParser(policy=policy.default).parsebytes(raw, headersonly=True)
     return {
         "message_id": str(msg.get("Message-Id") or "").strip(),
         "subject": decode_header_text(msg.get("Subject")),
         "from": decode_header_text(msg.get("From")),
         "to": decode_header_text(msg.get("To")),
+        "cc": decode_header_text(msg.get("Cc")),
+        "bcc": decode_header_text(msg.get("Bcc")),
         "date": parse_message_date(raw),
+        "from_addresses": parse_address_list(msg.get("From")),
+        "to_addresses": parse_address_list(msg.get("To")),
+        "cc_addresses": parse_address_list(msg.get("Cc")),
+        "bcc_addresses": parse_address_list(msg.get("Bcc")),
     }
 
 
@@ -87,4 +104,3 @@ def extract_attachments(raw: bytes) -> list[dict[str, object]]:
             }
         )
     return out
-

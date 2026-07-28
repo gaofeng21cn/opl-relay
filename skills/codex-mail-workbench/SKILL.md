@@ -12,10 +12,8 @@ separate mailbox facts from user-specific judgment.
 
 - Treat `codex-mail --json accounts` as current account truth. Do not infer
   account ids from examples or memory.
-- Prefer `OPL_RELAY_HOME` for long-lived state and `OPL_RELAY_WORKSPACE` for
-  profile, policies, context, skills, templates, and exports.
-- `CODEX_MAIL_HOME` and `~/.codex-mail-workbench` remain supported for existing
-  installations. Do not use a source checkout or plugin cache as new storage.
+- Use `OPL_PROFILE_WORKSPACE` as the only profile root; Relay state is always
+  `data/relay` below it. Do not use a source checkout or plugin cache as storage.
 - Read any private overlay before triage or drafting judgments. Start with
   `<workspace>/AGENTS.md`, then follow its references to `profile.md`, `skills/`,
   `policies/`, `context/`, or `templates/` as needed.

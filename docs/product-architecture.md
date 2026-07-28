@@ -71,7 +71,6 @@ All three surfaces resolve the same user-owned Profile Workspace:
 - `OPL_PROFILE_WORKSPACE` is the single profile root;
 - Relay's durable state is `<profile>/data/relay`;
 - Persona's durable state is the sibling `<profile>/data/persona`;
-- `OPL_RELAY_HOME` and `OPL_RELAY_WORKSPACE` remain compatibility overrides;
 - a source checkout, installed Package, or Codex plugin cache is never either
   authority.
 
@@ -79,16 +78,20 @@ All three surfaces resolve the same user-owned Profile Workspace:
 
 `opl-relay triage evidence <email-store://...> --policy-ref <ref>` reads one
 already-synced message through the local email store and returns the portable
-`opl-relay-mail-triage-evidence.v1` envelope. It carries the stable source
-reference, original-message readback, local-read freshness, explicit policy
-references and their deterministic digest.
+`opl-relay-mail-triage-evidence.v2` envelope. It carries the stable source
+reference, `From`/`To`/`Cc`/`Bcc` header facts, recipient routing facts,
+original-message readback, local-read freshness, and explicit policy references.
+Its `policy_digest` is only a deterministic digest of the ordered reference set,
+never a private Markdown content digest.
 
 The envelope is evidence-only: it does not prioritize a message, infer a
 personal decision, or expose a mailbox-provider write route. Its risk fields
 always require human review, forbid external writes, and report provider write
 as unreachable. `opl-relay triage validate --input <file|->` validates that
-provenance, policy digest, and read-only boundary before Persona or another
-consumer uses the envelope. It accepts either the bare evidence envelope or
+provenance, policy-reference digest, and read-only boundary before Persona or
+another consumer uses the envelope. Persona reads private Markdown only from its
+own Profile Workspace and computes its own content digest. Relay accepts either
+the bare evidence envelope or
 the exact successful JSON wrapper emitted by `triage evidence`, so the
 read-only pipeline can be composed directly:
 

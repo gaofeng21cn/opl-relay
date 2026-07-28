@@ -16,6 +16,8 @@ def seed_message(db: Path) -> str:
         b"Subject: Evidence thread\r\n"
         b"From: editor@example.test\r\n"
         b"To: work@example.com\r\n"
+        b"Cc: colleague@example.test\r\n"
+        b"Bcc: hidden@example.test\r\n"
         b"Message-ID: <triage@example.test>\r\n"
         b"\r\n"
         b"The original message body is available for review."
@@ -61,8 +63,21 @@ def test_triage_evidence_reads_original_mail_without_provider_write(tmp_path: Pa
 
     assert db.read_bytes() == before
     assert result["source_refs"] == [source_ref]
+    assert result["schema_version"] == "opl-relay-mail-triage-evidence.v2"
     assert result["mail"]["raw_readback"]["status"] == "available"
     assert "original message body" in result["mail"]["raw_readback"]["body_text"]
+    assert result["mail"]["headers"] == {
+        "subject": "Evidence thread",
+        "from": "editor@example.test",
+        "to": "work@example.com",
+        "cc": "colleague@example.test",
+        "bcc": "hidden@example.test",
+    }
+    assert result["mail"]["routing_facts"]["recipient_count"] == 3
+    assert result["mail"]["routing_facts"]["is_unique_recipient"] is False
+    assert result["mail"]["routing_facts"]["bcc_addresses"] == [
+        {"name": "", "address": "hidden@example.test"}
+    ]
     assert result["freshness"] == {
         "status": "local_store_readback",
         "observed_at": "2026-07-28T09:02:00+00:00",

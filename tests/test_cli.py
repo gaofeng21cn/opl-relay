@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from codex_mail_workbench import cli
 from codex_mail_workbench.store import connect_email_store, upsert_email_message
 
@@ -171,6 +173,32 @@ def test_app_contribution_abi_describes_declared_refs_and_reads_package_owned_da
     }]
     assert recent_payload["result"]["messages"][0]["storage_ref"].startswith("email-store://")
     assert memory_payload["result"] == {"memories": []}
+
+
+def test_app_contribution_reads_facts_only_triage_evidence(tmp_path: Path) -> None:
+    db = tmp_path / "mail.sqlite"
+    source_ref = seed_message(db)
+
+    result = run_app_contribution(
+        db,
+        {
+            "schema_version": "opl-package-app-contribution-request.v1",
+            "operation": "read",
+            "ref": "communications.mail.v1#triage.evidence",
+            "input": {
+                "source_ref": source_ref,
+                "policy_refs": ["policy://persona/mail-triage/v1"],
+            },
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    evidence = payload["result"]["evidence"]
+    assert evidence["schema_version"] == "opl-relay-mail-triage-evidence.v2"
+    assert evidence["source_refs"] == [source_ref]
+    assert evidence["risk"]["external_write_allowed"] is False
+    assert evidence["provider_write"]["status"] == "unreachable"
 
 
 def test_app_contribution_creates_review_draft_from_approved_persona_bundle(
@@ -474,10 +502,13 @@ def test_cli_exposes_workspace_commands() -> None:
     for command in [
         ["workspace", "inspect"],
         ["workspace", "init"],
-        ["workspace", "migrate", "--from", "/tmp/legacy-overlay"],
+        ["workspace", "migrate", "--from", "/tmp/source-overlay"],
     ]:
         args = parser.parse_args(command)
         assert callable(args.func)
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--workspace", "/tmp/another-profile", "workspace", "inspect"])
 
 
 def test_cli_exposes_persona_draft_create_command() -> None:

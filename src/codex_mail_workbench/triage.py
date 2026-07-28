@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .message import extract_text_body
+from .message import extract_text_body, parse_headers
 from .store import (
     connect_email_store_readonly,
     fetch_raw_email_by_storage_ref,
@@ -15,7 +15,7 @@ from .store import (
 )
 
 
-TRIAGE_EVIDENCE_SCHEMA = "opl-relay-mail-triage-evidence.v1"
+TRIAGE_EVIDENCE_SCHEMA = "opl-relay-mail-triage-evidence.v2"
 _EMAIL_STORE_REF = re.compile(
     r"^email-store://[^/\s]+/[^/\s]+/[1-9][0-9]*/[0-9a-f]{16}$"
 )
@@ -25,7 +25,7 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _email_store_ref(value: object) -> str:
+def validate_email_store_ref(value: object) -> str:
     if not isinstance(value, str) or not _EMAIL_STORE_REF.fullmatch(value):
         raise ValueError("source_ref must be a canonical email-store:// reference")
     return value
@@ -40,8 +40,8 @@ def _policy_refs(value: object) -> list[str]:
     return sorted(refs)
 
 
-def policy_digest(policy_refs: list[str]) -> str:
-    """Return the canonical digest for an explicit, ordered policy reference set."""
+def policy_refs_digest(policy_refs: list[str]) -> str:
+    """Return a digest of Relay policy references, never policy contents."""
     normalized = _policy_refs(policy_refs)
     payload = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -55,7 +55,7 @@ def build_triage_evidence(
     observed_at: str | None = None,
 ) -> dict[str, Any]:
     """Read one stored message into a non-mutating triage evidence envelope."""
-    source_ref = _email_store_ref(source_ref)
+    source_ref = validate_email_store_ref(source_ref)
     normalized_policy_refs = _policy_refs(policy_refs)
     conn = connect_email_store_readonly(mail_db_path)
     if conn is None:
@@ -68,12 +68,31 @@ def build_triage_evidence(
     if message is None or raw is None:
         raise ValueError("email evidence not found")
 
+    headers = parse_headers(raw)
+    recipient_addresses: list[str] = []
+    for field in ("to_addresses", "cc_addresses", "bcc_addresses"):
+        for recipient in headers[field]:
+            assert isinstance(recipient, dict)
+            address = str(recipient["address"]).casefold()
+            if address not in recipient_addresses:
+                recipient_addresses.append(address)
     return {
         "schema_version": TRIAGE_EVIDENCE_SCHEMA,
         "source_refs": [source_ref],
         "mail": {
             "source_ref": source_ref,
             "metadata": message,
+            "headers": {
+                field: str(headers[field])
+                for field in ("subject", "from", "to", "cc", "bcc")
+            },
+            "routing_facts": {
+                "to_addresses": headers["to_addresses"],
+                "cc_addresses": headers["cc_addresses"],
+                "bcc_addresses": headers["bcc_addresses"],
+                "recipient_count": len(recipient_addresses),
+                "is_unique_recipient": len(recipient_addresses) == 1,
+            },
             "raw_readback": {
                 "status": "available",
                 "raw_sha256": message["raw_sha256"],
@@ -90,7 +109,7 @@ def build_triage_evidence(
         },
         "policy": {
             "policy_refs": normalized_policy_refs,
-            "policy_digest": policy_digest(normalized_policy_refs),
+            "policy_digest": policy_refs_digest(normalized_policy_refs),
         },
         "triage": {
             "mode": "evidence_only",
@@ -119,13 +138,39 @@ def validate_triage_evidence(value: object) -> dict[str, Any]:
     source_refs = value.get("source_refs")
     if not isinstance(source_refs, list) or not source_refs:
         raise ValueError("source_refs must be a non-empty array")
-    normalized_source_refs = [_email_store_ref(item) for item in source_refs]
+    normalized_source_refs = [validate_email_store_ref(item) for item in source_refs]
     if len(set(normalized_source_refs)) != len(normalized_source_refs):
         raise ValueError("source_refs must not contain duplicates")
 
     mail = value.get("mail")
     if not isinstance(mail, dict) or mail.get("source_ref") != normalized_source_refs[0]:
         raise ValueError("mail.source_ref must match source_refs[0]")
+    headers = mail.get("headers")
+    if not isinstance(headers, dict):
+        raise ValueError("mail.headers is required")
+    for field in ("subject", "from", "to", "cc", "bcc"):
+        if not isinstance(headers.get(field), str):
+            raise ValueError(f"mail.headers.{field} is required")
+    routing_facts = mail.get("routing_facts")
+    if not isinstance(routing_facts, dict):
+        raise ValueError("mail.routing_facts is required")
+    for field in ("to_addresses", "cc_addresses", "bcc_addresses"):
+        recipients = routing_facts.get(field)
+        if not isinstance(recipients, list):
+            raise ValueError(f"mail.routing_facts.{field} must be an array")
+        for recipient in recipients:
+            if (
+                not isinstance(recipient, dict)
+                or not isinstance(recipient.get("name"), str)
+                or not isinstance(recipient.get("address"), str)
+                or not recipient["address"].strip()
+            ):
+                raise ValueError(f"mail.routing_facts.{field} contains an invalid recipient")
+    recipient_count = routing_facts.get("recipient_count")
+    if isinstance(recipient_count, bool) or not isinstance(recipient_count, int) or recipient_count < 0:
+        raise ValueError("mail.routing_facts.recipient_count must be a non-negative integer")
+    if routing_facts.get("is_unique_recipient") != (recipient_count == 1):
+        raise ValueError("mail.routing_facts.is_unique_recipient does not match recipient_count")
     raw_readback = mail.get("raw_readback")
     if not isinstance(raw_readback, dict) or raw_readback.get("status") != "available":
         raise ValueError("mail.raw_readback must be available")
@@ -145,7 +190,7 @@ def validate_triage_evidence(value: object) -> dict[str, Any]:
         raise ValueError("policy is required")
     refs = _policy_refs(policy.get("policy_refs"))
     digest = policy.get("policy_digest")
-    if not isinstance(digest, str) or digest != policy_digest(refs):
+    if not isinstance(digest, str) or digest != policy_refs_digest(refs):
         raise ValueError("policy_digest does not match policy_refs")
 
     triage = value.get("triage")

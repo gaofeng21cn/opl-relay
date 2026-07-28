@@ -2,30 +2,22 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ -n "${OPL_RELAY_HOME:-}" ]]; then
-  STATE_DIR="${OPL_RELAY_HOME}"
-elif [[ -n "${CODEX_MAIL_HOME:-}" ]]; then
-  STATE_DIR="${CODEX_MAIL_HOME}"
-elif [[ -n "${OPL_PROFILE_WORKSPACE:-}" ]]; then
+if [[ -n "${OPL_PROFILE_WORKSPACE:-}" ]]; then
   STATE_DIR="${OPL_PROFILE_WORKSPACE}/data/relay"
-elif [[ -d "${HOME}/.codex-mail-workbench" && ! -e "${HOME}/.opl-relay/accounts.toml" ]]; then
-  STATE_DIR="${HOME}/.codex-mail-workbench"
 else
   STATE_DIR="${HOME}/OPL/profiles/${USER}/data/relay"
 fi
-SOURCE_STORE="${CODEX_MAIL_SOURCE_STORE:-}"
-SOURCE_SYNC_STATE="${CODEX_MAIL_SOURCE_SYNC_STATE:-}"
+SOURCE_STORE="${OPL_RELAY_SOURCE_STORE:-}"
+SOURCE_SYNC_STATE="${OPL_RELAY_SOURCE_SYNC_STATE:-}"
 
 usage() {
   cat <<'EOF'
 Usage: migrate-mail-store --store <mail.sqlite> [--sync-state <dir>]
 
 Environment:
-  OPL_RELAY_HOME                Target state directory.
   OPL_PROFILE_WORKSPACE         Shared Profile Workspace; target is data/relay.
-  CODEX_MAIL_HOME               Legacy target state directory fallback.
-  CODEX_MAIL_SOURCE_STORE       Source SQLite mail store path.
-  CODEX_MAIL_SOURCE_SYNC_STATE  Optional source sync-state directory.
+  OPL_RELAY_SOURCE_STORE        Source SQLite mail store path.
+  OPL_RELAY_SOURCE_SYNC_STATE   Optional source sync-state directory.
 EOF
 }
 
@@ -62,7 +54,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "${SOURCE_STORE}" ]]; then
-  echo "error: provide --store or CODEX_MAIL_SOURCE_STORE" >&2
+  echo "error: provide --store or OPL_RELAY_SOURCE_STORE" >&2
   usage >&2
   exit 2
 fi

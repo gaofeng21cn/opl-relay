@@ -5,38 +5,22 @@
 1. The installed plugin or Package contains code and capability declarations
    only.
 2. The data root is user-owned and survives reinstall, upgrade, cache removal,
-   checkout deletion, and workspace switching.
-3. A workspace is explicit, replaceable human context. Switching it does not
-   fork or move the mail database.
+   and checkout deletion.
+3. The single Profile Workspace is the human context and owns the module data
+   subtree; Relay does not switch to an independent workspace or data root.
 4. Credentials remain in the platform credential store, never in either root.
 5. Codex App, OPL App, and OPL Persona share configured user-owned runtime
    roots without moving those roots into an installed Package or plugin cache.
 
 ## Resolution
 
-Data root precedence:
+`OPL_PROFILE_WORKSPACE` selects the only runtime root. Its default is
+`~/OPL/profiles/<user>`. Relay's data directory is always
+`<profile>/data/relay`.
 
-1. `OPL_RELAY_HOME`
-2. legacy `CODEX_MAIL_HOME`
-3. `~/.opl-relay` when it contains Relay runtime state
-4. existing `~/.codex-mail-workbench`
-5. `OPL_PROFILE_WORKSPACE/data/relay`
-6. new `~/OPL/profiles/<user>/data/relay`
-
-Profile Workspace precedence:
-
-1. `OPL_RELAY_WORKSPACE`
-2. `OPL_PROFILE_WORKSPACE`
-3. existing `~/.opl-relay/workspaces/default` (legacy read-only fallback)
-4. `~/OPL/profiles/<user>`
-
-Relay's default data directory is `<profile>/data/relay`. `OPL_RELAY_HOME`
-remains an explicit compatibility override; it does not define the user's
-Profile Workspace.
-
-The active paths are visible in `opl-relay --json doctor`. OPL App should pass
-both paths explicitly when launching a Relay runtime rather than relying on its
-own installation directory or process working directory.
+The active path is visible in `opl-relay --json doctor`. OPL App should pass
+`OPL_PROFILE_WORKSPACE` when launching Relay rather than relying on its own
+installation directory or process working directory.
 
 ## Ownership Matrix
 
@@ -61,7 +45,7 @@ re-reads the exact proposal and the user approves it.
 
 A host integrates Relay by providing:
 
-- data-root and workspace locators;
+- the shared Profile Workspace locator;
 - process or service lifecycle;
 - permissions and explicit write approvals;
 - view contributions and read-model rendering;
