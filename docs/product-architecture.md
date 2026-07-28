@@ -151,7 +151,10 @@ This avoids two bad couplings:
 
 The current repository implements the Relay-owned half of this model: the Codex
 Plugin, stable capability exports, declarative Package contributions, and the
-read-only bridge that consumes Persona mail-draft context without sending.
+review-gated bridge that accepts a strictly validated, user-approved Persona
+mail-draft context to create an Apple Mail draft without sending. Persona owns
+the cross-domain proposal contract; Relay continues to own the mail draft
+identity, review surface, fingerprint, and final delivery boundary.
 Persona owns the cross-domain proposal contract; `gflab_web` owns its
 proposal-only Hugo adapter. Framework admission, OPL App rendering, and Shell
 navigation remain host-owned work in their respective repositories.

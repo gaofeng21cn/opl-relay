@@ -23,6 +23,7 @@ VIEW_TYPES = {"list_detail", "timeline", "approval_diff"}
 ACTION_REFS = {
     "communications.mail.v1#sync.incremental",
     "communications.mail.v1#draft.create",
+    "communications.mail.v1#draft.create_from_persona",
     "communications.mail.v1#draft.inspect",
     "communications.mail.v1#draft.open",
     "communications.mail.v1#draft.send",
@@ -125,10 +126,11 @@ def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions()
         item["command_id"]: item for item in contributions["commands"]
     }
     assert commands_by_id["relay.draft.send"]["confirmation_required"] is True
+    assert commands_by_id["relay.draft.create-from-persona"]["confirmation_required"] is True
     assert all(
         "confirmation_required" not in command
         for command_id, command in commands_by_id.items()
-        if command_id != "relay.draft.send"
+        if command_id not in {"relay.draft.send", "relay.draft.create-from-persona"}
     )
 
     serialized = json.dumps(contributions)
