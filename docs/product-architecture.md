@@ -73,6 +73,21 @@ All three surfaces resolve the same user-owned runtime:
 - a source checkout, installed Package, or Codex plugin cache is never either
   authority.
 
+### Triage evidence boundary
+
+`opl-relay triage evidence <email-store://...> --policy-ref <ref>` reads one
+already-synced message through the local email store and returns the portable
+`opl-relay-mail-triage-evidence.v1` envelope. It carries the stable source
+reference, original-message readback, local-read freshness, explicit policy
+references and their deterministic digest.
+
+The envelope is evidence-only: it does not prioritize a message, infer a
+personal decision, or expose a mailbox-provider write route. Its risk fields
+always require human review, forbid external writes, and report provider write
+as unreachable. `opl-relay triage validate --input <file|->` validates that
+provenance, policy digest, and read-only boundary before Persona or another
+consumer uses the envelope.
+
 ## OPL App Integration
 
 Relay and Persona are not OPL standard agents. OPL App should consume them

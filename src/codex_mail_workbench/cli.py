@@ -44,6 +44,7 @@ from .store import (
     search_messages,
 )
 from .sync import sync_account
+from .triage import build_triage_evidence, validate_triage_evidence
 from .workspace import initialize_workspace, inspect_workspace, migrate_workspace
 
 
@@ -863,6 +864,25 @@ def cmd_persona_draft_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_triage_evidence(args: argparse.Namespace) -> int:
+    payload = build_triage_evidence(
+        mail_db_path=Path(args.db).expanduser(),
+        source_ref=args.source_ref,
+        policy_refs=list(args.policy_ref),
+    )
+    emit({"ok": True, "evidence": payload}, as_json=args.json)
+    return 0
+
+
+def cmd_triage_validate(args: argparse.Namespace) -> int:
+    raw = sys.stdin.read() if args.input == "-" else Path(args.input).expanduser().read_text(
+        encoding="utf-8"
+    )
+    payload = json.loads(raw)
+    emit(validate_triage_evidence(payload), as_json=args.json)
+    return 0
+
+
 def parse_recipients(values: list[str] | None, *, required: bool = False) -> list[Recipient]:
     parsed = [
         Recipient(address=address.strip(), name=name.strip())
@@ -1118,6 +1138,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     persona_context.add_argument("--input", required=True)
     persona_context.set_defaults(func=cmd_persona_draft_context)
+
+    triage = sub.add_parser("triage", help="生成或验证只读邮件 triage 证据")
+    triage_actions = triage.add_subparsers(dest="triage_action", required=True)
+    triage_evidence = triage_actions.add_parser(
+        "evidence",
+        help="从 email-store:// 邮件证据生成不可写邮箱的 triage envelope",
+    )
+    triage_evidence.add_argument("source_ref")
+    triage_evidence.add_argument("--policy-ref", action="append", required=True)
+    triage_evidence.set_defaults(func=cmd_triage_evidence)
+    triage_validate = triage_actions.add_parser(
+        "validate",
+        help="验证 triage evidence 的 provenance、policy digest 与写入边界",
+    )
+    triage_validate.add_argument("--input", required=True)
+    triage_validate.set_defaults(func=cmd_triage_validate)
 
     workspace = sub.add_parser("workspace", help="检查、初始化或迁移 Relay workspace")
     workspace_actions = workspace.add_subparsers(dest="workspace_action", required=True)
