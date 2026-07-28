@@ -77,4 +77,25 @@ sending. Let the user review the draft in Apple Mail, run `draft inspect` again
 after approval, and pass only the current fingerprint to `draft send`. Any
 content change invalidates approval. Never retry an `unknown` send result.
 
+## Persona Draft Handoff
+
+When Persona has produced a user-approved `opl-persona-proposal.v1` bundle with
+one `mail.draft_context` proposal targeting `opl-relay.draft.context`, Relay can
+create the review draft while keeping send authorization separate:
+
+```bash
+opl-relay --json persona draft-create \
+  --input ./approved-persona-proposal.json \
+  --account work \
+  --to 'Recipient <recipient@example.test>'
+```
+
+The proposal must contain non-empty `source_refs`, `approval.status=approved`,
+an `approval_ref`, `approval.required=true`, and
+`approval.external_write_allowed=false`. Its payload is limited to
+`subject_hint`, `body_context`, and `tags`; account and recipients remain
+Relay-owned inputs. This command only saves an Apple Mail draft and returns
+`send_allowed=false`. Inspect the returned draft in Apple Mail before any
+separate, fingerprint-bound `draft send` operation.
+
 Mailbox delete, archive, move, and mark are outside the current Relay contract.
