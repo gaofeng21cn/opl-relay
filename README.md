@@ -1,45 +1,141 @@
-# OPL Relay
+<p align="center">
+  <img src="assets/branding/opl-relay-logo.png" alt="OPL Relay logo" width="132" />
+</p>
 
-OPL Relay is a local-first personal communication relay for Codex and OPL. It
-syncs IMAP mail into a private raw EML SQLite store, maintains evidence-backed
-relationship memory, indexes selected Obsidian Markdown as a read-only source,
-and manages review-gated Apple Mail drafts.
+<p align="center">
+  <a href="./README.md"><strong>English</strong></a> | <a href="./README.zh-CN.md">中文</a>
+</p>
 
-This repository is the direct successor to Codex Mail Workbench. The Python
-module and `codex-mail` command remain compatible while the product, package,
-plugin, and repository identity use `opl-relay`.
+<h1 align="center">OPL Relay</h1>
 
-The cross-repository design authority is maintained at
-`opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
-repository. Use it before changing Relay's ownership boundary or adding a new
-adapter.
+<p align="center"><strong>A private, evidence-backed communication layer for Codex and One Person Lab</strong></p>
+<p align="center">Mail evidence · Relationship context · Approved memory · Obsidian context · Apple Mail review</p>
 
-## Runtime Model
+OPL Relay helps Codex work with your academic and professional email without
+turning a source checkout or plugin cache into a personal-data folder. It keeps
+the original messages as evidence, builds reusable relationship context, and
+routes drafts through Apple Mail for human review before any send.
 
-Relay separates three surfaces:
+It is the communication module in the OPL Persona system, but it can also be
+installed and used on its own.
 
-- installation: replaceable code, plugin manifest, and Skills;
-- data root: accounts, mail, drafts, memory, sync cursors, and indexes;
-- workspace: one Profile Workspace containing profile, policies, context,
-  templates, exports, and module data subtrees.
+## What You Can Ask It To Do
 
-Use `OPL_PROFILE_WORKSPACE` to select the shared user Profile Workspace. Relay
-always stores its state in `<profile>/data/relay`; no Relay-specific or legacy
-environment-variable fallback is consulted.
+- "Review the last three days of mail and tell me what needs a decision."
+- "Find my previous exchanges with this person and draft a reply in the same
+  relationship context."
+- "Create the reply in Apple Mail. Let me review it there, and do not send it."
+- "Show the evidence behind this relationship memory before I approve it."
+- "Use the approved Persona proposal to create a mail draft, without sending."
+
+## Core Capabilities
+
+**Evidence-first mail**
+
+Relay synchronizes configured IMAP folders into a private local SQLite store.
+Search results and context use stable `email-store://` references so a draft can
+be traced back to the source message.
+
+**Relationship context with approval**
+
+Long-lived memory is proposed with source evidence. It becomes active drafting
+context only after explicit approval.
+
+**Read-only Obsidian context**
+
+Selected Markdown paths can be indexed as a read-only source. Relay never
+writes back to the vault.
+
+**Apple Mail review**
+
+Relay creates a real Apple Mail draft, reads it back, and binds approval to its
+current fingerprint. Editing the draft invalidates an earlier approval.
+
+**Persona handoff**
+
+OPL Persona can hand an approved, evidence-linked mail context to Relay. Relay
+still owns the account, recipients, Apple Mail draft, and separate send gate.
+
+## How The Pieces Fit
+
+| Surface | What it contains | Who manages it |
+| --- | --- | --- |
+| Git repository | Source code, tests, Plugin files, Skills, and Package descriptor | Git / maintainers |
+| Codex Plugin snapshot | Installed communication instructions and carrier metadata | Codex |
+| Relay engine | The `opl-relay` CLI and local mail implementation | Local installation today; OPL Framework in the target model |
+| Profile Workspace | Mail databases, account references, approved memory, policies, and Persona state | The user |
+
+The selected Profile Workspace is the only user-data root:
+
+```text
+~/OPL/profiles/<profile>/
+  profile/
+  policies/
+  context/
+  templates/
+  exports/
+  data/
+    relay/
+    persona/
+```
+
+Relay always uses `<profile>/data/relay`. Reinstalling or updating code must not
+move, replace, or publish that directory.
+
+## Install The Codex Plugin From GitHub
+
+The public repository can be added as a Git-backed Codex Marketplace:
 
 ```bash
+codex plugin marketplace add gaofeng21cn/opl-relay --ref main --json
+codex plugin list --marketplace opl-relay --available --json
+codex plugin add opl-relay@opl-relay --json
+codex plugin list --marketplace opl-relay --json
+```
+
+To refresh the Git marketplace and reinstall the current Plugin snapshot:
+
+```bash
+codex plugin marketplace upgrade opl-relay --json
+codex plugin remove opl-relay@opl-relay --json
+codex plugin add opl-relay@opl-relay --json
+```
+
+Start a new Codex task after installation so the new Plugin snapshot is loaded.
+
+> **Current boundary:** this Marketplace path installs the Codex Plugin carrier.
+> It does not yet install or update the Python engine as a complete
+> OPL-managed Package. Install the engine from source for current local use.
+
+## Run The Engine Locally
+
+Requirements: macOS, Python 3.11 or later, Apple Mail for draft review, and an
+IMAP account.
+
+```bash
+git clone https://github.com/gaofeng21cn/opl-relay.git
+cd opl-relay
 make install-local
-opl-relay --json doctor
+
+export OPL_PROFILE_WORKSPACE="$HOME/OPL/profiles/my-profile"
 opl-relay --json workspace init
+opl-relay --json doctor
 ```
 
-The compatibility command is equivalent:
+Create private configuration under the Profile Workspace, never in the clone:
 
 ```bash
-codex-mail --json doctor
+cp config/accounts.example.toml \
+  "$OPL_PROFILE_WORKSPACE/data/relay/accounts.toml"
+cp config/sources.example.toml \
+  "$OPL_PROFILE_WORKSPACE/data/relay/sources.toml"
 ```
 
-## Core Workflow
+Edit those private copies, then store IMAP secrets in macOS Keychain. Relay
+currently reads them from Keychain service `codex-mail-workbench`; credentials
+never enter the Profile Workspace or Git.
+
+## A Typical Workflow
 
 ```bash
 opl-relay --json accounts
@@ -50,10 +146,7 @@ opl-relay --json read 'email-store://...'
 opl-relay --json context build --person "Professor Example" --query "invitation"
 ```
 
-Relationship memory is proposed with evidence and becomes active only after
-explicit approval. Obsidian indexing is read-only.
-
-For Apple Mail drafts:
+Create and inspect an Apple Mail draft:
 
 ```bash
 opl-relay --json draft create \
@@ -61,67 +154,66 @@ opl-relay --json draft create \
   --to 'Recipient <recipient@example.test>' \
   --subject 'Subject' \
   --body-file ./draft.txt
+
 opl-relay --json draft inspect 'mail-draft://apple-mail/work/UUID'
 opl-relay --json draft open 'mail-draft://apple-mail/work/UUID'
 ```
 
-After the user reviews and approves the current draft, inspect again and use
-only the returned current fingerprint:
+Sending is a separate, explicit action. Inspect the current draft after review
+and use only the fingerprint returned by that readback. Any content change
+invalidates the earlier approval, and an unknown send result is never retried
+automatically.
 
-```bash
-opl-relay --json draft send \
-  'mail-draft://apple-mail/work/UUID' \
-  --approval 'sha256:CURRENT_FINGERPRINT'
+## OPL App Distribution Status
+
+Relay already declares an OPL capability Package and role-neutral App
+contributions. The repository is being prepared for the target managed
+lifecycle:
+
+```text
+OPL App
+  -> OPL Framework action
+  -> repository index selects a compatible release
+  -> immutable payload and digest are verified
+  -> install / update / repair / uninstall
+  -> Relay starts with the selected Profile Workspace
 ```
 
-Any content change invalidates approval. An unknown send result is never
-automatically retried.
+That managed channel is **not published yet**. The repository URL inside
+`opl-package.json` is source provenance, not an update feed, and GitHub source
+commits are not themselves immutable OPL release payloads. See
+[Distribution](docs/distribution.md) for the exact current and target states.
 
-Persona can hand off a user-approved mail context to Relay for review in Apple
-Mail. The handoff creates a draft only; it never sends:
+## Safety Boundary
 
-```bash
-opl-relay --json persona draft-create \
-  --input ./approved-persona-proposal.json \
-  --account work \
-  --to 'Recipient <recipient@example.test>'
-```
-
-Relay accepts only an `opl-persona-proposal.v1` `mail.draft_context` proposal
-with `approval.status=approved`, an `approval_ref`, non-empty `source_refs`,
-and `approval.external_write_allowed=false`. The account and recipients are
-Relay-owned inputs. Review the resulting Apple Mail draft, then use the
-separate fingerprint-bound `draft inspect`/`draft send` flow if sending is
-explicitly authorized.
-
-## Plugin
-
-The installable Codex Plugin scaffold is under
-[`plugins/opl-relay`](plugins/opl-relay). It ships capability instructions and
-the carrier-root [`opl-package.json`](plugins/opl-relay/opl-package.json) owner
-descriptor, but never owns user data or runtime truth. The OPL Package exposes
-the same capability through role-neutral App contributions.
-
-## Privacy And Safety
-
-Never commit real account configuration, SQLite files, raw mail, sync cursors,
-relationship memory, Obsidian paths, private policies, or credentials. Secrets
-remain in macOS Keychain service `codex-mail-workbench` for upgrade
-compatibility.
-
-Relay is read-first. Delete, archive, move, and mark are not exposed. Sending is
-limited to the exact review-gated Apple Mail draft lifecycle.
+- User mail, account configuration, SQLite files, raw EML, sync cursors,
+  private policies, Obsidian paths, and credentials never belong in Git or a
+  Plugin cache.
+- Relay is read-first. Delete, archive, move, and mark are not exposed.
+- A Persona approval does not authorize mail sending.
+- Apple Mail draft review and fingerprint-bound send approval remain separate.
+- The `codex-mail` command is retained as a CLI alias; new integrations should
+  use `opl-relay`.
 
 ## Documentation
 
+- [Distribution and update model](docs/distribution.md)
 - [Architecture](docs/architecture.md)
-- [Data and workspace](docs/local-profile.md)
+- [Profile Workspace](docs/local-profile.md)
 - [Runtime contract](docs/workspace-contract.md)
 - [Relay, Persona, and OPL App](docs/product-architecture.md)
 
-## Verification
+## Development
 
 ```bash
+python3 -m pip install -e . pytest
 make test
-python3 /path/to/plugin-creator/scripts/validate_plugin.py plugins/opl-relay
+make validate-package
 ```
+
+The repository CI also validates the Plugin structure and exercises discovery
+and installation through an isolated local Codex Marketplace.
+
+## License
+
+[MIT](LICENSE)
