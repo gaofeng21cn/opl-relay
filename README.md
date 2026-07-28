@@ -16,8 +16,9 @@ turning a source checkout or plugin cache into a personal-data folder. It keeps
 the original messages as evidence, builds reusable relationship context, and
 routes drafts through Apple Mail for human review before any send.
 
-It is the communication module in the OPL Persona system, but it can also be
-installed and used on its own.
+OPL Relay is a standalone communication product. It can be installed and used
+on its own, and it collaborates with OPL Persona through explicit, reviewed
+handoffs.
 
 Relay has one public product, Package, Plugin, Skill, and CLI identity:
 `opl-relay`. The internal Python module name is not another user-facing mail
