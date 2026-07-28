@@ -3,7 +3,7 @@
   "package_id": "opl-relay",
   "display_name": "OPL Relay",
   "publisher": "one-person-lab",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "source": "first_party",
   "package_role": "framework_capability_package",
   "source_repo": "https://github.com/gaofeng21cn/opl-relay",
@@ -32,9 +32,10 @@
     "canonicalization": "ordered_path_nul_file_bytes",
     "paths": [
       ".codex-plugin/plugin.json",
+      "assets/icon.png",
       "skills/opl-relay/SKILL.md"
     ],
-    "digest": "sha256:88d9b0f271d0c686cba1f304da3001572c997e8b54b8c7027d3575860fe256e8"
+    "digest": "sha256:2ca91b30365c20ed878611beeb54d076d916432d7cdc1407a7ef7bfbfecb92c6"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

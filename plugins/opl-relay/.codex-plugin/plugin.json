@@ -1,6 +1,6 @@
 {
   "name": "opl-relay",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Local-first mail, relationship memory, Obsidian context, and review-gated drafting for Codex.",
   "author": {
     "name": "OPL"
@@ -22,10 +22,14 @@
       "Obsidian knowledge",
       "Review-gated drafting"
     ],
+    "websiteURL": "https://github.com/gaofeng21cn/opl-relay",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png",
     "defaultPrompt": [
       "检查最近三天的邮件并告诉我需要决定什么。",
       "结合往来邮件和记忆，为这个联系人起草回复。",
       "在 Apple Mail 建立草稿，等我审核后再发送。"
-    ]
+    ],
+    "brandColor": "#1260E8"
   }
 }

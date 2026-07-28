@@ -1,5 +1,6 @@
 import hashlib
 import json
+import struct
 import tomllib
 from pathlib import Path
 
@@ -11,6 +12,7 @@ PLUGIN_ROOT = ROOT / "plugins" / "opl-relay"
 PACKAGE_PATH = PLUGIN_ROOT / "opl-package.json"
 LEGACY_PACKAGE_PATH = ROOT / "packages" / "opl-relay" / "package.json"
 PLUGIN_PATH = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
+ICON_PATH = PLUGIN_ROOT / "assets" / "icon.png"
 SKILL_PATH = PLUGIN_ROOT / "skills" / "opl-relay" / "SKILL.md"
 
 CAPABILITY_IDS = {
@@ -86,6 +88,21 @@ def test_package_content_lock_matches_plugin_bytes() -> None:
         digest.update((PLUGIN_ROOT / relative_path).read_bytes())
 
     assert content_lock["digest"] == f"sha256:{digest.hexdigest()}"
+
+
+def test_plugin_uses_a_dedicated_small_format_icon() -> None:
+    plugin = load_json(PLUGIN_PATH)
+    interface = plugin["interface"]
+    icon = ICON_PATH.read_bytes()
+
+    assert interface["composerIcon"] == "./assets/icon.png"
+    assert interface["logo"] == "./assets/icon.png"
+    assert interface["websiteURL"] == "https://github.com/gaofeng21cn/opl-relay"
+    assert interface["brandColor"] == "#1260E8"
+    assert icon.startswith(b"\x89PNG\r\n\x1a\n")
+    assert struct.unpack(">II", icon[16:24]) == (512, 512)
+    assert icon[25] in {4, 6} or (icon[25] == 3 and b"tRNS" in icon)
+    assert "assets/icon.png" in load_json(PACKAGE_PATH)["content_lock"]["paths"]
 
 
 def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions() -> None:
