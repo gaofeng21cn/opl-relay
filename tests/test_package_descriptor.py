@@ -1,10 +1,13 @@
 import hashlib
 import json
+import os
+import subprocess
 import struct
 import tomllib
 from pathlib import Path
 
 from codex_mail_workbench import __version__
+from codex_mail_workbench.workspace import initialize_workspace
 
 
 ROOT = Path(__file__).parents[1]
@@ -137,10 +140,11 @@ def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions()
     assert abi == {
         "schema_version": "opl-package-app-contribution-cli.v1",
         "transport": "stdin_json_stdout_json",
-        "argv": ["opl-relay", "--json", "app-contribution"],
+        "argv": ["./bin/opl-relay", "--json", "app-contribution"],
         "request_schema": "opl-package-app-contribution-request.v1",
         "response_schema": "opl-package-app-contribution-response.v1",
     }
+    assert abi["argv"][0].startswith("./bin/")
     commands_by_id = {
         item["command_id"]: item for item in contributions["commands"]
     }
@@ -155,6 +159,41 @@ def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions()
     serialized = json.dumps(contributions)
     assert "standard_agent" not in serialized
     assert not ({"component", "code", "path", "url"} & set(contributions))
+
+
+def test_app_contribution_abi_executes_from_the_plugin_carrier(tmp_path: Path) -> None:
+    abi = load_json(PACKAGE_PATH)["codex_surface"]["app_contribution_abi"]
+    profile_workspace = tmp_path / "profile"
+    initialize_workspace(profile_workspace)
+
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env["OPL_PROFILE_WORKSPACE"] = str(profile_workspace)
+    result = subprocess.run(
+        abi["argv"],
+        cwd=PLUGIN_ROOT,
+        input=json.dumps(
+            {
+                "schema_version": "opl-package-app-contribution-request.v1",
+                "operation": "read",
+                "ref": "communications.mail.v1#recent",
+                "input": {},
+            }
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "schema_version": "opl-package-app-contribution-response.v1",
+        "ok": True,
+        "ref": "communications.mail.v1#recent",
+        "operation": "read",
+        "result": {"messages": []},
+    }
 
 
 def test_repo_marketplace_exposes_the_plugin_without_owning_user_data() -> None:
