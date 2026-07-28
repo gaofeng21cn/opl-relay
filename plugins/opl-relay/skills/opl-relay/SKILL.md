@@ -12,10 +12,12 @@ instructions only; it never treats the plugin directory as user storage.
 
 1. Prefer `opl-relay`; use the compatibility command `codex-mail` when needed.
 2. Run `opl-relay --json doctor` before mailbox work.
-3. Treat `state_dir` as the user-owned long-lived data root and
-   `workspace.path` as the active human-editable context.
-4. Honor `OPL_RELAY_HOME` and `OPL_RELAY_WORKSPACE`. `CODEX_MAIL_HOME` is a
-   compatibility fallback, not the new public contract.
+3. Treat `profile_workspace` as the user's single Profile Workspace, Relay's
+   `state_dir` as its `data/relay` child, and `workspace.path` as that same
+   profile root.
+4. Honor `OPL_PROFILE_WORKSPACE`. `OPL_RELAY_HOME` and
+   `OPL_RELAY_WORKSPACE` are compatibility overrides; `CODEX_MAIL_HOME` is a
+   legacy fallback, not the new public contract.
 5. Read `<workspace>/AGENTS.md` when it exists, then follow its profile,
    policies, context, skills, and templates references.
 

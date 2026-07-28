@@ -5,43 +5,47 @@ Do not place new private state under a Git checkout or plugin directory.
 
 ## Data Root
 
-`OPL_RELAY_HOME` selects the durable data root:
+The default user-owned Profile Workspace is:
 
 ```text
-~/.opl-relay/
-  accounts.toml
-  mail.sqlite
-  drafts.sqlite
-  memory.sqlite
-  sources.toml
-  sync-state/
-  workspaces/
+~/OPL/profiles/<user>/
+  AGENTS.md
+  profile/
+  policies/
+  context/
+  templates/
+  exports/
+  data/
+    relay/
+    persona/
 ```
 
-For an existing installation, `CODEX_MAIL_HOME` remains supported. When neither
-variable is set, Relay uses an existing `~/.codex-mail-workbench` runtime before
-starting a new `~/.opl-relay` runtime. This preserves existing accounts, mail,
-memory, drafts, and cursors without an implicit data move.
+Relay stores accounts, SQLite databases, sources, and sync state under
+`<profile>/data/relay`. `OPL_RELAY_HOME` selects an explicit data-root override;
+`CODEX_MAIL_HOME` and existing `~/.codex-mail-workbench` remain supported. Old
+data is never moved implicitly.
 
 Credentials remain in macOS Keychain service `codex-mail-workbench`. The service
 name is intentionally unchanged so an upgrade does not invalidate credentials.
 
 ## Workspace
 
-`OPL_RELAY_WORKSPACE` selects the active human-editable workspace. Its default is
-`~/.opl-relay/workspaces/default`.
+`OPL_PROFILE_WORKSPACE` selects the active Profile Workspace.
+`OPL_RELAY_WORKSPACE` may override it for compatibility. Existing
+`~/.opl-relay/workspaces/default` is retained as a legacy fallback until an
+explicit migration is approved.
 
 ```text
 <workspace>/
-  .opl-relay-workspace.json
+  .opl-profile-workspace.json
   AGENTS.md
-  profile.md
-  skills/
+  profile/
   policies/
   context/
   templates/
-  notes/
   exports/
+  data/relay/
+  data/persona/
 ```
 
 Initialize or inspect it:
@@ -51,10 +55,10 @@ opl-relay --json workspace init
 opl-relay --json workspace inspect
 ```
 
-Select a project workspace without moving the mail database:
+Select a Profile Workspace without moving the mail database:
 
 ```bash
-export OPL_RELAY_WORKSPACE=/path/to/project/.opl-relay
+export OPL_PROFILE_WORKSPACE=/path/to/profile
 opl-relay --json doctor
 ```
 
@@ -63,9 +67,9 @@ opl-relay --json doctor
 Preview first, then copy the supported human-editable overlay:
 
 ```bash
-opl-relay --workspace ~/.opl-relay/workspaces/default \
+opl-relay --workspace ~/OPL/profiles/<user> \
   --json workspace migrate --from /path/to/old/checkout/local
-opl-relay --workspace ~/.opl-relay/workspaces/default \
+opl-relay --workspace ~/OPL/profiles/<user> \
   --json workspace migrate --from /path/to/old/checkout/local --apply
 ```
 

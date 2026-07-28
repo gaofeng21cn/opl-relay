@@ -7,11 +7,13 @@ from pathlib import Path
 from typing import Any
 
 
-WORKSPACE_SCHEMA = "opl_relay_workspace.v1"
-MARKER_NAME = ".opl-relay-workspace.json"
+WORKSPACE_SCHEMA = "opl_profile_workspace.v1"
+MARKER_NAME = ".opl-profile-workspace.json"
+LEGACY_MARKER_NAMES = (".opl-relay-workspace.json",)
 ROOT_FILES = ("AGENTS.md", "profile.md")
-CONTENT_DIRS = ("skills", "policies", "context", "templates", "notes")
-MANAGED_DIRS = (*CONTENT_DIRS, "exports")
+CONTENT_DIRS = ("profile", "policies", "context", "templates")
+LEGACY_CONTENT_DIRS = ("skills", "notes")
+MANAGED_DIRS = (*CONTENT_DIRS, "exports", "data/relay", "data/persona")
 PRIVATE_STATE_NAMES = {
     "accounts.toml",
     "drafts.sqlite",
@@ -37,20 +39,25 @@ def _sha256(path: Path) -> str:
 def inspect_workspace(path: Path) -> dict[str, Any]:
     root = _resolve(path)
     marker = root / MARKER_NAME
+    legacy_marker = next(
+        (root / name for name in LEGACY_MARKER_NAMES if (root / name).is_file()),
+        None,
+    )
+    active_marker = marker if marker.is_file() else legacy_marker
     marker_error = ""
     schema = ""
-    if marker.is_file():
+    if active_marker is not None:
         try:
-            payload = json.loads(marker.read_text(encoding="utf-8"))
+            payload = json.loads(active_marker.read_text(encoding="utf-8"))
             schema = str(payload.get("schema") or "")
-            if schema != WORKSPACE_SCHEMA:
+            if schema not in {WORKSPACE_SCHEMA, "opl_relay_workspace.v1"}:
                 marker_error = f"unsupported workspace schema: {schema or '<missing>'}"
         except (OSError, json.JSONDecodeError) as exc:
             marker_error = str(exc)
 
     present = [
         name
-        for name in (*ROOT_FILES, *MANAGED_DIRS)
+        for name in (*ROOT_FILES, *MANAGED_DIRS, *LEGACY_CONTENT_DIRS)
         if (root / name).exists()
     ]
     return {
@@ -58,9 +65,11 @@ def inspect_workspace(path: Path) -> dict[str, Any]:
         "exists": root.is_dir(),
         "marker_path": str(marker),
         "marker_exists": marker.is_file(),
+        "legacy_marker_path": str(legacy_marker) if legacy_marker else "",
+        "legacy_marker_exists": legacy_marker is not None,
         "schema": schema,
         "marker_error": marker_error,
-        "ready": root.is_dir() and marker.is_file() and not marker_error,
+        "ready": root.is_dir() and active_marker is not None and not marker_error,
         "present": present,
     }
 
@@ -69,7 +78,7 @@ def initialize_workspace(path: Path) -> dict[str, Any]:
     root = _resolve(path)
     root.mkdir(parents=True, exist_ok=True)
     for name in MANAGED_DIRS:
-        (root / name).mkdir(exist_ok=True)
+        (root / name).mkdir(parents=True, exist_ok=True)
     marker = root / MARKER_NAME
     expected = json.dumps({"schema": WORKSPACE_SCHEMA}, indent=2, sort_keys=True) + "\n"
     if marker.exists() and marker.read_text(encoding="utf-8") != expected:
@@ -93,7 +102,7 @@ def _migration_files(source: Path) -> tuple[list[tuple[Path, Path]], list[str]]:
         if item.name in ROOT_FILES and item.is_file():
             files.append((item, Path(item.name)))
             continue
-        if item.name in CONTENT_DIRS and item.is_dir():
+        if item.name in (*CONTENT_DIRS, *LEGACY_CONTENT_DIRS) and item.is_dir():
             for child in sorted(item.rglob("*")):
                 if child.is_symlink():
                     raise ValueError(f"workspace migration does not follow symlinks: {child}")

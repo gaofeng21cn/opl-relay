@@ -20,12 +20,19 @@ Data root precedence:
 2. legacy `CODEX_MAIL_HOME`
 3. `~/.opl-relay` when it contains Relay runtime state
 4. existing `~/.codex-mail-workbench`
-5. new `~/.opl-relay`
+5. `OPL_PROFILE_WORKSPACE/data/relay`
+6. new `~/OPL/profiles/<user>/data/relay`
 
-Workspace precedence:
+Profile Workspace precedence:
 
 1. `OPL_RELAY_WORKSPACE`
-2. `~/.opl-relay/workspaces/default`
+2. `OPL_PROFILE_WORKSPACE`
+3. existing `~/.opl-relay/workspaces/default` (legacy read-only fallback)
+4. `~/OPL/profiles/<user>`
+
+Relay's default data directory is `<profile>/data/relay`. `OPL_RELAY_HOME`
+remains an explicit compatibility override; it does not define the user's
+Profile Workspace.
 
 The active paths are visible in `opl-relay --json doctor`. OPL App should pass
 both paths explicitly when launching a Relay runtime rather than relying on its

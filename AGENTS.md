@@ -2,10 +2,14 @@
 
 本仓持有 OPL Relay 的 local-first 邮件引擎、Codex Plugin、SQLite raw EML store、read-first CLI 和受审核约束的 Apple Mail 草稿实现。
 
-- 真实账户、邮件、同步游标、私有 profile 和凭据不得进入 Git；新运行态必须分离 `OPL_RELAY_HOME` 数据根与 `OPL_RELAY_WORKSPACE` 工作空间，不得把插件或 checkout 当作数据 authority。
+- 真实账户、邮件、同步游标、私有 profile 和凭据不得进入 Git；默认运行态属于
+  一个用户拥有的 `OPL_PROFILE_WORKSPACE`，Relay 使用其中的 `data/relay`，
+  `OPL_RELAY_HOME` 与 `OPL_RELAY_WORKSPACE` 仅作兼容性覆盖，不得把插件或
+  checkout 当作数据 authority。
 - 当前仓库不提供 delete、archive、move 或 mark。新增邮箱写操作必须有独立授权、合同和测试边界。
 - 优先复用 `opl-relay`，保留 `codex-mail` 兼容；不要绕过稳定的 `email-store://` identity 直接拼接数据库事实。
-- 默认验证运行 `make test` 或 `python -m pytest`；运行态结论还须使用明确的 `OPL_RELAY_HOME` 和 `OPL_RELAY_WORKSPACE` 做 fresh CLI readback。
+- 默认验证运行 `make test` 或 `python -m pytest`；运行态结论还须使用明确的
+  `OPL_PROFILE_WORKSPACE`（必要时再覆盖模块路径）做 fresh CLI readback。
 
 <!-- CODEGRAPH_START -->
 ## CodeGraph

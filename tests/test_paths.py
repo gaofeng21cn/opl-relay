@@ -37,7 +37,7 @@ def test_existing_legacy_default_is_not_abandoned(monkeypatch, tmp_path: Path) -
 
     assert paths.default_state_dir() == legacy
     assert paths.state_dir_source() == "legacy_default"
-    assert paths.default_workspace_dir() == tmp_path / ".opl-relay" / "workspaces" / "default"
+    assert paths.default_workspace_dir() == tmp_path / "OPL" / "profiles" / tmp_path.name
 
 
 def test_new_install_uses_relay_home(monkeypatch, tmp_path: Path) -> None:
@@ -45,5 +45,18 @@ def test_new_install_uses_relay_home(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CODEX_MAIL_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    assert paths.default_state_dir() == tmp_path / ".opl-relay"
+    assert paths.default_state_dir() == tmp_path / "OPL" / "profiles" / tmp_path.name / "data" / "relay"
     assert paths.state_dir_source() == "current_default"
+
+
+def test_profile_workspace_is_shared_default(monkeypatch, tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    monkeypatch.delenv("OPL_RELAY_HOME", raising=False)
+    monkeypatch.delenv("CODEX_MAIL_HOME", raising=False)
+    monkeypatch.delenv("OPL_RELAY_WORKSPACE", raising=False)
+    monkeypatch.setenv("OPL_PROFILE_WORKSPACE", str(profile))
+
+    assert paths.default_profile_workspace() == profile
+    assert paths.default_state_dir() == profile / "data" / "relay"
+    assert paths.default_workspace_dir() == profile
+    assert paths.workspace_dir_source() == "OPL_PROFILE_WORKSPACE"

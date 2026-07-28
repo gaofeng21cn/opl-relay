@@ -66,10 +66,12 @@ the plugin manifest and Skill, while deliberately excluding the descriptor
 itself to avoid a recursive digest. App contributions contain declarative views
 and opaque action references only; they never embed executable UI code.
 
-All three surfaces resolve the same user-owned runtime:
+All three surfaces resolve the same user-owned Profile Workspace:
 
-- `OPL_RELAY_HOME` is the long-lived private data authority;
-- `OPL_RELAY_WORKSPACE` is the replaceable human context;
+- `OPL_PROFILE_WORKSPACE` is the single profile root;
+- Relay's durable state is `<profile>/data/relay`;
+- Persona's durable state is the sibling `<profile>/data/persona`;
+- `OPL_RELAY_HOME` and `OPL_RELAY_WORKSPACE` remain compatibility overrides;
 - a source checkout, installed Package, or Codex plugin cache is never either
   authority.
 

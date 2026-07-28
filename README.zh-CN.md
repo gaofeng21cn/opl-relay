@@ -12,9 +12,11 @@ Markdown 作为只读知识源，并通过 Apple Mail 完成“起草、人工�
 
 - 安装目录：代码、插件 manifest、Skills，可随时替换或升级。
 - 用户数据根：账号、邮件、草稿 ledger、记忆、同步游标和派生索引。
-- 工作空间：profile、policies、context、templates、notes 和 exports。
+- 工作空间：一个包含 profile、policies、context、templates、exports 及模块
+  data 子树的 Profile Workspace。
 
-新合同使用 `OPL_RELAY_HOME` 与 `OPL_RELAY_WORKSPACE`。已有
+新合同使用共享的 `OPL_PROFILE_WORKSPACE`。`OPL_RELAY_HOME` 与
+`OPL_RELAY_WORKSPACE` 仍是兼容性覆盖。已有
 `CODEX_MAIL_HOME` 和 `~/.codex-mail-workbench` 数据继续可读，不做隐式搬迁。
 
 ```bash

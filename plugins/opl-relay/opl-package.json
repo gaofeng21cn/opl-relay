@@ -34,7 +34,7 @@
       ".codex-plugin/plugin.json",
       "skills/opl-relay/SKILL.md"
     ],
-    "digest": "sha256:6757a5323e0dda7c3b0df3d3ebecd2276d0032aab75b9084fe1f280431ea7b9c"
+    "digest": "sha256:513d30a467d485f79e1377836c22960e5b492256f8f78fd121d598f2d3044388"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

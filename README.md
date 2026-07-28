@@ -20,9 +20,11 @@ Relay separates three surfaces:
 
 - installation: replaceable code, plugin manifest, and Skills;
 - data root: accounts, mail, drafts, memory, sync cursors, and indexes;
-- workspace: profile, policies, context, templates, notes, and exports.
+- workspace: one Profile Workspace containing profile, policies, context,
+  templates, exports, and module data subtrees.
 
-Use `OPL_RELAY_HOME` and `OPL_RELAY_WORKSPACE` to select the last two. Existing
+Use `OPL_PROFILE_WORKSPACE` to select the shared user Profile Workspace.
+`OPL_RELAY_HOME` and `OPL_RELAY_WORKSPACE` remain compatibility overrides. Existing
 `CODEX_MAIL_HOME` and `~/.codex-mail-workbench` installs remain readable.
 
 ```bash
