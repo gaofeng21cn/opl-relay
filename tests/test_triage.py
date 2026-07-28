@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import io
 import json
 from pathlib import Path
 
@@ -143,3 +144,44 @@ def test_triage_cli_evidence_and_validate_are_read_only(tmp_path: Path, capsys) 
     input_path.write_text(json.dumps(envelope), encoding="utf-8")
     assert cli.main(["--json", "triage", "validate", "--input", str(input_path)]) == 0
     assert json.loads(capsys.readouterr().out)["provider_write"] == "unreachable"
+
+
+def test_triage_cli_evidence_output_pipes_to_validate_without_writing(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    db = tmp_path / "mail.sqlite"
+    source_ref = seed_message(db)
+    before = db.read_bytes()
+
+    assert cli.main(
+        [
+            "--json",
+            "--db",
+            str(db),
+            "triage",
+            "evidence",
+            source_ref,
+            "--policy-ref",
+            "policy://relay/triage/v1",
+        ]
+    ) == 0
+    evidence_output = capsys.readouterr().out
+    assert json.loads(evidence_output)["ok"] is True
+    assert db.read_bytes() == before
+
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(evidence_output))
+    assert cli.main(["--json", "triage", "validate", "--input", "-"]) == 0
+    assert json.loads(capsys.readouterr().out)["provider_write"] == "unreachable"
+    assert db.read_bytes() == before
+
+
+def test_triage_cli_rejects_unsuccessful_evidence_wrapper(tmp_path: Path, capsys, monkeypatch) -> None:
+    db = tmp_path / "mail.sqlite"
+    source_ref = seed_message(db)
+    before = db.read_bytes()
+    failed_wrapper = {"ok": False, "evidence": evidence(db, source_ref)}
+
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(json.dumps(failed_wrapper)))
+    assert cli.main(["--json", "triage", "validate", "--input", "-"]) == 1
+    assert "must be successful" in json.loads(capsys.readouterr().err)["error"]
+    assert db.read_bytes() == before

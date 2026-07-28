@@ -86,7 +86,14 @@ personal decision, or expose a mailbox-provider write route. Its risk fields
 always require human review, forbid external writes, and report provider write
 as unreachable. `opl-relay triage validate --input <file|->` validates that
 provenance, policy digest, and read-only boundary before Persona or another
-consumer uses the envelope.
+consumer uses the envelope. It accepts either the bare evidence envelope or
+the exact successful JSON wrapper emitted by `triage evidence`, so the
+read-only pipeline can be composed directly:
+
+```bash
+opl-relay --json triage evidence 'email-store://…' --policy-ref 'policy://…' \
+  | opl-relay --json triage validate --input -
+```
 
 ## OPL App Integration
 

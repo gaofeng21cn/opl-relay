@@ -874,11 +874,22 @@ def cmd_triage_evidence(args: argparse.Namespace) -> int:
     return 0
 
 
+def _triage_evidence_from_cli_output(value: object) -> object:
+    """Accept the exact successful wrapper emitted by ``triage evidence``."""
+    if not isinstance(value, dict) or set(value) != {"ok", "evidence"}:
+        return value
+    if value["ok"] is not True:
+        raise ValueError("triage evidence command result must be successful")
+    if not isinstance(value["evidence"], dict):
+        raise ValueError("triage evidence command result must contain an evidence object")
+    return value["evidence"]
+
+
 def cmd_triage_validate(args: argparse.Namespace) -> int:
     raw = sys.stdin.read() if args.input == "-" else Path(args.input).expanduser().read_text(
         encoding="utf-8"
     )
-    payload = json.loads(raw)
+    payload = _triage_evidence_from_cli_output(json.loads(raw))
     emit(validate_triage_evidence(payload), as_json=args.json)
     return 0
 
