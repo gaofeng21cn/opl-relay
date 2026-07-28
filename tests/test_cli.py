@@ -496,6 +496,78 @@ def test_cli_exposes_persona_draft_create_command() -> None:
     assert callable(args.func)
 
 
+def test_cli_persona_draft_create_reads_approved_bundle_and_only_creates(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeService:
+        def create(self, **kwargs: object) -> dict[str, object]:
+            calls.update(kwargs)
+            return {"draft_ref": "mail-draft://apple-mail/work/persona", "state": "draft"}
+
+    monkeypatch.setattr(
+        cli,
+        "load_account",
+        lambda path, account_id: SimpleNamespace(
+            account_id=account_id,
+            email="work@example.test",
+        ),
+    )
+    monkeypatch.setattr(cli, "draft_service", lambda args: (FakeService(), object()))
+    proposal_path = tmp_path / "approved.json"
+    proposal_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "opl-persona-proposal.v1",
+                "proposals": [
+                    {
+                        "proposal_id": "persona-proposal://memo/1",
+                        "proposal_kind": "mail.draft_context",
+                        "target": "opl-relay.draft.context",
+                        "operation": "prepare",
+                        "payload": {
+                            "subject_hint": "Technical memo",
+                            "body_context": "Evidence-backed context.",
+                            "tags": [],
+                        },
+                        "source_refs": ["obsidian://vault/memo.md"],
+                        "approval": {
+                            "status": "approved",
+                            "required": True,
+                            "external_write_allowed": False,
+                            "approval_ref": "approval://user/example",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        cli.main(
+            [
+                "--json",
+                "--draft-db",
+                str(tmp_path / "drafts.sqlite"),
+                "persona",
+                "draft-create",
+                "--input",
+                str(proposal_path),
+                "--account",
+                "work",
+                "--to",
+                "reviewer@example.test",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["handoff"]["send_allowed"] is False
+    assert calls["subject"] == "Technical memo"
+
+
 def test_cli_memory_candidate_approval_flow(tmp_path: Path) -> None:
     db = tmp_path / "mail.sqlite"
     memory_db = tmp_path / "memory.sqlite"
