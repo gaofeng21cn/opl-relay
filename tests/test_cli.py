@@ -173,6 +173,150 @@ def test_app_contribution_abi_describes_declared_refs_and_reads_package_owned_da
     assert memory_payload["result"] == {"memories": []}
 
 
+def test_app_contribution_creates_review_draft_from_approved_persona_bundle(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeService:
+        def create(self, **kwargs: object) -> dict[str, object]:
+            calls.update(kwargs)
+            return {
+                "draft_ref": "mail-draft://apple-mail/work/persona",
+                "state": "draft",
+            }
+
+    monkeypatch.setattr(
+        cli,
+        "load_account",
+        lambda path, account_id: SimpleNamespace(
+            account_id=account_id,
+            email="work@example.test",
+        ),
+    )
+    monkeypatch.setattr(cli, "draft_service", lambda args: (FakeService(), object()))
+    bundle = {
+        "schema_version": "opl-persona-proposal.v1",
+        "proposals": [
+            {
+                "proposal_id": "persona-proposal://memo/1",
+                "proposal_kind": "mail.draft_context",
+                "target": "opl-relay.draft.context",
+                "operation": "prepare",
+                "payload": {
+                    "subject_hint": "Technical memo",
+                    "body_context": "Evidence-backed context.",
+                    "tags": ["OPL"],
+                },
+                "source_refs": ["obsidian://vault/memo.md"],
+                "approval": {
+                    "status": "approved",
+                    "required": True,
+                    "external_write_allowed": False,
+                    "approval_ref": "approval://user/example",
+                },
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "schema_version": "opl-package-app-contribution-request.v1",
+                    "operation": "execute",
+                    "ref": "communications.mail.v1#draft.create_from_persona",
+                    "input": {
+                        "proposal_bundle": bundle,
+                        "account": "work",
+                        "to": ["reviewer@example.test"],
+                    },
+                }
+            )
+        ),
+    )
+
+    assert (
+        cli.main(
+            [
+                "--json",
+                "--draft-db",
+                str(tmp_path / "drafts.sqlite"),
+                "app-contribution",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result"]["review_required"] is True
+    assert payload["result"]["send_allowed"] is False
+    assert payload["result"]["proposal_id"] == "persona-proposal://memo/1"
+    assert calls["subject"] == "Technical memo"
+    assert calls["body_text"] == "Evidence-backed context."
+    assert calls["to"][0].address == "reviewer@example.test"
+
+
+def test_app_contribution_rejects_unapproved_persona_bundle_before_service(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    class ExplodingService:
+        def create(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError("unapproved proposal reached draft service")
+
+    monkeypatch.setattr(cli, "draft_service", lambda args: (ExplodingService(), object()))
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "schema_version": "opl-package-app-contribution-request.v1",
+                    "operation": "execute",
+                    "ref": "communications.mail.v1#draft.create_from_persona",
+                    "input": {
+                        "proposal_bundle": {
+                            "schema_version": "opl-persona-proposal.v1",
+                            "proposals": [
+                                {
+                                    "proposal_kind": "mail.draft_context",
+                                    "target": "opl-relay.draft.context",
+                                    "operation": "prepare",
+                                    "payload": {
+                                        "subject_hint": "Subject",
+                                        "body_context": "Body",
+                                    },
+                                    "source_refs": ["obsidian://vault/memo.md"],
+                                    "approval": {
+                                        "status": "pending",
+                                        "required": True,
+                                        "external_write_allowed": False,
+                                    },
+                                }
+                            ],
+                        },
+                        "account": "work",
+                        "to": ["reviewer@example.test"],
+                    },
+                }
+            )
+        ),
+    )
+
+    assert (
+        cli.main(
+            [
+                "--json",
+                "--draft-db",
+                str(tmp_path / "drafts.sqlite"),
+                "app-contribution",
+            ]
+        )
+        == 2
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_request"
+
+
 def test_app_contribution_abi_rejects_undeclared_refs_and_cross_kind_calls(tmp_path: Path) -> None:
     db = tmp_path / "mail.sqlite"
     unknown = run_app_contribution(
@@ -334,6 +478,22 @@ def test_cli_exposes_workspace_commands() -> None:
     ]:
         args = parser.parse_args(command)
         assert callable(args.func)
+
+
+def test_cli_exposes_persona_draft_create_command() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "persona",
+            "draft-create",
+            "--input",
+            "proposal.json",
+            "--account",
+            "work",
+            "--to",
+            "reviewer@example.test",
+        ]
+    )
+    assert callable(args.func)
 
 
 def test_cli_memory_candidate_approval_flow(tmp_path: Path) -> None:

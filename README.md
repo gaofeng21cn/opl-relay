@@ -75,6 +75,23 @@ opl-relay --json draft send \
 Any content change invalidates approval. An unknown send result is never
 automatically retried.
 
+Persona can hand off a user-approved mail context to Relay for review in Apple
+Mail. The handoff creates a draft only; it never sends:
+
+```bash
+opl-relay --json persona draft-create \
+  --input ./approved-persona-proposal.json \
+  --account work \
+  --to 'Recipient <recipient@example.test>'
+```
+
+Relay accepts only an `opl-persona-proposal.v1` `mail.draft_context` proposal
+with `approval.status=approved`, an `approval_ref`, non-empty `source_refs`,
+and `approval.external_write_allowed=false`. The account and recipients are
+Relay-owned inputs. Review the resulting Apple Mail draft, then use the
+separate fingerprint-bound `draft inspect`/`draft send` flow if sending is
+explicitly authorized.
+
 ## Plugin
 
 The installable Codex Plugin scaffold is under

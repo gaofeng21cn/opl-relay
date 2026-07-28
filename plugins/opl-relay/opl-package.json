@@ -34,7 +34,7 @@
       ".codex-plugin/plugin.json",
       "skills/opl-relay/SKILL.md"
     ],
-    "digest": "sha256:4cf300c6d9efa36225fe2c6648ad3fc3a71b6d6a4edebc25afde07f53030b0d7"
+    "digest": "sha256:6757a5323e0dda7c3b0df3d3ebecd2276d0032aab75b9084fe1f280431ea7b9c"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
@@ -110,11 +110,12 @@
           "en-US": "Draft review"
         },
         "data_ref": "communications.mail.v1#draft.inspect",
-        "command_ids": [
-          "relay.draft.create",
-          "relay.draft.inspect",
-          "relay.draft.open",
-          "relay.draft.send"
+          "command_ids": [
+            "relay.draft.create",
+            "relay.draft.create-from-persona",
+            "relay.draft.inspect",
+            "relay.draft.open",
+            "relay.draft.send"
         ],
         "empty_state_i18n": {
           "zh-CN": "没有待审核草稿",
@@ -155,6 +156,15 @@
           "en-US": "Create draft"
         },
         "action_ref": "communications.mail.v1#draft.create"
+      },
+      {
+        "command_id": "relay.draft.create-from-persona",
+        "label_i18n": {
+          "zh-CN": "从 Persona 提案创建草稿",
+          "en-US": "Create draft from Persona proposal"
+        },
+        "action_ref": "communications.mail.v1#draft.create_from_persona",
+        "confirmation_required": true
       },
       {
         "command_id": "relay.draft.inspect",

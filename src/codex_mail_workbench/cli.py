@@ -24,7 +24,11 @@ from .memory import (
     MemoryStore,
 )
 from .message import extract_text_body
-from .persona import load_persona_mail_context
+from .persona import (
+    load_approved_persona_draft_context,
+    load_persona_mail_context,
+    validate_approved_persona_draft_context,
+)
 from .paths import (
     default_config_path,
     default_db_path,
@@ -106,6 +110,19 @@ APP_CONTRIBUTION_ACTION_CONTRACTS = {
             "open": {"type": "boolean", "required": False},
         },
         "result": "communications.mail.v1#draft.create.result",
+    },
+    "communications.mail.v1#draft.create_from_persona": {
+        "operation": "execute",
+        "confirmation_required": True,
+        "input": {
+            "proposal_bundle": {"type": "object", "required": True},
+            "account": {"type": "string", "required": True},
+            "to": {"type": "string[]", "required": True, "min_items": 1},
+            "cc": {"type": "string[]", "required": False},
+            "bcc": {"type": "string[]", "required": False},
+            "open": {"type": "boolean", "required": False},
+        },
+        "result": "communications.mail.v1#draft.create_from_persona.result",
     },
     "communications.mail.v1#draft.inspect": {
         "operation": "execute",
@@ -290,6 +307,9 @@ def _app_contribution_input_keys(
             minimum_items = schema.get("min_items", 0)
             if not isinstance(minimum_items, int) or len(value) < minimum_items:
                 raise ValueError(f"input.{name} must contain at least {minimum_items} items")
+        elif value_type == "object":
+            if not isinstance(value, dict):
+                raise ValueError(f"input.{name} must be an object")
         else:
             raise ValueError(f"unsupported input type for {name}")
 
@@ -370,6 +390,22 @@ def _app_contribution_action(args: argparse.Namespace, ref: str, payload: dict[s
                 visible=_app_contribution_bool(payload.get("open"), "open", default=True),
             )
         }
+    if ref == "communications.mail.v1#draft.create_from_persona":
+        return create_persona_review_draft(
+            args,
+            context=validate_approved_persona_draft_context(
+                payload.get("proposal_bundle")
+            ),
+            account_id=_app_contribution_string(
+                payload.get("account"),
+                "account",
+                required=True,
+            ),
+            to=_app_contribution_strings(payload.get("to"), "to", required=True),
+            cc=_app_contribution_strings(payload.get("cc"), "cc"),
+            bcc=_app_contribution_strings(payload.get("bcc"), "bcc"),
+            visible=_app_contribution_bool(payload.get("open"), "open", default=True),
+        )
     if ref == "communications.mail.v1#draft.inspect":
         service, _ = draft_service(args)
         return {
@@ -864,6 +900,61 @@ def cmd_persona_draft_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def create_persona_review_draft(
+    args: argparse.Namespace,
+    *,
+    context: dict[str, object],
+    account_id: str,
+    to: list[str],
+    cc: list[str],
+    bcc: list[str],
+    visible: bool,
+) -> dict[str, object]:
+    """Create an Apple Mail review draft without authorizing send."""
+    account = load_account(Path(args.config).expanduser(), account_id)
+    service, _ = draft_service(args)
+    draft = service.create(
+        account_id=account.account_id,
+        sender=account.email,
+        to=parse_recipients(to, required=True),
+        cc=parse_recipients(cc),
+        bcc=parse_recipients(bcc),
+        subject=str(context["subject"]),
+        body_text=str(context["body_text"]),
+        attachments=[],
+        visible=visible,
+    )
+    return {
+        "proposal_id": context["proposal_id"],
+        "approval_ref": context["approval_ref"],
+        "source_refs": context["source_refs"],
+        "draft": draft,
+        "review_required": True,
+        "send_allowed": False,
+        "next_action": "inspect_and_review_in_apple_mail",
+    }
+
+
+def cmd_persona_draft_create(args: argparse.Namespace) -> int:
+    context = load_approved_persona_draft_context(Path(args.input).expanduser())
+    emit(
+        {
+            "ok": True,
+            "handoff": create_persona_review_draft(
+                args,
+                context=context,
+                account_id=args.account,
+                to=args.to,
+                cc=args.cc,
+                bcc=args.bcc,
+                visible=args.open,
+            ),
+        },
+        as_json=args.json,
+    )
+    return 0
+
+
 def cmd_triage_evidence(args: argparse.Namespace) -> int:
     payload = build_triage_evidence(
         mail_db_path=Path(args.db).expanduser(),
@@ -1149,6 +1240,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     persona_context.add_argument("--input", required=True)
     persona_context.set_defaults(func=cmd_persona_draft_context)
+    persona_draft_create = persona_actions.add_parser(
+        "draft-create",
+        help="从已批准 Persona 提案创建 Apple Mail 审核草稿；不发送",
+    )
+    persona_draft_create.add_argument("--input", required=True)
+    persona_draft_create.add_argument("--account", required=True)
+    persona_draft_create.add_argument("--to", action="append", required=True)
+    persona_draft_create.add_argument("--cc", action="append", default=[])
+    persona_draft_create.add_argument("--bcc", action="append", default=[])
+    persona_draft_create.add_argument(
+        "--open",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="创建后在 Apple Mail 中显示草稿",
+    )
+    persona_draft_create.set_defaults(func=cmd_persona_draft_create)
 
     triage = sub.add_parser("triage", help="生成或验证只读邮件 triage 证据")
     triage_actions = triage.add_subparsers(dest="triage_action", required=True)

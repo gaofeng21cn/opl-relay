@@ -32,7 +32,8 @@ OPL Persona or OPL App.
 - Context: bounded packages combining approved memory, selected mail evidence,
   and relevant knowledge excerpts.
 - Drafts: Apple Mail as the editable review UI plus a local lifecycle ledger and
-  exact approval fingerprint.
+  exact approval fingerprint. An approved Persona `mail.draft_context`
+  proposal may prepare this review draft, but it never authorizes sending.
 - CLI: `opl-relay`, with `codex-mail` retained as a compatibility alias.
 
 ## Runtime Ownership
