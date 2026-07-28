@@ -15,7 +15,7 @@ from codex_mail_workbench.store import connect_email_store, upsert_email_message
 def run_cli(db: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     root = Path(__file__).resolve().parents[1]
-    env["PYTHONPATH"] = str(root / "src")
+    env["PYTHONPATH"] = str(root / "plugins" / "opl-relay" / "runtime")
     return subprocess.run(
         [
             sys.executable,
@@ -42,7 +42,7 @@ def run_app_contribution(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     root = Path(__file__).resolve().parents[1]
-    env["PYTHONPATH"] = str(root / "src")
+    env["PYTHONPATH"] = str(root / "plugins" / "opl-relay" / "runtime")
     command = [
         sys.executable,
         "-m",

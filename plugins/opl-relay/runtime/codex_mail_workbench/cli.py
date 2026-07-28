@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import shutil
 import sys
@@ -11,6 +12,10 @@ from . import __version__
 from .apple_mail import AppleMailProvider
 from .config import (
     KEYCHAIN_SERVICE,
+    add_account,
+    keychain_get_secret,
+    keychain_has_secret,
+    keychain_set_secret,
     load_account,
     load_accounts_config,
 )
@@ -47,9 +52,14 @@ from .store import (
     list_messages,
     search_messages,
 )
-from .sync import sync_account
+from .sync import connect_imap, sync_account
 from .triage import build_triage_evidence, validate_triage_evidence
-from .workspace import initialize_workspace, inspect_workspace, migrate_workspace
+from .workspace import (
+    initialize_workspace,
+    inspect_workspace,
+    migrate_workspace,
+    setup_status,
+)
 
 
 APP_CONTRIBUTION_ABI = "opl-package-app-contribution-cli.v1"
@@ -548,6 +558,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     memory_db_path = Path(args.memory_db).expanduser()
     sources_config_path = Path(args.sources_config).expanduser()
     workspace = inspect_workspace(default_profile_workspace())
+    setup = setup_status(default_profile_workspace())
     accounts = {}
     config_error = ""
     sources_error = ""
@@ -574,6 +585,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "profile_workspace": str(default_profile_workspace()),
         "profile_workspace_source": profile_workspace_source(),
         "workspace": workspace,
+        "setup": setup,
+        "readiness": setup["readiness"],
         "config_path": str(config_path),
         "config_exists": config_path.exists(),
         "config_error": config_error,
@@ -610,6 +623,25 @@ def cmd_workspace_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_setup_status(args: argparse.Namespace) -> int:
+    emit(
+        {"ok": True, "setup": setup_status(default_profile_workspace())},
+        as_json=args.json,
+    )
+    return 0
+
+
+def cmd_setup_init(args: argparse.Namespace) -> int:
+    workspace_payload = initialize_workspace(default_profile_workspace())
+    setup_payload = dict(workspace_payload["setup"])
+    setup_payload["created"] = workspace_payload["created"]
+    emit(
+        {"ok": True, "setup": setup_payload, "workspace": workspace_payload},
+        as_json=args.json,
+    )
+    return 0
+
+
 def cmd_workspace_migrate(args: argparse.Namespace) -> int:
     payload = migrate_workspace(
         Path(args.from_path),
@@ -639,6 +671,105 @@ def cmd_accounts(args: argparse.Namespace) -> int:
         as_json=args.json,
     )
     return 0
+
+
+def cmd_account_add(args: argparse.Namespace) -> int:
+    account = add_account(
+        Path(args.config).expanduser(),
+        account_id=args.account_id,
+        email=args.email,
+        host=args.host,
+        port=args.port,
+        security=args.security,
+        username=args.username or args.email,
+        credential_ref=args.credential_ref or f"keychain.{args.account_id}.imap",
+        include_folders=args.include or ["*"],
+        exclude_folders=args.exclude,
+    )
+    emit(
+        {
+            "ok": True,
+            "account": {
+                "account_id": account.account_id,
+                "email": account.email,
+                "imap_host": account.imap.host,
+                "credential_ref": account.imap.credential_ref,
+                "include_folders": account.include_folders,
+                "exclude_folders": account.exclude_folders,
+                "credential_configured": False,
+            },
+            "next_actions": [
+                f"opl-relay --json credential set --account {account.account_id}",
+                f"opl-relay --json account check --account {account.account_id}",
+            ],
+        },
+        as_json=args.json,
+    )
+    return 0
+
+
+def cmd_credential_set(args: argparse.Namespace) -> int:
+    account = load_account(Path(args.config).expanduser(), args.account_id)
+    secret = (
+        sys.stdin.read().rstrip("\r\n")
+        if args.secret_stdin
+        else getpass.getpass(f"IMAP password for {account.email}: ")
+    )
+    keychain_set_secret(account.imap.credential_ref, secret)
+    emit(
+        {
+            "ok": True,
+            "account": account.account_id,
+            "credential_ref": account.imap.credential_ref,
+            "credential_configured": True,
+            "secret_persisted_to": KEYCHAIN_SERVICE,
+        },
+        as_json=args.json,
+    )
+    return 0
+
+
+def cmd_account_check(args: argparse.Namespace) -> int:
+    account = load_account(Path(args.config).expanduser(), args.account)
+    configured = keychain_has_secret(account.imap.credential_ref)
+    payload: dict[str, object] = {
+        "ok": True,
+        "account": account.account_id,
+        "email": account.email,
+        "imap_host": account.imap.host,
+        "credential_ref": account.imap.credential_ref,
+        "credential_configured": configured,
+        "connection": {"status": "not_checked"},
+    }
+    if args.connect:
+        if not configured:
+            payload["connection"] = {
+                "status": "blocked",
+                "reason": "credential_not_configured",
+            }
+        else:
+            client = None
+            try:
+                secret = keychain_get_secret(account.imap.credential_ref)
+                client = connect_imap(account)
+                typ, _ = client.login(account.imap.username, secret)
+                payload["connection"] = {
+                    "status": "healthy" if typ == "OK" else "unavailable",
+                    "server_response": typ,
+                }
+            except Exception as exc:
+                payload["connection"] = {
+                    "status": "unavailable",
+                    "reason": type(exc).__name__,
+                }
+            finally:
+                if client is not None:
+                    try:
+                        client.logout()
+                    except Exception:
+                        pass
+    emit(payload, as_json=args.json)
+    return 0 if payload["connection"]["status"] not in {"blocked", "unavailable"} else 1
 
 
 def cmd_recent(args: argparse.Namespace) -> int:
@@ -1305,6 +1436,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="执行复制；省略时只输出计划",
     )
     workspace_migrate.set_defaults(func=cmd_workspace_migrate)
+
+    setup = sub.add_parser("setup", help="首次配置 Profile Workspace 和邮箱")
+    setup_actions = setup.add_subparsers(dest="setup_action", required=True)
+    setup_status_parser = setup_actions.add_parser("status", help="显示首次配置步骤")
+    setup_status_parser.set_defaults(func=cmd_setup_status)
+    setup_init_parser = setup_actions.add_parser("init", help="创建缺失的 Profile 模板和空配置")
+    setup_init_parser.set_defaults(func=cmd_setup_init)
+
+    account = sub.add_parser("account", help="配置和检查一个邮箱账号")
+    account_actions = account.add_subparsers(dest="account_action", required=True)
+    account_add = account_actions.add_parser("add", help="写入账号元数据，不保存密码")
+    account_add.add_argument("--id", required=True, dest="account_id")
+    account_add.add_argument("--email", required=True)
+    account_add.add_argument("--host", required=True)
+    account_add.add_argument("--port", type=int, default=993)
+    account_add.add_argument("--security", choices=["ssl", "starttls", "plain"], default="ssl")
+    account_add.add_argument("--username", default="")
+    account_add.add_argument("--credential-ref", default="")
+    account_add.add_argument("--include", action="append", default=[])
+    account_add.add_argument("--exclude", action="append", default=[])
+    account_add.set_defaults(func=cmd_account_add)
+    account_check = account_actions.add_parser("check", help="检查账号元数据和密码存在性")
+    account_check.add_argument("--account", required=True)
+    account_check.add_argument("--connect", action="store_true", help="额外执行一次 IMAP 登录探测")
+    account_check.set_defaults(func=cmd_account_check)
+
+    credential = sub.add_parser("credential", help="将邮箱密码安全保存到 macOS Keychain")
+    credential_actions = credential.add_subparsers(dest="credential_action", required=True)
+    credential_set = credential_actions.add_parser("set", help="交互式录入密码")
+    credential_set.add_argument("--account", required=True, dest="account_id")
+    credential_set.add_argument(
+        "--secret-stdin",
+        action="store_true",
+        help="从 stdin 读取密码，避免密码出现在命令参数中",
+    )
+    credential_set.set_defaults(func=cmd_credential_set)
 
     draft = sub.add_parser("draft", help="Apple Mail 草稿审核与受控发送")
     draft_actions = draft.add_subparsers(dest="draft_action", required=True)

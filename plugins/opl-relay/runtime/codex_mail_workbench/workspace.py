@@ -21,6 +21,53 @@ PRIVATE_STATE_NAMES = {
     "sync-state",
 }
 
+_TEMPLATES = {
+    "AGENTS.md": """# Profile Workspace
+
+This directory belongs to one person's OPL digital persona. Keep private
+identity, policies, context, and module state here; do not copy it into a
+Package or Plugin directory.
+""",
+    "profile/identity.md": """# Identity
+
+- name:
+- role:
+- institution:
+- preferred_language: zh-CN
+""",
+    "profile/preferences.md": """# Preferences
+
+- draft_review: required
+- external_writes: proposal_only
+- mail_send: user_approval_required
+""",
+    "policies/mail-triage.md": """# Mail triage
+
+Treat incoming mail as evidence. Prepare proposals and drafts for review;
+never send, archive, move, delete, or mark mail without explicit approval.
+""",
+    "policies/knowledge.md": """# Knowledge output
+
+Use source references for every proposed note and preserve the existing note
+when its expected digest changes.
+""",
+    "policies/website.md": """# Website output
+
+Prepare website changes as reviewable proposals. The website repository remains
+the authority for its own content and publication state.
+""",
+    "data/relay/accounts.toml": """version = 1
+
+# Add an account with: opl-relay --json account add ...
+accounts = []
+""",
+    "data/relay/sources.toml": """version = 1
+
+# Add an Obsidian source only after its path has been reviewed.
+sources = []
+""",
+}
+
 
 def _resolve(path: Path) -> Path:
     return path.expanduser().resolve()
@@ -65,6 +112,57 @@ def inspect_workspace(path: Path) -> dict[str, Any]:
     }
 
 
+def setup_status(path: Path) -> dict[str, Any]:
+    """Return actionable first-run status without reading private content."""
+
+    root = _resolve(path)
+    workspace = inspect_workspace(root)
+    config = root / "data" / "relay" / "accounts.toml"
+    sources = root / "data" / "relay" / "sources.toml"
+    steps = [
+        {
+            "id": "workspace",
+            "status": "ready" if workspace["ready"] else "required",
+            "path": str(root / MARKER_NAME),
+        },
+        {
+            "id": "relay.accounts",
+            "status": "ready" if config.is_file() else "required",
+            "path": str(config),
+        },
+        {
+            "id": "relay.sources",
+            "status": "ready" if sources.is_file() else "optional",
+            "path": str(sources),
+        },
+    ]
+    account_count = 0
+    config_error = ""
+    if config.is_file():
+        try:
+            from .config import load_accounts_config
+
+            account_count = len(load_accounts_config(config))
+        except Exception as exc:
+            config_error = str(exc)
+            steps[1]["status"] = "invalid"
+    required = [step for step in steps if step["status"] in {"required", "invalid"}]
+    readiness = "unconfigured" if not workspace["ready"] else ("partial" if required or not account_count else "ready")
+    next_actions: list[str] = []
+    if not workspace["ready"] or required:
+        next_actions.append("opl-relay --json setup init")
+    if not account_count:
+        next_actions.append("opl-relay --json account add --id <id> --email <address> --host <imap-host> ...")
+    return {
+        "workspace": workspace,
+        "readiness": readiness,
+        "steps": steps,
+        "accounts_configured": account_count,
+        "config_error": config_error,
+        "next_actions": list(dict.fromkeys(next_actions)),
+    }
+
+
 def initialize_workspace(path: Path) -> dict[str, Any]:
     root = _resolve(path)
     root.mkdir(parents=True, exist_ok=True)
@@ -75,7 +173,15 @@ def initialize_workspace(path: Path) -> dict[str, Any]:
     if marker.exists() and marker.read_text(encoding="utf-8") != expected:
         raise ValueError(f"workspace marker already exists with different content: {marker}")
     marker.write_text(expected, encoding="utf-8")
-    return inspect_workspace(root)
+    created: list[str] = []
+    for relative, content in _TEMPLATES.items():
+        target = root / relative
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        created.append(relative)
+    return inspect_workspace(root) | {"created": created, "setup": setup_status(root)}
 
 
 def _migration_files(source: Path) -> tuple[list[tuple[Path, Path]], list[str]]:
@@ -138,8 +244,6 @@ def migrate_workspace(
         initialize_workspace(target_root)
         for source_path, relative in files:
             target_path = target_root / relative
-            if target_path.exists():
-                continue
             target_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, target_path)
         for source_path, relative in files:

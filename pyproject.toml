@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "opl-relay"
-version = "0.4.3"
+version = "0.5.0"
 description = "Local-first personal communication relay for Codex and OPL."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,8 +14,8 @@ dependencies = []
 opl-relay = "codex_mail_workbench.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/codex_mail_workbench"]
+packages = ["plugins/opl-relay/runtime/codex_mail_workbench"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["plugins/opl-relay/runtime"]
 testpaths = ["tests"]

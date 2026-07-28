@@ -9,6 +9,7 @@ from codex_mail_workbench.workspace import (
     initialize_workspace,
     inspect_workspace,
     migrate_workspace,
+    setup_status,
 )
 
 
@@ -21,7 +22,33 @@ def test_initialize_and_inspect_workspace(tmp_path: Path) -> None:
     assert result["schema"] == WORKSPACE_SCHEMA
     assert (workspace / "policies").is_dir()
     assert (workspace / "exports").is_dir()
+    assert (workspace / "data" / "relay" / "accounts.toml").is_file()
+    assert (workspace / "data" / "relay" / "sources.toml").is_file()
     assert json.loads((workspace / MARKER_NAME).read_text())["schema"] == WORKSPACE_SCHEMA
+
+
+def test_initialize_is_idempotent_for_user_templates(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    initialize_workspace(workspace)
+    identity = workspace / "profile" / "identity.md"
+    identity.write_text("# Custom identity\n", encoding="utf-8")
+
+    result = initialize_workspace(workspace)
+
+    assert identity.read_text(encoding="utf-8") == "# Custom identity\n"
+    assert result["created"] == []
+
+
+def test_setup_status_is_actionable_before_and_after_init(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    before = setup_status(workspace)
+    assert before["readiness"] == "unconfigured"
+    assert "relay.accounts" in {step["id"] for step in before["steps"]}
+
+    initialize_workspace(workspace)
+    after = setup_status(workspace)
+    assert after["readiness"] == "partial"
+    assert after["accounts_configured"] == 0
 
 
 def test_migrate_workspace_is_plan_only_by_default(tmp_path: Path) -> None:

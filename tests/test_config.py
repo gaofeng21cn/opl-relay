@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_mail_workbench.config import load_accounts_config
+from codex_mail_workbench.config import add_account, load_accounts_config
 
 
 def test_load_accounts_config_parses_toml(tmp_path: Path) -> None:
@@ -54,3 +54,25 @@ username = "work@example.com"
 
     with pytest.raises(ValueError, match="credential_ref"):
         load_accounts_config(config)
+
+
+def test_add_account_writes_private_metadata_without_a_secret(tmp_path: Path) -> None:
+    config = tmp_path / "data" / "accounts.toml"
+
+    account = add_account(
+        config,
+        account_id="work",
+        email="work@example.com",
+        host="imap.example.com",
+        port=993,
+        security="ssl",
+        username="work@example.com",
+        credential_ref="keychain.work.imap",
+        include_folders=["INBOX"],
+        exclude_folders=["Archive"],
+    )
+
+    assert account.account_id == "work"
+    loaded = load_accounts_config(config)
+    assert loaded["work"].imap.credential_ref == "keychain.work.imap"
+    assert "password" not in config.read_text(encoding="utf-8").casefold()

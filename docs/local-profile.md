@@ -25,7 +25,8 @@ Relay stores accounts, SQLite databases, sources, and sync state under
 Relay does not inspect old state directories or alternate environment variables.
 
 Credentials remain in macOS Keychain service `codex-mail-workbench`. The service
-name is intentionally unchanged so an upgrade does not invalidate credentials.
+name is a local credential contract; it is never exported to Git or the Profile
+Workspace.
 
 ## Workspace
 

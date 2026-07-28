@@ -108,6 +108,67 @@ def load_account(path: Path, account_id: str) -> MailAccount:
     return accounts[account_id]
 
 
+def _toml_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
+
+def add_account(
+    path: Path,
+    *,
+    account_id: str,
+    email: str,
+    host: str,
+    port: int,
+    security: str,
+    username: str,
+    credential_ref: str,
+    include_folders: list[str],
+    exclude_folders: list[str],
+) -> MailAccount:
+    """Append one account to the private Profile TOML without exposing secrets."""
+
+    accounts = load_accounts_config(path) if path.exists() else {}
+    if account_id in accounts:
+        raise ValueError(f"account_id already exists: {account_id}")
+    account = MailAccount(
+        account_id=_str(account_id, "account_id"),
+        email=_str(email, "email"),
+        imap=MailEndpoint(
+            host=_str(host, "imap.host"),
+            port=_int(port, "imap.port"),
+            security=_str(security, "imap.security").lower(),
+            username=_str(username, "imap.username"),
+            credential_ref=_str(credential_ref, "imap.credential_ref"),
+        ),
+        include_folders=_string_list(include_folders, "folders.include", ["*"]),
+        exclude_folders=_string_list(exclude_folders, "folders.exclude", []),
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["version = 1", ""]
+    for item in [*accounts.values(), account]:
+        lines.extend(
+            [
+                "[[accounts]]",
+                f"account_id = {_toml_string(item.account_id)}",
+                f"email = {_toml_string(item.email)}",
+                "",
+                "[accounts.imap]",
+                f"host = {_toml_string(item.imap.host)}",
+                f"port = {item.imap.port}",
+                f"security = {_toml_string(item.imap.security)}",
+                f"username = {_toml_string(item.imap.username)}",
+                f"credential_ref = {_toml_string(item.imap.credential_ref)}",
+                "",
+                "[accounts.folders]",
+                "include = [" + ", ".join(_toml_string(value) for value in item.include_folders) + "]",
+                "exclude = [" + ", ".join(_toml_string(value) for value in item.exclude_folders) + "]",
+                "",
+            ]
+        )
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return account
+
+
 def keychain_get_secret(
     credential_ref: str,
     *,
@@ -118,3 +179,49 @@ def keychain_get_secret(
     if result.returncode == 0:
         return result.stdout.strip()
     raise RuntimeError(f"Keychain 读取失败: account={credential_ref}")
+
+
+def keychain_has_secret(
+    credential_ref: str,
+    *,
+    service: str = KEYCHAIN_SERVICE,
+) -> bool:
+    """Check presence without reading or printing the secret."""
+
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", service, "-a", credential_ref],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def keychain_set_secret(
+    credential_ref: str,
+    secret: str,
+    *,
+    service: str = KEYCHAIN_SERVICE,
+) -> None:
+    """Store a secret through stdin so it never appears in process arguments."""
+
+    if not isinstance(secret, str) or not secret:
+        raise ValueError("credential secret must not be empty")
+    result = subprocess.run(
+        [
+            "security",
+            "add-generic-password",
+            "-U",
+            "-s",
+            service,
+            "-a",
+            _str(credential_ref, "credential_ref"),
+            "-w",
+        ],
+        input=secret + "\n",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Keychain 写入失败: account={credential_ref}")

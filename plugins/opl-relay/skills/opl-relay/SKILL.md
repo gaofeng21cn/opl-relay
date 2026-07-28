@@ -10,18 +10,41 @@ instructions only; it never treats the plugin directory as user storage.
 
 ## Resolve Runtime
 
-1. Run `opl-relay --json doctor` before mailbox work.
-2. Treat `profile_workspace` as the user's single Profile Workspace, Relay's
+1. Run `opl-relay --json setup status` before mailbox work.
+2. If the Profile is unconfigured, run `opl-relay --json setup init`.
+3. Run `opl-relay --json doctor` before reading or syncing mail.
+4. Treat `profile_workspace` as the user's single Profile Workspace, Relay's
    `state_dir` as its `data/relay` child, and `workspace.path` as that same
    profile root.
-3. Honor `OPL_PROFILE_WORKSPACE` as the only profile root; Relay state is its
+5. Honor `OPL_PROFILE_WORKSPACE` as the only profile root; Relay state is its
    `data/relay` child.
-4. Read `<workspace>/AGENTS.md` when it exists, then follow its profile,
+6. Read `<workspace>/AGENTS.md` when it exists, then follow its profile,
    policies, context, skills, and templates references.
 
 Never put accounts, SQLite files, raw mail, sync cursors, memories, private
 policies, or credentials in the plugin cache or source checkout. Credentials
-remain in macOS Keychain service `codex-mail-workbench` for compatibility.
+remain in macOS Keychain service `codex-mail-workbench`; the service name is a
+local credential contract and is never written to Git.
+
+## First use
+
+Use the same `OPL_PROFILE_WORKSPACE` selected by OPL Persona. The engine is
+carried by this Plugin, so a fresh Plugin install does not require a source
+checkout:
+
+```bash
+opl-relay --json setup init
+opl-relay --json account add \
+  --id work --email you@example.com --host imap.example.com
+opl-relay --json credential set --account work
+opl-relay --json account check --account work --connect
+```
+
+`account add` writes only IMAP metadata. `credential set` reads a password
+interactively (or from stdin with `--secret-stdin`) and stores it in macOS
+Keychain; never put a password in a prompt, JSON input, command argument, or
+Profile Workspace file. The optional `--connect` check is the first network
+operation. When it succeeds, use `sync` and inspect the local evidence.
 
 ## Capability Contract
 

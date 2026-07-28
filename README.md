@@ -67,7 +67,7 @@ still owns the account, recipients, Apple Mail draft, and separate send gate.
 | --- | --- | --- |
 | Git repository | Source code, tests, Plugin files, Skills, and Package descriptor | Git / maintainers |
 | Codex Plugin snapshot | Installed communication instructions and carrier metadata | Codex |
-| Relay engine | The `opl-relay` CLI and local mail implementation | Local installation today; OPL Framework in the target model |
+| Relay engine | The `opl-relay` CLI and local mail implementation | Embedded in the Plugin today; OPL Framework in the target model |
 | Profile Workspace | Mail databases, account references, approved memory, policies, and Persona state | The user |
 
 The selected Profile Workspace is the only user-data root:
@@ -108,37 +108,35 @@ codex plugin add opl-relay@opl-relay --json
 
 Start a new Codex task after installation so the new Plugin snapshot is loaded.
 
-> **Current boundary:** this Marketplace path installs the Codex Plugin carrier.
-> It does not yet install or update the Python engine as a complete
-> OPL-managed Package. Install the engine from source for current local use.
+> **Current boundary:** this Marketplace path installs a Codex Plugin carrier
+> that includes the Python engine. It is still a Git Marketplace snapshot, not
+> an OPL-managed Package release.
 
-## Run The Engine Locally
+## Start With A New Profile
 
-Requirements: macOS, Python 3.11 or later, Apple Mail for draft review, and an
-IMAP account.
+Requirements: macOS, Apple Mail for draft review, and an IMAP account.
+
+```bash
+export OPL_PROFILE_WORKSPACE="$HOME/OPL/profiles/my-profile"
+opl-relay --json setup init
+opl-relay --json account add \
+  --id work --email you@example.com --host imap.example.com
+opl-relay --json credential set --account work
+opl-relay --json account check --account work --connect
+```
+
+`setup init` is idempotent and creates only missing Profile templates and empty
+configuration files. `account add` writes IMAP metadata only. The password
+prompt is separate and stores the secret in macOS Keychain, never in the
+conversation, command arguments, Profile Workspace, or Git.
+
+The local-source developer path remains available:
 
 ```bash
 git clone https://github.com/gaofeng21cn/opl-relay.git
 cd opl-relay
 make install-local
-
-export OPL_PROFILE_WORKSPACE="$HOME/OPL/profiles/my-profile"
-opl-relay --json workspace init
-opl-relay --json doctor
 ```
-
-Create private configuration under the Profile Workspace, never in the clone:
-
-```bash
-cp config/accounts.example.toml \
-  "$OPL_PROFILE_WORKSPACE/data/relay/accounts.toml"
-cp config/sources.example.toml \
-  "$OPL_PROFILE_WORKSPACE/data/relay/sources.toml"
-```
-
-Edit those private copies, then store IMAP secrets in macOS Keychain. Relay
-currently reads them from Keychain service `codex-mail-workbench`; credentials
-never enter the Profile Workspace or Git.
 
 ## A Typical Workflow
 

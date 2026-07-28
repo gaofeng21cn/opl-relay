@@ -10,8 +10,8 @@ substitute for another.
 | --- | --- | --- |
 | Source code | `https://github.com/gaofeng21cn/opl-relay` | Public Git repository |
 | Codex Marketplace | Repository `.agents/plugins/marketplace.json` | Usable from a local clone or as a Git-backed Marketplace |
-| Codex Plugin | `plugins/opl-relay` | Installable carrier containing the Relay Skill and metadata |
-| Python engine | Source checkout plus `make install-local` | Local installation; not installed by the Plugin |
+| Codex Plugin | `plugins/opl-relay` | Installable carrier containing Skill, metadata, and runtime |
+| Python engine | `plugins/opl-relay/runtime` | Carried by the Plugin; no source checkout required |
 | OPL Package descriptor | `plugins/opl-relay/opl-package.json` | Declares capability identity and App contributions |
 | OPL managed release | Framework repository index plus immutable payload | Not published |
 | User data | Selected Profile Workspace | Local and user-owned |
@@ -44,8 +44,8 @@ codex plugin add opl-relay@opl-relay --json
 ```
 
 `codex plugin marketplace upgrade opl-relay` refreshes the configured Git
-snapshot. Reinstalling the Plugin selects bytes from that refreshed snapshot.
-Neither operation updates the Python engine or touches the Profile Workspace.
+snapshot. Reinstalling the Plugin selects the embedded engine and Skill bytes
+from that refreshed snapshot. Neither operation touches the Profile Workspace.
 
 ## Package Installation Is Separate
 

@@ -13,7 +13,7 @@ validate-package:
 
 install-local:
 	mkdir -p "$(BIN_DIR)"
-	printf '%s\n' '#!/usr/bin/env bash' 'PYTHONPATH="$(ROOT)/src" exec "$(PYTHON)" -m codex_mail_workbench.cli "$$@"' > "$(BIN_DIR)/opl-relay"
+	printf '%s\n' '#!/usr/bin/env bash' 'PYTHONPATH="$(ROOT)/plugins/opl-relay/runtime" exec "$(PYTHON)" -m codex_mail_workbench.cli "$$@"' > "$(BIN_DIR)/opl-relay"
 	chmod +x "$(BIN_DIR)/opl-relay"
 	rm -f "$(BIN_DIR)/codex-mail"
 	rm -f "$(BIN_DIR)/codex-mail-mcp"

@@ -60,7 +60,7 @@ Apple Mail 草稿和最终发送门仍由 Relay 单独负责。
 | --- | --- | --- |
 | Git 仓库 | 源码、测试、插件文件、Skill 和 Package 描述 | Git 与维护者 |
 | Codex 插件快照 | 已安装的通信工作流和载体元数据 | Codex |
-| Relay 引擎 | `opl-relay` 命令行工具和本机邮件实现 | 当前由本机安装；目标由 OPL Framework 管理 |
+| Relay 引擎 | `opl-relay` 命令行工具和本机邮件实现 | 当前随插件载体提供；目标由 OPL Framework 管理 |
 | 数字分身工作空间 | 邮件数据库、账号引用、已批准记忆、个人规则和 Persona 状态 | 用户 |
 
 用户只需要选择一个数字分身工作空间：
@@ -101,36 +101,33 @@ codex plugin add opl-relay@opl-relay --json
 
 安装后请新建一个 Codex 任务，让新任务加载刚安装的插件快照。
 
-> **当前边界：** 上述方式安装的是 Codex 插件载体，还不会把 Python 引擎作为
-> 完整的 OPL Package 自动安装或更新。现阶段如需实际处理邮件，还要从源码安装引擎。
+> **当前边界：** 上述方式安装的插件载体已经包含 Python 引擎，可以脱离源码目录运行；
+> 但它仍然是 Codex Git Marketplace 快照，不是已经发布的 OPL 托管 Package。
 
-## 在本机运行邮件引擎
+## 新用户首次配置
 
-当前需要 macOS、Python 3.11 或更高版本、用于审核草稿的 Apple Mail，以及可用的
-IMAP 邮箱。
+当前需要 macOS、用于审核草稿的 Apple Mail，以及可用的 IMAP 邮箱。
+
+```bash
+export OPL_PROFILE_WORKSPACE="$HOME/OPL/profiles/my-profile"
+opl-relay --json setup init
+opl-relay --json account add \
+  --id work --email you@example.com --host imap.example.com
+opl-relay --json credential set --account work
+opl-relay --json account check --account work --connect
+```
+
+`setup init` 可以重复运行，只会创建缺失的 Profile 模板和空配置文件。
+`account add` 只写入 IMAP 元数据；密码会通过独立提示录入 macOS 钥匙串，不会进入
+对话、命令参数、数字分身工作空间或 Git。
+
+开发者仍可以从源码安装本地命令：
 
 ```bash
 git clone https://github.com/gaofeng21cn/opl-relay.git
 cd opl-relay
 make install-local
-
-export OPL_PROFILE_WORKSPACE="$HOME/OPL/profiles/my-profile"
-opl-relay --json workspace init
-opl-relay --json doctor
 ```
-
-私有配置只放进数字分身工作空间，不要放进源码目录：
-
-```bash
-cp config/accounts.example.toml \
-  "$OPL_PROFILE_WORKSPACE/data/relay/accounts.toml"
-cp config/sources.example.toml \
-  "$OPL_PROFILE_WORKSPACE/data/relay/sources.toml"
-```
-
-修改这两份私有配置后，把 IMAP 密码保存到 macOS 钥匙串。Relay 当前从
-`codex-mail-workbench` 这个钥匙串服务中读取密码；凭据不会进入数字分身工作空间或
-Git。
 
 ## 一条典型工作流
 
