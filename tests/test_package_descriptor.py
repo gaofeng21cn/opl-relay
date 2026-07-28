@@ -3,6 +3,8 @@ import json
 import tomllib
 from pathlib import Path
 
+from codex_mail_workbench import __version__
+
 
 ROOT = Path(__file__).parents[1]
 PLUGIN_ROOT = ROOT / "plugins" / "opl-relay"
@@ -47,7 +49,12 @@ def test_package_identity_capabilities_and_plugin_version_are_aligned() -> None:
     assert package["surface_kind"] == "opl_capability_package_manifest.v2"
     assert package["package_id"] == "opl-relay"
     assert package["package_role"] == "framework_capability_package"
-    assert package["version"] == plugin["version"] == project["project"]["version"]
+    assert (
+        package["version"]
+        == plugin["version"]
+        == project["project"]["version"]
+        == __version__
+    )
     assert set(package["exports"]["core_module_ids"]) == CAPABILITY_IDS
     assert package["exports"]["core_skill_ids"] == ["opl-relay"]
     assert package["codex_surface"]["plugin_id"] == plugin["name"] == "opl-relay"
