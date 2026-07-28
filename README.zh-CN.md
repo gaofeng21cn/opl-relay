@@ -5,8 +5,8 @@ OPL Relay 是面向 Codex 与 OPL 的 local-first 个人通信中继。它把 IM
 Markdown 作为只读知识源，并通过 Apple Mail 完成“起草、人工审核、指纹批准、
 至多一次发送”的闭环。
 
-本仓库直接由 Codex Mail Workbench 升级而来。Python 模块名和 `codex-mail`
-命令继续兼容，新的产品、CLI 与插件身份是 `opl-relay`。
+OPL Relay 的产品、Package、Plugin、Skill 与 CLI 统一为 `opl-relay`。Python
+模块名只是实现细节，不构成第二条面向用户的邮件路线。
 
 ## 三个独立边界
 
@@ -22,12 +22,6 @@ Markdown 作为只读知识源，并通过 Apple Mail 完成“起草、人工�
 make install-local
 opl-relay --json doctor
 opl-relay --json workspace init
-```
-
-兼容命令仍然有效：
-
-```bash
-codex-mail --json doctor
 ```
 
 ## 基本使用

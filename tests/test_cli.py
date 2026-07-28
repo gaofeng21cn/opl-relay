@@ -491,6 +491,8 @@ def test_cli_doctor_reports_current_private_paths(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["keychain_services"] == ["codex-mail-workbench"]
     assert payload["product"] == "opl-relay"
+    assert set(payload["commands"]) == {"opl-relay"}
+    assert payload["command"] == payload["commands"]["opl-relay"]
     assert payload["workspace"]["path"]
     assert payload["draft_db_path"].endswith("drafts.sqlite")
     assert payload["memory_db_path"].endswith("memory.sqlite")

@@ -10,14 +10,13 @@ instructions only; it never treats the plugin directory as user storage.
 
 ## Resolve Runtime
 
-1. Prefer `opl-relay`; use the compatibility command `codex-mail` when needed.
-2. Run `opl-relay --json doctor` before mailbox work.
-3. Treat `profile_workspace` as the user's single Profile Workspace, Relay's
+1. Run `opl-relay --json doctor` before mailbox work.
+2. Treat `profile_workspace` as the user's single Profile Workspace, Relay's
    `state_dir` as its `data/relay` child, and `workspace.path` as that same
    profile root.
-4. Honor `OPL_PROFILE_WORKSPACE` as the only profile root; Relay state is its
+3. Honor `OPL_PROFILE_WORKSPACE` as the only profile root; Relay state is its
    `data/relay` child.
-5. Read `<workspace>/AGENTS.md` when it exists, then follow its profile,
+4. Read `<workspace>/AGENTS.md` when it exists, then follow its profile,
    policies, context, skills, and templates references.
 
 Never put accounts, SQLite files, raw mail, sync cursors, memories, private
@@ -45,6 +44,25 @@ use `recent`, `search`, and `read` through stable `email-store://` references.
 Before drafting for a known person or project, run `context build`. Use only
 approved memories as active relationship memory and re-read raw mail for
 high-risk dates, roles, commitments, or invitations.
+
+## Apple Mail Local Screen
+
+Apple Mail same-day and UI-local inspection is a Relay fact adapter, not a
+second user-facing skill. When the request explicitly concerns Mail.app,
+read/unread state, or a small same-day screen:
+
+1. Use the Apple Mail adapter's metadata-first route, then read only selected
+   messages and necessary thread context.
+2. Preserve the exact Apple Mail `id`, `account`, and `mailboxPath` tuple; do
+   not translate it into an `email-store://` reference.
+3. Hand the selected facts to Persona when private Markdown judgment is needed.
+   Persona returns proposals only and never authorizes a mailbox write.
+4. Restart fact gathering through Relay's synced CLI route when the request
+   requires IMAP freshness, complete inbox coverage, multiple dates, stable
+   `email-store://` provenance, or auditable recipient headers.
+
+This adapter never creates, sends, deletes, archives, moves, marks, or
+otherwise changes mail.
 
 ## Persona Triage Evidence
 

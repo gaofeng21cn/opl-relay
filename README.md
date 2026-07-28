@@ -5,9 +5,9 @@ syncs IMAP mail into a private raw EML SQLite store, maintains evidence-backed
 relationship memory, indexes selected Obsidian Markdown as a read-only source,
 and manages review-gated Apple Mail drafts.
 
-This repository is the direct successor to Codex Mail Workbench. The Python
-module and `codex-mail` command remain compatible while the product, package,
-plugin, and repository identity use `opl-relay`.
+OPL Relay has one product, package, Plugin, Skill, and CLI identity:
+`opl-relay`. Its Python package name is an implementation detail and not a
+second user-facing mailbox route.
 
 The cross-repository design authority is maintained at
 `opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
@@ -31,12 +31,6 @@ environment-variable fallback is consulted.
 make install-local
 opl-relay --json doctor
 opl-relay --json workspace init
-```
-
-The compatibility command is equivalent:
-
-```bash
-codex-mail --json doctor
 ```
 
 ## Core Workflow
