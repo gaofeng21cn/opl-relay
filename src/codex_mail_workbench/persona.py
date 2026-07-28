@@ -15,6 +15,7 @@ _REFERENCE_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]*://\S+$")
 _MAX_SUBJECT_LENGTH = 998
 _MAX_BODY_LENGTH = 1_000_000
 _MAX_TAG_LENGTH = 128
+_MAX_TAG_COUNT = 64
 
 
 def _read_bundle(path: Path) -> object:
@@ -47,7 +48,9 @@ def _validated_text(
     text = value.strip()
     if not text:
         raise ValueError(f"{field} must be non-empty")
-    if len(text) > max_length or "\0" in text:
+    if len(text) > max_length or any(
+        ord(char) < 32 and char not in ("\t", "\n") for char in text
+    ):
         raise ValueError(f"{field} is unsafe or too large")
     if not allow_newlines and ("\r" in text or "\n" in text):
         raise ValueError(f"{field} must not contain line breaks")
@@ -84,6 +87,23 @@ def validate_approved_persona_draft_context(bundle: object) -> dict[str, Any]:
         raise ValueError("Persona proposal kind does not match mail.draft_context")
     if proposal.get("operation") != PERSONA_DRAFT_CONTEXT_OPERATION:
         raise ValueError("Persona proposal operation must be prepare")
+    unexpected_proposal_fields = sorted(
+        set(proposal)
+        - {
+            "proposal_id",
+            "proposal_kind",
+            "target",
+            "operation",
+            "payload",
+            "source_refs",
+            "approval",
+        }
+    )
+    if unexpected_proposal_fields:
+        raise ValueError(
+            "Persona proposal contains unsupported fields: "
+            + ", ".join(unexpected_proposal_fields)
+        )
     proposal_id = _validate_reference(
         proposal.get("proposal_id"),
         field="proposal_id",
@@ -143,6 +163,8 @@ def validate_approved_persona_draft_context(bundle: object) -> dict[str, Any]:
         isinstance(item, str) for item in tags_value
     ):
         raise ValueError("tags must be a list of strings")
+    if len(tags_value) > _MAX_TAG_COUNT:
+        raise ValueError("tags contains too many entries")
     tags: list[str] = []
     for item in tags_value:
         tag = item.strip()

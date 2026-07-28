@@ -125,6 +125,10 @@ def test_approved_persona_draft_context_is_strict_and_send_gated() -> None:
             {"payload": {"subject_hint": "Subject", "body_context": "Body", "send": True}},
             "unsupported fields",
         ),
+        (
+            {"send": True},
+            "unsupported fields",
+        ),
     ],
 )
 def test_approved_persona_draft_context_fails_closed(
@@ -142,6 +146,16 @@ def test_approved_persona_draft_context_rejects_unsafe_text() -> None:
                 payload={
                     "subject_hint": "Subject\nInjected header",
                     "body_context": "Body",
+                    "tags": [],
+                }
+            )
+        )
+    with pytest.raises(ValueError, match="body_context"):
+        validate_approved_persona_draft_context(
+            approved_bundle(
+                payload={
+                    "subject_hint": "Subject",
+                    "body_context": "Body\x01",
                     "tags": [],
                 }
             )
