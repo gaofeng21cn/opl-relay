@@ -565,10 +565,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "ok": not config_error and not sources_error,
         "product": "opl-relay",
         "version": __version__,
-        "command": shutil.which("codex-mail"),
+        "command": shutil.which("opl-relay"),
         "commands": {
             "opl-relay": shutil.which("opl-relay"),
-            "codex-mail": shutil.which("codex-mail"),
         },
         "state_dir": str(default_state_dir()),
         "state_dir_source": state_dir_source(),

@@ -1,6 +1,6 @@
 {
   "name": "opl-relay",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Local-first mail, relationship memory, Obsidian context, and review-gated drafting for Codex.",
   "author": {
     "name": "OPL"

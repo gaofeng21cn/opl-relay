@@ -13,10 +13,9 @@ validate-package:
 
 install-local:
 	mkdir -p "$(BIN_DIR)"
-	for command in opl-relay codex-mail; do \
-		printf '%s\n' '#!/usr/bin/env bash' 'PYTHONPATH="$(ROOT)/src" exec "$(PYTHON)" -m codex_mail_workbench.cli "$$@"' > "$(BIN_DIR)/$$command"; \
-		chmod +x "$(BIN_DIR)/$$command"; \
-	done
+	printf '%s\n' '#!/usr/bin/env bash' 'PYTHONPATH="$(ROOT)/src" exec "$(PYTHON)" -m codex_mail_workbench.cli "$$@"' > "$(BIN_DIR)/opl-relay"
+	chmod +x "$(BIN_DIR)/opl-relay"
+	rm -f "$(BIN_DIR)/codex-mail"
 	rm -f "$(BIN_DIR)/codex-mail-mcp"
 
 migrate-mail-store:

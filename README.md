@@ -19,6 +19,10 @@ routes drafts through Apple Mail for human review before any send.
 It is the communication module in the OPL Persona system, but it can also be
 installed and used on its own.
 
+Relay has one public product, Package, Plugin, Skill, and CLI identity:
+`opl-relay`. The internal Python module name is not another user-facing mail
+entry point.
+
 ## What You Can Ask It To Do
 
 - "Review the last three days of mail and tell me what needs a decision."
@@ -192,8 +196,6 @@ commits are not themselves immutable OPL release payloads. See
 - Relay is read-first. Delete, archive, move, and mark are not exposed.
 - A Persona approval does not authorize mail sending.
 - Apple Mail draft review and fingerprint-bound send approval remain separate.
-- The `codex-mail` command is retained as a CLI alias; new integrations should
-  use `opl-relay`.
 
 ## Documentation
 
