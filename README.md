@@ -108,9 +108,10 @@ codex plugin add opl-relay@opl-relay --json
 
 Start a new Codex task after installation so the new Plugin snapshot is loaded.
 
-> **Current boundary:** this Marketplace path installs a Codex Plugin carrier
-> that includes the Python engine. It is still a Git Marketplace snapshot, not
-> an OPL-managed Package release.
+> **Distribution boundary:** this command installs the Codex Plugin directly
+> from GitHub. OPL App uses the separate GHCR Package channel described below;
+> both deliver the same public Relay carrier but have independent lifecycle
+> authorities.
 
 ## Start With A New Profile
 
@@ -169,23 +170,25 @@ automatically.
 
 ## OPL App Distribution Status
 
-Relay already declares an OPL capability Package and role-neutral App
-contributions. The repository is being prepared for the target managed
-lifecycle:
+Relay declares an OPL Capability Package and the shared managed lifecycle:
 
 ```text
 OPL App
   -> OPL Framework action
-  -> repository index selects a compatible release
+  -> repository index selects a compatible immutable version
   -> immutable payload and digest are verified
   -> install / update / repair / uninstall
   -> Relay starts with the selected Profile Workspace
 ```
 
-That managed channel is **not published yet**. The repository URL inside
-`opl-package.json` is source provenance, not an update feed, and GitHub source
-commits are not themselves immutable OPL release payloads. See
-[Distribution](docs/distribution.md) for the exact current and target states.
+The contracted stable Package source is
+`ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable`.
+OPL App must treat Relay as remotely installable or updatable only after the
+Framework repository index selects an immutable version and that digest is
+publicly readable from GHCR. GitHub remains the source and Codex Plugin
+Marketplace input; GitHub Releases are not part of Relay distribution. See
+[Distribution](docs/distribution.md) for the authority and availability
+boundaries.
 
 ## Safety Boundary
 

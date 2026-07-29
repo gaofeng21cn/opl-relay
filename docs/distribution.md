@@ -13,12 +13,11 @@ substitute for another.
 | Codex Plugin | `plugins/opl-relay` | Installable carrier containing Skill, metadata, and runtime |
 | Python engine | `plugins/opl-relay/runtime` | Carried by the Plugin; no source checkout required |
 | OPL Package descriptor | `plugins/opl-relay/opl-package.json` | Declares capability identity and App contributions |
-| OPL managed release | Framework repository index plus immutable payload | Not published |
+| OPL managed Package | Framework repository index plus immutable GHCR payload | Available only after public index and digest readback |
 | User data | Selected Profile Workspace | Local and user-owned |
 
-The public Git repository is therefore an installation and update source for
-the **Codex Git Marketplace snapshot** today. It is not yet an OPL managed
-Package channel.
+The public Git repository is the source and Codex Git Marketplace authority.
+OPL App installation and updates use the separate GHCR Package channel.
 
 ## Codex Marketplace
 
@@ -61,9 +60,9 @@ declares:
 Its `source_repo` field records provenance. It is not a mutable updater URL and
 does not tell OPL App to clone `main`.
 
-The target OPL managed lifecycle uses Framework-owned release contracts:
+The OPL managed lifecycle uses Framework-owned distribution contracts:
 
-1. A release process publishes a complete, immutable Relay payload.
+1. The package workflow publishes a complete, immutable Relay payload to GHCR.
 2. The Framework repository index exposes compatible candidate versions.
 3. The selected index entry references a payload manifest by immutable URL and
    digest.
@@ -73,9 +72,16 @@ The target OPL managed lifecycle uses Framework-owned release contracts:
 7. Installed-state readback records the exact resolved Package and carrier
    bytes.
 
-Until a Relay release is present in that index and has passed the publication
-gates, OPL App must not claim that Relay is remotely installable, current, or
-repairable as a managed Package.
+The contracted moving channel is:
+
+```text
+ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable
+```
+
+OPL App must not claim that Relay is remotely installable, current, or
+repairable until the Framework repository index records the selected immutable
+version and digest and that digest is publicly readable from GHCR. GitHub
+Releases are not an installation or update authority.
 
 Relay must not implement a second updater. Version selection, immutable payload
 verification, installed locks, materialization, repair, and removal belong to
@@ -121,7 +127,7 @@ Plugin snapshot, or installed-package lock:
 
 Install, update, repair, and uninstall must preserve the Profile Workspace.
 
-## Release Readiness Checklist
+## Distribution Verification
 
 Repository readiness:
 
@@ -133,15 +139,14 @@ Repository readiness:
 - isolated Plugin discovery and install test in CI;
 - no private Profile Workspace data in Git.
 
-Managed OPL release readiness, still outstanding:
+Managed Package verification requires all of the following:
 
-- define the complete Relay payload contents;
-- publish an immutable payload manifest and digest;
-- add Relay to the Framework repository index;
-- verify Framework install, update, repair, and uninstall actions;
-- verify installed lock and exact-byte readback;
-- verify OPL App status and action projection;
-- verify that every lifecycle action preserves the selected Profile Workspace.
+- the immutable version and `latest-stable` resolve to the same public digest;
+- the Framework repository index selects that exact version and digest;
+- install, update, repair, and uninstall remain Framework-owned actions;
+- installed lock and exact-byte readback match the selected payload;
+- OPL App renders Relay through the generic Capability Package projection;
+- every lifecycle action preserves the selected Profile Workspace.
 
 ## Maintainer Rules
 
@@ -150,4 +155,4 @@ Managed OPL release readiness, still outstanding:
 - Do not store user data in a checkout, Plugin cache, or Package directory.
 - Do not add a Relay-owned self-update implementation.
 - Publish ordinary Git source changes and OPL immutable payloads as distinct
-  release surfaces, each with its own readback.
+  surfaces, each with its own readback. Do not create a GitHub Release.

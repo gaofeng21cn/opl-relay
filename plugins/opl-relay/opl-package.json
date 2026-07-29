@@ -3,9 +3,9 @@
   "package_id": "opl-relay",
   "display_name": "OPL Relay",
   "publisher": "one-person-lab",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "source": "first_party",
-  "package_role": "framework_capability_package",
+  "package_role": "capability_package",
   "source_repo": "https://github.com/gaofeng21cn/opl-relay",
   "machine_boundary": "This Package declares Relay capabilities and role-neutral App contributions. It does not own private mail, memory, workspace, credential, approval, installed, or runtime truth.",
   "capability_abi": {
@@ -29,7 +29,7 @@
   },
   "content_lock": {
     "algorithm": "sha256",
-    "canonicalization": "ordered_path_nul_file_bytes",
+    "canonicalization": "ordered_path_length_file_length_bytes",
     "paths": [
       ".codex-plugin/plugin.json",
       "assets/icon.png",
@@ -52,12 +52,11 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:4d8ac1f05423b6f4630f92916e4d9d028185120ea03cd0c6fd482bf8b265fd24"
+    "digest": "sha256:291736685f119696e755321e08936fe624e4f4c3672ae9e731d8e58dd3458fce"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
     "plugin_source_path": ".",
-    "carrier_source_commit": "21a88c619785c43614d35cf8fe6cff9c5844ea68",
     "codex_default_exposure": false,
     "optional_install_policy": "all_exported_skills",
     "app_contribution_abi": {

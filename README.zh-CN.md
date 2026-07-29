@@ -101,8 +101,8 @@ codex plugin add opl-relay@opl-relay --json
 
 安装后请新建一个 Codex 任务，让新任务加载刚安装的插件快照。
 
-> **当前边界：** 上述方式安装的插件载体已经包含 Python 引擎，可以脱离源码目录运行；
-> 但它仍然是 Codex Git Marketplace 快照，不是已经发布的 OPL 托管 Package。
+> **分发边界：** 上述命令由 Codex 直接从 GitHub 安装插件。OPL App 使用下文说明的
+> GHCR 能力包通道；两条路径交付同一套 Relay 载体，但安装、更新和状态权威彼此独立。
 
 ## 新用户首次配置
 
@@ -156,23 +156,25 @@ opl-relay --json draft open 'mail-draft://apple-mail/work/UUID'
 发送是另一项独立操作。用户审核后需要再次读取草稿，并且只能使用这次读取返回的当前
 指纹进行发送。内容变化会使旧批准失效；发送结果不明确时，系统不会自动重试。
 
-## OPL App 自动管理的准备状态
+## OPL App 自动管理通道
 
-Relay 已经声明 OPL 能力 Package 和不绑定智能体角色的应用界面贡献。目标中的自动
-管理链路是：
+Relay 已声明 OPL 能力包、统一托管生命周期和不绑定智能体角色的应用界面贡献：
 
 ```text
 OPL App
   -> 调用 OPL Framework 动作
-  -> 仓库索引选择兼容版本
+  -> 仓库索引选择兼容的不可变版本
   -> 校验不可变发布包和摘要
   -> 安装 / 更新 / 修复 / 卸载
   -> 使用所选数字分身工作空间启动 Relay
 ```
 
-这条托管分发渠道**目前还没有正式发布**。`opl-package.json` 中的 GitHub 地址只说明
-源码出处，不是更新源；GitHub 上的源码提交也不能直接当作不可变的 OPL 发布包。
-详细状态和后续接入条件见[分发与更新说明](docs/distribution.md)。
+约定的稳定通道是
+`ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable`。
+只有 Framework 仓库索引已经选择不可变版本，且对应摘要可从 GHCR 公开回读时，
+OPL App 才能把 Relay 标记为可远程安装或更新。GitHub 继续承载源码和 Codex 插件市场，
+不使用 GitHub Release 分发 Relay。完整权威与可用性边界见
+[分发与更新说明](docs/distribution.md)。
 
 ## 安全边界
 
