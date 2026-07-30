@@ -60,7 +60,7 @@ Apple Mail 草稿和最终发送门仍由 Relay 单独负责。
 | --- | --- | --- |
 | Git 仓库 | 源码、测试、插件文件、Skill 和 Package 描述 | Git 与维护者 |
 | Codex 插件快照 | 已安装的通信工作流和载体元数据 | Codex |
-| Relay 引擎 | `opl-relay` 命令行工具和本机邮件实现 | 当前随插件载体提供；目标由 OPL Framework 管理 |
+| Relay 引擎 | `opl-relay` 命令行工具和本机邮件实现 | 随 Codex Plugin 原生 carrier 提供；Relay 持有邮件语义，carrier 持有物理 installed state |
 | 数字分身工作空间 | 邮件数据库、账号引用、已批准记忆、个人规则和 Persona 状态 | 用户 |
 
 用户只需要选择一个数字分身工作空间：
@@ -158,22 +158,23 @@ opl-relay --json draft open 'mail-draft://apple-mail/work/UUID'
 
 ## OPL App 自动管理通道
 
-Relay 已声明 OPL 能力包、统一托管生命周期和不绑定智能体角色的应用界面贡献：
+Relay 已声明 OPL 能力包和不绑定智能体角色的应用界面贡献；publication 与物理安装是
+两个独立 authority 面：
 
 ```text
-OPL App
-  -> 调用 OPL Framework 动作
-  -> 仓库索引选择兼容的不可变版本
-  -> 校验不可变发布包和摘要
-  -> 安装 / 更新 / 修复 / 卸载
-  -> 使用所选数字分身工作空间启动 Relay
+Relay owner descriptor + 不可变 GHCR publication
+  -> OPL Base 下载 / 校验 / bytes handoff
+  -> 配置的原生 carrier 安装 / 更新 / 修复 / 卸载
+  -> 原生 installed readback
+  -> Framework discovery / carrier action 委托 / aggregation
+  -> OPL App 通用 Package projection
 ```
 
 约定的稳定通道是
 `ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable`。
-只有 Framework 仓库索引已经选择不可变版本，且对应摘要可从 GHCR 公开回读时，
-OPL App 才能把 Relay 标记为可远程安装或更新。GitHub 继续承载源码和 Codex 插件市场，
-不使用 GitHub Release 分发 Relay。完整权威与可用性边界见
+Package publication 必须从公开不可变 GHCR digest 回读；installed/current 状态必须
+从配置的原生 carrier 单独回读，Framework 只委托 action 并为 App 聚合结果。GitHub
+继续承载源码和 Codex 插件市场，不使用 GitHub Release 分发 Relay。完整权威与可用性边界见
 [分发与更新说明](docs/distribution.md)。
 
 ## 安全边界

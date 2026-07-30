@@ -14,8 +14,9 @@ OPL Persona or OPL App.
    memory, knowledge indexing, context assembly, and draft approval semantics.
 2. The Codex Plugin supplies the `opl-relay` Skill. It is an installable
    capability carrier, not a database owner.
-3. OPL Package metadata will expose the same capability to OPL App after the
-   platform has a role-neutral `app_contributions` contract.
+3. The owner Package descriptor exposes the same capability and its current
+   role-neutral `app_contributions`; installed availability still requires
+   fresh native-carrier readback.
 4. OPL App is the long-term user entry and visual management surface. It calls
    Relay through the same runtime boundary as Codex rather than implementing a
    second mail engine.

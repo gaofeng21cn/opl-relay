@@ -67,7 +67,7 @@ still owns the account, recipients, Apple Mail draft, and separate send gate.
 | --- | --- | --- |
 | Git repository | Source code, tests, Plugin files, Skills, and Package descriptor | Git / maintainers |
 | Codex Plugin snapshot | Installed communication instructions and carrier metadata | Codex |
-| Relay engine | The `opl-relay` CLI and local mail implementation | Embedded in the Plugin today; OPL Framework in the target model |
+| Relay engine | The `opl-relay` CLI and local mail implementation | Embedded in the Codex Plugin native carrier; Relay keeps mail semantics and the carrier keeps physical installed state |
 | Profile Workspace | Mail databases, account references, approved memory, policies, and Persona state | The user |
 
 The selected Profile Workspace is the only user-data root:
@@ -170,23 +170,25 @@ automatically.
 
 ## OPL App Distribution Status
 
-Relay declares an OPL Capability Package and the shared managed lifecycle:
+Relay declares an OPL Capability Package, while publication and physical
+installation remain separate authority surfaces:
 
 ```text
-OPL App
-  -> OPL Framework action
-  -> repository index selects a compatible immutable version
-  -> immutable payload and digest are verified
-  -> install / update / repair / uninstall
-  -> Relay starts with the selected Profile Workspace
+Relay owner descriptor + immutable GHCR publication
+  -> OPL Base download / verify / bytes handoff
+  -> configured native carrier install / update / repair / uninstall
+  -> native installed readback
+  -> Framework discovery / carrier delegation / aggregation
+  -> OPL App generic Package projection
 ```
 
 The contracted stable Package source is
 `ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable`.
-OPL App must treat Relay as remotely installable or updatable only after the
-Framework repository index selects an immutable version and that digest is
-publicly readable from GHCR. GitHub remains the source and Codex Plugin
-Marketplace input; GitHub Releases are not part of Relay distribution. See
+Package publication must be read from the public immutable GHCR digest.
+Installed/current state must be read separately from the configured native
+carrier; Framework only delegates actions and aggregates that readback for App.
+GitHub remains the source and Codex Plugin Marketplace input; GitHub Releases
+are not part of Relay distribution. See
 [Distribution](docs/distribution.md) for the authority and availability
 boundaries.
 

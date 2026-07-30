@@ -13,7 +13,7 @@ substitute for another.
 | Codex Plugin | `plugins/opl-relay` | Installable carrier containing Skill, metadata, and runtime |
 | Python engine | `plugins/opl-relay/runtime` | Carried by the Plugin; no source checkout required |
 | OPL Package descriptor | `plugins/opl-relay/opl-package.json` | Declares capability identity and App contributions |
-| OPL managed Package | Framework repository index plus immutable GHCR payload | Available only after public index and digest readback |
+| OPL Package publication | Relay owner descriptor plus immutable GHCR payload | Publication comes from public immutable digest readback; it is separate from installed state |
 | User data | Selected Profile Workspace | Local and user-owned |
 
 The public Git repository is the source and Codex Git Marketplace authority.
@@ -60,16 +60,19 @@ declares:
 Its `source_repo` field records provenance. It is not a mutable updater URL and
 does not tell OPL App to clone `main`.
 
-The OPL managed lifecycle uses Framework-owned distribution contracts:
+The Package and carrier path is:
 
 1. The package workflow publishes a complete, immutable Relay payload to GHCR.
-2. The Framework repository index exposes compatible candidate versions.
-3. The selected index entry references a payload manifest by immutable URL and
-   digest.
-4. OPL Framework verifies and materializes the payload.
-5. OPL App invokes Framework actions for install, update, repair, or uninstall.
+2. OPL Base may download, verify, and hand off selected immutable OCI bytes.
+3. The configured native carrier installs, updates, repairs, or removes those
+   bytes and owns physical installed state.
+4. OPL Framework discovers installed descriptors, delegates carrier actions,
+   and aggregates presence and callability without creating a second resolver,
+   installed lock, payload store, LKG, or lifecycle receipt.
+5. OPL App renders Framework's generic projection and invokes only the actions
+   supplied by the configured carrier.
 6. The host passes the selected `OPL_PROFILE_WORKSPACE` when it starts Relay.
-7. Installed-state readback records the exact resolved Package and carrier
+7. Native-carrier readback records the exact resolved Package and carrier
    bytes.
 
 The contracted moving channel is:
@@ -78,14 +81,16 @@ The contracted moving channel is:
 ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable
 ```
 
-OPL App must not claim that Relay is remotely installable, current, or
-repairable until the Framework repository index records the selected immutable
-version and digest and that digest is publicly readable from GHCR. GitHub
-Releases are not an installation or update authority.
+Publication must be read from the public immutable GHCR digest. Installed,
+current, repairable, or removable state must be read separately from the
+configured native carrier. Framework projection aggregates these owner results;
+it is not an installation or update authority. GitHub Releases are not an
+installation or update authority.
 
-Relay must not implement a second updater. Version selection, immutable payload
-verification, installed locks, materialization, repair, and removal belong to
-OPL Framework.
+Relay must not implement a second updater. Relay owns descriptor identity and
+publication; OPL Base keeps only thin download/verify/handoff behavior; the
+configured native carrier owns physical lifecycle and readback; Framework owns
+generic discovery, delegation, and aggregation.
 
 ## Profile Workspace
 
@@ -142,9 +147,10 @@ Repository readiness:
 Managed Package verification requires all of the following:
 
 - the immutable version and `latest-stable` resolve to the same public digest;
-- the Framework repository index selects that exact version and digest;
-- install, update, repair, and uninstall remain Framework-owned actions;
-- installed lock and exact-byte readback match the selected payload;
+- the configured native carrier exposes the intended lifecycle actions;
+- native installed exact-byte readback matches the selected payload;
+- Framework aggregation matches the carrier result without a second lock,
+  resolver, or currentness source;
 - OPL App renders Relay through the generic Capability Package projection;
 - every lifecycle action preserves the selected Profile Workspace.
 
