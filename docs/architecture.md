@@ -38,21 +38,24 @@ OPL Persona or OPL App.
 - Triage evidence: a facts-only v2 envelope exposes mail headers, recipient
   routing, and reference-set provenance. Persona owns private Markdown reading,
   content digests, and all triage judgments.
-- CLI: `opl-relay`, with `codex-mail` retained as a command alias.
+- CLI: `opl-relay` is the only command entry. The retained
+  `codex-mail-workbench` compatibility Skill and Keychain service name do not
+  create a `codex-mail` command alias.
 
 ## Runtime Ownership
 
-Relay resolves three independent roots:
+Relay separates replaceable installation bytes from one user-owned Profile
+Workspace:
 
 | Surface | Owner | Contents |
 | --- | --- | --- |
 | Installation | Plugin or Package manager | Code, manifest, Skills |
-| Data root | User | Accounts, SQLite stores, sync cursors, derived indexes |
-| Workspace | User or current project | Profile, policies, context, templates, exports |
+| Profile Workspace | User | Profile, policies, context, templates, exports, and Relay state under `data/relay` |
 
 The installation root is replaceable. Deleting or upgrading a plugin must not
-delete either user-owned root. Codex App and OPL App must use the same configured
-Relay data service when they act for the same user.
+delete the user-owned `OPL_PROFILE_WORKSPACE`. Codex App and OPL App must use the
+same configured Relay state under that workspace when they act for the same
+user.
 
 See [Workspace Contract](workspace-contract.md) for the single-root rule and
 [Product Architecture](product-architecture.md) for the broader OPL

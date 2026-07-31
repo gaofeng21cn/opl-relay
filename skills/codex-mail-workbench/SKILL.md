@@ -10,7 +10,7 @@ separate mailbox facts from user-specific judgment.
 
 ## Authority And Private State
 
-- Treat `codex-mail --json accounts` as current account truth. Do not infer
+- Treat `opl-relay --json accounts` as current account truth. Do not infer
   account ids from examples or memory.
 - Use `OPL_PROFILE_WORKSPACE` as the only profile root; Relay state is always
   `data/relay` below it. Do not use a source checkout or plugin cache as storage.
@@ -20,22 +20,23 @@ separate mailbox facts from user-specific judgment.
 - Keep accounts, SQLite data, raw mail, cursors, and overlay content private.
   Never copy private rules into public repository files.
 - Credentials belong in macOS Keychain under service `codex-mail-workbench`.
-  Never request passwords in chat, docs, or configuration files.
+  This retained credential contract is not a CLI alias. Never request passwords
+  in chat, docs, or configuration files.
 
 ## Read And Triage
 
 Use one evidence path:
 
 ```bash
-command -v opl-relay || command -v codex-mail
+command -v opl-relay
 opl-relay --json doctor
-codex-mail --json accounts
-codex-mail --json sync --account <account> --mode incremental
-codex-mail --json recent --account <account> --limit 20
-codex-mail --json recent --account <account> --since <start-iso> --until <end-iso> --limit 100
-codex-mail --json search "<sender, subject, project, or thread clue>" --account <account> --limit 20
-codex-mail --json search "<query>" --account <account> --since <start-iso> --until <end-iso> --limit 20
-codex-mail --json read 'email-store://...'
+opl-relay --json accounts
+opl-relay --json sync --account <account> --mode incremental
+opl-relay --json recent --account <account> --limit 20
+opl-relay --json recent --account <account> --since <start-iso> --until <end-iso> --limit 100
+opl-relay --json search "<sender, subject, project, or thread clue>" --account <account> --limit 20
+opl-relay --json search "<query>" --account <account> --since <start-iso> --until <end-iso> --limit 20
+opl-relay --json read 'email-store://...'
 ```
 
 1. Run `doctor` and `accounts`; record the configured accounts and local store
@@ -71,7 +72,7 @@ final status with the editable form closed or locked before reporting success.
 Before drafting for a known person or project, prefer a bounded context package:
 
 ```bash
-codex-mail --json context build \
+opl-relay --json context build \
   --person "<person>" \
   --project "<project>" \
   --query "<current task>"
@@ -88,9 +89,9 @@ codex-mail --json context build \
 When new durable knowledge appears, Codex may propose a candidate:
 
 ```bash
-codex-mail --json memory entity upsert \
+opl-relay --json memory entity upsert \
   --kind person --name "<canonical name>" --email "<address>"
-codex-mail --json memory propose \
+opl-relay --json memory propose \
   --entity "<name or mail-memory://entity/...>" \
   --category "<fact|relationship|preference|commitment|event|style|inference|note>" \
   --content "<one durable statement>" \
@@ -108,13 +109,13 @@ vault.
 Drafting does not grant send authority. Use this sequence:
 
 ```bash
-codex-mail --json draft create \
+opl-relay --json draft create \
   --account <account> \
   --to 'Recipient <recipient@example.test>' \
   --subject '<subject>' \
   --body-file <utf8-plain-text-file>
-codex-mail --json draft inspect 'mail-draft://apple-mail/<account>/<uuid>'
-codex-mail --json draft open 'mail-draft://apple-mail/<account>/<uuid>'
+opl-relay --json draft inspect 'mail-draft://apple-mail/<account>/<uuid>'
+opl-relay --json draft open 'mail-draft://apple-mail/<account>/<uuid>'
 ```
 
 1. Apply the private overlay before writing the body.
@@ -127,7 +128,7 @@ codex-mail --json draft open 'mail-draft://apple-mail/<account>/<uuid>'
 5. Send exactly once:
 
 ```bash
-codex-mail --json draft send \
+opl-relay --json draft send \
   'mail-draft://apple-mail/<account>/<uuid>' \
   --approval 'sha256:<current-fingerprint>'
 ```
