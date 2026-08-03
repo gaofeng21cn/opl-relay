@@ -66,6 +66,13 @@ def test_package_identity_capabilities_and_plugin_version_are_aligned() -> None:
     assert set(package["exports"]["core_module_ids"]) == CAPABILITY_IDS
     assert package["exports"]["core_skill_ids"] == ["opl-relay"]
     assert package["codex_surface"]["plugin_id"] == plugin["name"] == "opl-relay"
+    assert package["codex_surface"]["configured_codex_plugin_carrier"] == {
+        "kind": "codex_plugin_manager",
+        "plugin_selector": "opl-relay@opl-relay",
+        "executor_route": "codex_cli",
+        "marketplace_source": "gaofeng21cn/opl-relay",
+        "publication_ref": "ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable",
+    }
 
     skill = SKILL_PATH.read_text(encoding="utf-8")
     assert all(capability_id in skill for capability_id in CAPABILITY_IDS)
