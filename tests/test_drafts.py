@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
@@ -62,10 +64,15 @@ class FakeProvider:
             "mailbox": "Sent",
         }
         self.receipt: dict[str, object] | None = None
+        self.reply_all_kwargs: dict[str, object] | None = None
 
     def create(self, **kwargs: object) -> DraftSnapshot:
         if self.assert_create_body:
             assert kwargs["body_text"] == self.current.body_text
+        return self.current
+
+    def reply_all(self, **kwargs: object) -> DraftSnapshot:
+        self.reply_all_kwargs = kwargs
         return self.current
 
     def inspect(self, **kwargs: object) -> DraftSnapshot:
@@ -192,6 +199,77 @@ def test_create_cleans_up_body_mismatch(tmp_path: Path) -> None:
             bcc=[],
             subject=current.subject,
             body_text="Expected body",
+            attachments=[],
+            visible=False,
+        )
+    assert provider.discard_calls == 1
+
+
+def test_reply_all_registers_exact_source_and_keeps_send_gate(tmp_path: Path) -> None:
+    current = snapshot(
+        to=[Recipient("chair@example.test", "Chair")],
+        cc=[Recipient("secretary@example.test", "Secretary")],
+        body_text="Approved reply.\n\nOn Aug 4, Chair wrote:\n> Source message",
+    )
+    provider = FakeProvider(current)
+    ledger_path = tmp_path / "drafts.sqlite"
+    service = DraftService(DraftLedger(ledger_path), provider)
+
+    result = service.reply_all(
+        account_id="work",
+        sender="work@example.test",
+        provider_account="Work",
+        source_message_id=141819,
+        mailbox_path="INBOX/Conference",
+        body_text="Approved reply.",
+        attachments=[],
+        visible=False,
+    )
+
+    assert provider.reply_all_kwargs == {
+        "sender": "work@example.test",
+        "provider_account": "Work",
+        "source_message_id": 141819,
+        "mailbox_path": "INBOX/Conference",
+        "body_text": "Approved reply.",
+        "attachments": [],
+        "visible": False,
+    }
+    assert result["reply"] == {
+        "mode": "reply_all",
+        "source": {
+            "provider": "apple-mail",
+            "account": "Work",
+            "id": 141819,
+            "mailboxPath": "INBOX/Conference",
+        },
+    }
+    assert result["to"][0]["address"] == "chair@example.test"
+    assert result["cc"][0]["address"] == "secretary@example.test"
+    inspected = service.inspect(str(result["draft_ref"]))
+    assert inspected["approval_fingerprint"] == result["approval_fingerprint"]
+
+    with sqlite3.connect(ledger_path) as conn:
+        event_type, detail_json = conn.execute(
+            "SELECT event_type, detail_json FROM mail_draft_events ORDER BY event_id LIMIT 1"
+        ).fetchone()
+    assert event_type == "reply_all_created"
+    assert json.loads(detail_json) == result["reply"]
+
+
+def test_reply_all_cleans_up_when_reviewed_body_is_not_preserved(tmp_path: Path) -> None:
+    current = snapshot(body_text="Provider replaced the reviewed body")
+    provider = FakeProvider(current)
+    service = DraftService(DraftLedger(tmp_path / "drafts.sqlite"), provider)
+
+    with pytest.raises(DraftError, match="Reply All 保存后的审核正文"):
+        service.reply_all(
+            account_id="work",
+            sender="work@example.test",
+            provider_account="Work",
+            source_message_id=141819,
+            mailbox_path="INBOX",
+            body_text="Approved reply.",
             attachments=[],
             visible=False,
         )

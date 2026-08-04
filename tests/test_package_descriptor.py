@@ -28,6 +28,7 @@ VIEW_TYPES = {"list_detail", "timeline", "approval_diff"}
 ACTION_REFS = {
     "communications.mail.v1#sync.incremental",
     "communications.mail.v1#draft.create",
+    "communications.mail.v1#draft.reply_all",
     "communications.mail.v1#draft.create_from_persona",
     "communications.mail.v1#draft.inspect",
     "communications.mail.v1#draft.open",
@@ -160,6 +161,9 @@ def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions()
     }
     assert commands_by_id["relay.draft.send"]["confirmation_required"] is True
     assert commands_by_id["relay.draft.create-from-persona"]["confirmation_required"] is True
+    assert commands_by_id["relay.draft.reply-all"]["action_ref"] == (
+        "communications.mail.v1#draft.reply_all"
+    )
     assert all(
         "confirmation_required" not in command
         for command_id, command in commands_by_id.items()

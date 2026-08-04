@@ -1186,6 +1186,27 @@ def cmd_draft_create(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_draft_reply_all(args: argparse.Namespace) -> int:
+    account = load_account(Path(args.config).expanduser(), args.account)
+    attachments = [Path(value).expanduser() for value in args.attach]
+    missing = [str(path) for path in attachments if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("附件不存在: " + ", ".join(missing))
+    service, _ = draft_service(args)
+    payload = service.reply_all(
+        account_id=account.account_id,
+        sender=account.email,
+        provider_account=args.apple_mail_account,
+        source_message_id=args.apple_mail_id,
+        mailbox_path=args.mailbox_path,
+        body_text=read_body(args),
+        attachments=attachments,
+        visible=args.open,
+    )
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
+
+
 def cmd_draft_adopt(args: argparse.Namespace) -> int:
     account = load_account(Path(args.config).expanduser(), args.account)
     service, provider = draft_service(args)
@@ -1493,6 +1514,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="创建后在 Apple Mail 中显示草稿",
     )
     draft_create.set_defaults(func=cmd_draft_create)
+
+    draft_reply_all = draft_actions.add_parser(
+        "reply-all",
+        help="按 Apple Mail 原生 Reply All 路由创建稳定审核草稿",
+    )
+    draft_reply_all.add_argument("--account", required=True)
+    draft_reply_all.add_argument("--apple-mail-account", required=True)
+    draft_reply_all.add_argument("--apple-mail-id", required=True, type=int)
+    draft_reply_all.add_argument("--mailbox-path", required=True)
+    reply_body_source = draft_reply_all.add_mutually_exclusive_group(required=True)
+    reply_body_source.add_argument("--body")
+    reply_body_source.add_argument("--body-file")
+    draft_reply_all.add_argument("--attach", action="append", default=[])
+    draft_reply_all.add_argument(
+        "--open",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="创建后在 Apple Mail 中显示草稿",
+    )
+    draft_reply_all.set_defaults(func=cmd_draft_reply_all)
 
     draft_adopt = draft_actions.add_parser("adopt", help="登记现有 Apple Mail 草稿")
     draft_adopt.add_argument("--account", required=True)

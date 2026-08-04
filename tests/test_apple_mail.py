@@ -4,7 +4,7 @@ import base64
 from email.message import EmailMessage
 from pathlib import Path
 
-from codex_mail_workbench.apple_mail import AppleMailProvider, _snapshot
+from codex_mail_workbench.apple_mail import JXA_SOURCE, AppleMailProvider, _snapshot
 from codex_mail_workbench.drafts import Recipient
 
 
@@ -98,3 +98,43 @@ def test_provider_create_uses_absolute_attachment_paths(tmp_path: Path) -> None:
 
     assert captured["attachments"] == [str(attachment.resolve())]
     assert captured["visible"] is True
+
+
+def test_provider_reply_all_uses_exact_source_tuple_and_absolute_attachments(
+    tmp_path: Path,
+) -> None:
+    attachment = tmp_path / "agenda.pdf"
+    attachment.write_bytes(b"agenda")
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def runner(action: str, payload: dict[str, object]) -> object:
+        calls.append((action, payload))
+        return raw_draft()
+
+    provider = AppleMailProvider(runner)
+    provider.reply_all(
+        sender="work@example.test",
+        provider_account="Work",
+        source_message_id=141819,
+        mailbox_path="INBOX/Conference",
+        body_text="Approved reply.",
+        attachments=[attachment],
+        visible=False,
+    )
+
+    action, payload = calls[-1]
+    assert action == "replyAll"
+    assert payload["providerAccount"] == "Work"
+    assert payload["sourceMessageId"] == 141819
+    assert payload["mailboxPath"] == "INBOX/Conference"
+    assert payload["attachments"] == [str(attachment.resolve())]
+    assert payload["visible"] is False
+
+
+def test_jxa_reply_all_is_provider_native_and_recipient_guarded() -> None:
+    assert "nativeReply = app.reply(sourceMessage" in JXA_SOURCE
+    assert "replyToAll: true" in JXA_SOURCE
+    assert "messageById(sourceMailbox, payload.sourceMessageId)" in JXA_SOURCE
+    assert "validateReplyRecipients(account, nativeReply)" in JXA_SOURCE
+    assert 'pushRecipients(app, reviewDraft, "to", route.to)' in JXA_SOURCE
+    assert "validateReplyRecipients(account, reviewDraft)" in JXA_SOURCE

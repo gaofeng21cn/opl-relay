@@ -84,8 +84,9 @@ read/unread state, or a small same-day screen:
    requires IMAP freshness, complete inbox coverage, multiple dates, stable
    `email-store://` provenance, or auditable recipient headers.
 
-This adapter never creates, sends, deletes, archives, moves, marks, or
-otherwise changes mail.
+The local screening route itself never creates, sends, deletes, archives,
+moves, marks, or otherwise changes mail. A later, explicitly requested draft
+operation remains a separate review-gated write.
 
 ## Persona Triage Evidence
 
@@ -132,10 +133,31 @@ external-site content into public skill files.
 
 ## Draft Approval
 
-`draft create` may create and open an Apple Mail draft. It does not authorize
-sending. Let the user review the draft in Apple Mail, run `draft inspect` again
-after approval, and pass only the current fingerprint to `draft send`. Any
-content change invalidates approval. Never retry an `unknown` send result.
+`draft create` and `draft reply-all` may create and open an Apple Mail draft.
+They do not authorize sending. Let the user review the draft in Apple Mail, run
+`draft inspect` again after approval, and pass only the current fingerprint to
+`draft send`. Any content change invalidates approval. Never retry an `unknown`
+send result.
+
+For a reply to an existing multi-recipient Apple Mail message, use Mail's
+native Reply All route rather than rebuilding recipients from a flattened Relay
+record:
+
+```bash
+opl-relay --json draft reply-all \
+  --account work \
+  --apple-mail-account 'Work' \
+  --apple-mail-id 12345 \
+  --mailbox-path 'INBOX/Conference' \
+  --body-file ./reply.txt
+```
+
+The Apple Mail `account`, numeric message `id`, and `mailboxPath` must be the
+exact tuple returned by the local screen. Relay calls provider-native Reply All
+to derive routing, materializes that route as a stable review draft, then fails
+closed if the route contains the sender's own address, duplicates, Bcc, no
+recipients, or an ambiguous source. The command returns `send_allowed=false`;
+sending still requires the separate fingerprint-bound `draft send` operation.
 
 ## Persona Draft Handoff
 

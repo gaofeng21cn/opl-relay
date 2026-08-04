@@ -52,7 +52,7 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:291736685f119696e755321e08936fe624e4f4c3672ae9e731d8e58dd3458fce"
+    "digest": "sha256:991024a9d277bef0bdc8a1efef4325e8b9e149df009d0d64de855233946e761b"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
@@ -157,12 +157,13 @@
           "en-US": "Draft review"
         },
         "data_ref": "communications.mail.v1#draft.inspect",
-          "command_ids": [
-            "relay.draft.create",
-            "relay.draft.create-from-persona",
-            "relay.draft.inspect",
-            "relay.draft.open",
-            "relay.draft.send"
+        "command_ids": [
+          "relay.draft.create",
+          "relay.draft.reply-all",
+          "relay.draft.create-from-persona",
+          "relay.draft.inspect",
+          "relay.draft.open",
+          "relay.draft.send"
         ],
         "empty_state_i18n": {
           "zh-CN": "没有待审核草稿",
@@ -212,6 +213,14 @@
         },
         "action_ref": "communications.mail.v1#draft.create_from_persona",
         "confirmation_required": true
+      },
+      {
+        "command_id": "relay.draft.reply-all",
+        "label_i18n": {
+          "zh-CN": "回复全部审核草稿",
+          "en-US": "Reply All review draft"
+        },
+        "action_ref": "communications.mail.v1#draft.reply_all"
       },
       {
         "command_id": "relay.draft.inspect",

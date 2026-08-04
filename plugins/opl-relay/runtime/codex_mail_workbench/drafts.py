@@ -82,6 +82,18 @@ class DraftProvider(Protocol):
         visible: bool,
     ) -> DraftSnapshot: ...
 
+    def reply_all(
+        self,
+        *,
+        sender: str,
+        provider_account: str,
+        source_message_id: int,
+        mailbox_path: str,
+        body_text: str,
+        attachments: list[Path],
+        visible: bool,
+    ) -> DraftSnapshot: ...
+
     def inspect(self, *, provider_account: str, provider_uuid: str) -> DraftSnapshot: ...
 
     def open(self, *, provider_account: str, provider_uuid: str) -> DraftSnapshot: ...
@@ -265,6 +277,7 @@ class DraftLedger:
         account_id: str,
         snapshot: DraftSnapshot,
         event_type: str,
+        event_detail: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         draft_ref = make_draft_ref(account_id, snapshot.provider_uuid)
         now = utc_now()
@@ -298,7 +311,7 @@ class DraftLedger:
                     now,
                 ),
             )
-            self._event(conn, draft_ref, event_type)
+            self._event(conn, draft_ref, event_type, detail=event_detail)
         return self.get(draft_ref)
 
     def register_sent_identity(
@@ -600,6 +613,63 @@ class DraftService:
             snapshot,
             state=record["state"],
         )
+
+    def reply_all(
+        self,
+        *,
+        account_id: str,
+        sender: str,
+        provider_account: str,
+        source_message_id: int,
+        mailbox_path: str,
+        body_text: str,
+        attachments: list[Path],
+        visible: bool,
+    ) -> dict[str, Any]:
+        prepared = prepare_body(body_text)
+        snapshot = self.provider.reply_all(
+            sender=sender,
+            provider_account=provider_account,
+            source_message_id=source_message_id,
+            mailbox_path=mailbox_path,
+            body_text=prepared,
+            attachments=attachments,
+            visible=visible,
+        )
+        live_body = normalize_body(snapshot.body_text).lstrip("\n")
+        if live_body != prepared and not live_body.startswith(prepared + "\n"):
+            cleaned = False
+            try:
+                cleaned = self.provider.discard(
+                    provider_account=snapshot.provider_account,
+                    provider_uuid=snapshot.provider_uuid,
+                )
+            except Exception:
+                pass
+            raise DraftError(
+                "Apple Mail Reply All 保存后的审核正文与输入不一致；"
+                + ("异常草稿已移入已删除邮件" if cleaned else "异常草稿仍保留在 Mail 中")
+            )
+        source = {
+            "provider": "apple-mail",
+            "account": provider_account,
+            "id": source_message_id,
+            "mailboxPath": mailbox_path,
+        }
+        record = self.ledger.register(
+            account_id=account_id,
+            snapshot=snapshot,
+            event_type="reply_all_created",
+            event_detail={"mode": "reply_all", "source": source},
+        )
+        payload = snapshot_payload(
+            account_id,
+            record["draft_ref"],
+            snapshot,
+            state=record["state"],
+        )
+        payload["reply"] = {"mode": "reply_all", "source": source}
+        return payload
 
     def adopt(
         self,

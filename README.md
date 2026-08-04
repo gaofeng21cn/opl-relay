@@ -163,6 +163,25 @@ opl-relay --json draft inspect 'mail-draft://apple-mail/work/UUID'
 opl-relay --json draft open 'mail-draft://apple-mail/work/UUID'
 ```
 
+Reply to an existing multi-recipient Apple Mail message by using Mail's native
+Reply All route to derive recipients and subject, then materializing that route
+as a stable review draft. Use the exact `account`, numeric message `id`, and
+`mailboxPath` returned by the Apple Mail local screen:
+
+```bash
+opl-relay --json draft reply-all \
+  --account work \
+  --apple-mail-account 'Work' \
+  --apple-mail-id 12345 \
+  --mailbox-path 'INBOX/Conference' \
+  --body-file ./reply.txt
+```
+
+Relay does not reconstruct recipients from a flattened mail record. It rejects
+self-addresses, duplicates, Bcc, empty recipient sets, and ambiguous source
+tuples before registering the stable review draft. The saved draft is the
+review surface; provider-native Reply All is the routing authority.
+
 Sending is a separate, explicit action. Inspect the current draft after review
 and use only the fingerprint returned by that readback. Any content change
 invalidates the earlier approval, and an unknown send result is never retried

@@ -657,7 +657,7 @@ def test_cli_memory_candidate_approval_flow(tmp_path: Path) -> None:
 
 def test_cli_exposes_draft_lifecycle() -> None:
     parser = cli.build_parser()
-    for action in ["create", "adopt", "inspect", "open", "send"]:
+    for action in ["create", "reply-all", "adopt", "inspect", "open", "send"]:
         if action == "create":
             args = parser.parse_args(
                 [
@@ -669,6 +669,23 @@ def test_cli_exposes_draft_lifecycle() -> None:
                     "reviewer@example.test",
                     "--subject",
                     "Review",
+                    "--body",
+                    "Body",
+                ]
+            )
+        elif action == "reply-all":
+            args = parser.parse_args(
+                [
+                    "draft",
+                    action,
+                    "--account",
+                    "work",
+                    "--apple-mail-account",
+                    "Work",
+                    "--apple-mail-id",
+                    "141819",
+                    "--mailbox-path",
+                    "INBOX/Conference",
                     "--body",
                     "Body",
                 ]
@@ -755,3 +772,68 @@ def test_cli_draft_create_routes_to_service(monkeypatch, capsys, tmp_path: Path)
     assert payload["draft"]["draft_ref"].startswith("mail-draft://")
     assert calls["sender"] == "work@example.test"
     assert calls["to"][0].address == "reviewer@example.test"
+
+
+def test_cli_draft_reply_all_routes_exact_apple_mail_tuple(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeService:
+        def reply_all(self, **kwargs: object) -> dict[str, object]:
+            calls.update(kwargs)
+            return {
+                "draft_ref": "mail-draft://apple-mail/work/uuid",
+                "reply": {"mode": "reply_all"},
+            }
+
+    monkeypatch.setattr(
+        cli,
+        "load_account",
+        lambda path, account_id: SimpleNamespace(
+            account_id=account_id,
+            email="work@example.test",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "draft_service",
+        lambda args: (FakeService(), object()),
+    )
+
+    result = cli.main(
+        [
+            "--json",
+            "--draft-db",
+            str(tmp_path / "drafts.sqlite"),
+            "draft",
+            "reply-all",
+            "--account",
+            "work",
+            "--apple-mail-account",
+            "Work",
+            "--apple-mail-id",
+            "141819",
+            "--mailbox-path",
+            "INBOX/Conference",
+            "--body",
+            "Approved reply.",
+            "--no-open",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["draft"]["reply"]["mode"] == "reply_all"
+    assert calls == {
+        "account_id": "work",
+        "sender": "work@example.test",
+        "provider_account": "Work",
+        "source_message_id": 141819,
+        "mailbox_path": "INBOX/Conference",
+        "body_text": "Approved reply.",
+        "attachments": [],
+        "visible": False,
+    }
