@@ -1,5 +1,10 @@
 # OPL Relay Architecture
 
+Owner: `opl-relay`
+Purpose: `relay_implementation_architecture`
+State: `active_current`
+Machine boundary: This document explains Relay-owned source and data boundaries. Package publication, configured-carrier installation, Framework aggregation, App rendering, and live runtime state remain authoritative only in their owning descriptors, repositories, carrier readback, and runtime output.
+
 For the cross-repository product and authority model, read
 `opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
 repository first. This document is the Relay-specific implementation view.
@@ -49,13 +54,16 @@ Workspace:
 
 | Surface | Owner | Contents |
 | --- | --- | --- |
-| Installation | Plugin or Package manager | Code, manifest, Skills |
+| Package owner descriptor | Relay | Package identity, capabilities, content lock, role-neutral App contributions, and publication references |
+| Installation | Configured native carrier | Replaceable code, manifest, Skills, lifecycle actions, and physical installed-state readback |
 | Profile Workspace | User | Profile, policies, context, templates, exports, and Relay state under `data/relay` |
 
-The installation root is replaceable. Deleting or upgrading a plugin must not
-delete the user-owned `OPL_PROFILE_WORKSPACE`. Codex App and OPL App must use the
-same configured Relay state under that workspace when they act for the same
-user.
+The installation root is replaceable. Removing, repairing, or upgrading a
+carrier installation must not delete the user-owned `OPL_PROFILE_WORKSPACE`.
+Framework may discover the installed descriptor, delegate an action, and
+aggregate the carrier result, but it does not become a second physical
+installation owner. Codex App and OPL App must use the same configured Relay
+state under that workspace when they act for the same user.
 
 See [Workspace Contract](workspace-contract.md) for the single-root rule and
 [Product Architecture](product-architecture.md) for the broader OPL

@@ -1,5 +1,10 @@
 # OPL Relay, Persona, And App Product Architecture
 
+Owner: `opl-relay`
+Purpose: `relay_cross_repo_product_boundary`
+State: `active_current`
+Machine boundary: This document records Relay's cross-repository product boundary and owner handoffs. Relay source cannot prove Framework admission, App or Shell rendering, Package publication, configured-carrier installation, or another repository's current state.
+
 The cross-repository design authority is
 `opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
 repository. This document records the Relay-specific consequences of that
@@ -39,7 +44,7 @@ Codex / OPL app-server runtime
 
 | Repository | Keep/Create | Responsibility |
 | --- | --- | --- |
-| `opl-relay` | Renamed from the Codex Mail Workbench repo; current mail repository | Mail engine, CLI, Relay Skill/plugin, Package adapter, and mail-context bridge |
+| `opl-relay` | Renamed from the Codex Mail Workbench repo; current mail repository | Mail engine, CLI, Relay Skill/plugin, Package owner descriptor, and mail-context bridge |
 | `opl-persona` | Current cross-domain repository | PI context, provenance, review-gated proposals, and cross-domain Skills |
 | `one-person-lab` | Keep | Generic Package/runtime/workspace contracts |
 | `one-person-lab-app` | Keep | App product shell and role-neutral contribution UX |
@@ -114,6 +119,9 @@ through a role-neutral `app_contributions` contract:
 
 The Package declares contributions; OPL App renders them. The platform must not
 branch on a Relay package id or force `standard_agent` fields onto a capability.
+The Relay descriptor and carrier-root ABI are present in this repository;
+whether the current App renders or invokes them remains an App/Framework
+readback question, not a Relay source claim.
 
 The first useful Relay contribution set is:
 
@@ -141,25 +149,17 @@ This avoids two bad couplings:
 - Persona does not become a monolith containing mail, knowledge, research, and
   every future domain engine.
 
-## Delivery Sequence
+## Current Delivery Boundary
 
-1. Establish Relay branding, state/workspace separation, CLI compatibility, and
-   installable Codex Plugin.
-2. Add a role-neutral OPL `app_contributions` contract and a small Relay Package
-   adapter in the existing OPL repos.
-3. Add OPL App mail, memory, and approval views backed by Relay's existing
-   identities and read models.
-4. Use `opl-persona` for publication-to-knowledge/website proposals and
-   Obsidian-memo-to-website/mail proposals.
-5. Add adapters only at the authority that owns the target system; Persona
-   remains proposal-first and does not become a central CMS or mail store.
+| Surface | Current Relay-owned state | External owner boundary |
+| --- | --- | --- |
+| Product and data boundary | Branding, one `opl-relay` CLI, Profile Workspace separation, and stable mail identities are implemented in Relay source and tests | Live account, mail, workspace, and runtime truth still require Relay CLI/runtime readback |
+| Codex carrier | The installable Codex Plugin carries the Relay Skill and runtime without owning user data | Installed/current state belongs to fresh Codex Plugin carrier readback |
+| Package contribution | The owner descriptor declares stable capability exports, role-neutral `app_contributions`, a carrier-root ABI, and content lock | Publication belongs to immutable owner-channel digest readback; physical lifecycle belongs to the configured native carrier |
+| Persona bridge | Relay validates an approved Persona mail-draft context and creates an Apple Mail review draft without sending | Persona owns the cross-domain proposal contract; Relay retains draft identity, review, fingerprint, and final delivery boundaries |
+| Host consumption | Relay exposes generic data/action refs without embedding host UI | Framework admission, OPL App rendering/action invocation, and Shell navigation remain host-owned and require fresh evidence from those repositories |
+| Website adapter | Relay does not become a CMS or website writer | `gflab_web` owns its proposal-only Hugo adapter |
 
-The current repository implements the Relay-owned half of this model: the Codex
-Plugin, stable capability exports, declarative Package contributions, and the
-review-gated bridge that accepts a strictly validated, user-approved Persona
-mail-draft context to create an Apple Mail draft without sending. Persona owns
-the cross-domain proposal contract; Relay continues to own the mail draft
-identity, review surface, fingerprint, and final delivery boundary.
-Persona owns the cross-domain proposal contract; `gflab_web` owns its
-proposal-only Hugo adapter. Framework admission, OPL App rendering, and Shell
-navigation remain host-owned work in their respective repositories.
+New adapters belong at the authority that owns the target system. This rule
+keeps Persona proposal-first and prevents Relay or Persona from becoming a
+central CMS, Package lifecycle manager, or second mail store.
