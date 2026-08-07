@@ -1,5 +1,12 @@
 # OPL Relay Runtime And Workspace Contract
 
+Owner: `opl-relay`
+Purpose: `runtime_workspace_contract`
+State: `active_contract`
+Machine boundary: Human-readable runtime and workspace invariants. Current
+source and fresh `opl-relay --json doctor` readback own the effective selector,
+resolved paths, and runtime state.
+
 ## Invariants
 
 1. The installed plugin or Package contains code and capability declarations

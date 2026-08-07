@@ -1,5 +1,12 @@
 # OPL Relay Distribution
 
+Owner: `opl-relay`
+Purpose: `distribution_boundary`
+State: `active_current`
+Machine boundary: Human-readable distribution and ownership map. Source
+manifests, public immutable GHCR digest readback, configured-carrier state, and
+fresh Codex/Relay runtime readback remain authoritative for their exact layers.
+
 This document separates the source repository, Codex Plugin distribution, OPL
 Package distribution, and user-owned data. They are related, but none is a
 substitute for another.

@@ -1,5 +1,12 @@
 # Local Data And Workspace
 
+Owner: `opl-relay`
+Purpose: `profile_workspace_boundary`
+State: `active_current`
+Machine boundary: Human-readable profile and data-location guide. The effective
+selector and runtime paths remain in current Relay source and fresh
+`opl-relay --json doctor` readback; private user bytes never derive from Git.
+
 OPL Relay separates installed capability, durable user data, and task context.
 Do not place new private state under a Git checkout or plugin directory.
 
