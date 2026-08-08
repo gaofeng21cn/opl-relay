@@ -6,7 +6,7 @@
     "name": "OPL"
   },
   "repository": "https://github.com/gaofeng21cn/opl-relay",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["mail", "memory", "obsidian", "apple-mail", "local-first"],
   "skills": "./skills/",
   "interface": {

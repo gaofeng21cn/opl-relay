@@ -222,4 +222,4 @@ GitHub CI 还会校验插件结构，并在隔离的 Codex 环境中验证插件
 
 ## 许可证
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)

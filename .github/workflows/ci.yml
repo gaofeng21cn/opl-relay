@@ -60,7 +60,7 @@ jobs:
 
           assert plugin["name"] == package["package_id"] == "opl-relay"
           assert plugin["version"] == package["version"]
-          assert plugin["license"] == "MIT"
+          assert plugin["license"] == "Apache-2.0"
           assert plugin["skills"] == "./skills/"
           assert (plugin_root / plugin["skills"]).is_dir()
           assert list((plugin_root / plugin["skills"]).glob("*/SKILL.md"))

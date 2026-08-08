@@ -241,4 +241,4 @@ and installation through an isolated local Codex Marketplace.
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)
