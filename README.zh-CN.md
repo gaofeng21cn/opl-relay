@@ -153,9 +153,10 @@ opl-relay --json draft inspect 'mail-draft://apple-mail/work/UUID'
 opl-relay --json draft open 'mail-draft://apple-mail/work/UUID'
 ```
 
-回复 Apple Mail 中已有的多收件人邮件时，由 Mail 原生 Reply All 路由计算收件人和主题，
-再将该路由物化为稳定、可回读的审核草稿。命令必须接收本地筛选结果返回的精确
-`account`、数字消息 `id` 和 `mailboxPath`：
+回复 Apple Mail 中已有的多收件人线程时，默认使用 Mail 原生“回复所有人”，而不是新建
+邮件或从最新一封扁平记录重建收件人。原线程的完整 To/Cc、引用链和线程标头都属于回复
+上下文；除非用户明确要求私信或存在明确保密需要，不应人为删减原参与人。命令必须接收
+本地筛选结果返回的精确 `account`、数字消息 `id` 和 `mailboxPath`：
 
 ```bash
 opl-relay --json draft reply-all \
@@ -169,6 +170,11 @@ opl-relay --json draft reply-all \
 Relay 不会从扁平邮件记录手工重建收件人。若原生路由包含自身地址、重复地址、Bcc、
 空收件人集，或来源 tuple 不能唯一确定，命令会失败关闭，不登记稳定审核草稿。最终
 保存的草稿是审核面；provider-native Reply All 是路由 authority。
+
+正文只写本次新增回复，并插入到 Apple Mail 自动签名之前；不要在正文文件中再次手写
+账号签名，也不要覆盖下方引用内容。保存后必须重新读取草稿，核对完整 To/Cc、主题、
+恰好一个签名、`In-Reply-To`/`References`，以及至少一个可识别的原文引用锚点。任一项缺失
+都应回到原邮件重新执行原生“回复所有人”，不能凭记忆修补收件人或线程上下文。
 
 发送是另一项独立操作。用户审核后需要再次读取草稿，并且只能使用这次读取返回的当前
 指纹进行发送。内容变化会使旧批准失效；发送结果不明确时，系统不会自动重试。

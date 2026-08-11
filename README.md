@@ -163,10 +163,13 @@ opl-relay --json draft inspect 'mail-draft://apple-mail/work/UUID'
 opl-relay --json draft open 'mail-draft://apple-mail/work/UUID'
 ```
 
-Reply to an existing multi-recipient Apple Mail message by using Mail's native
-Reply All route to derive recipients and subject, then materializing that route
-as a stable review draft. Use the exact `account`, numeric message `id`, and
-`mailboxPath` returned by the Apple Mail local screen:
+For an existing multi-recipient Apple Mail thread, Reply All is the default.
+Use Mail's native Reply All route instead of creating a new message or rebuilding
+recipients from the latest flattened record. The complete To/Cc route, quoted
+chain, and provider threading headers are part of the reply context. Do not
+remove existing participants unless the user explicitly requests a private
+reply or confidentiality clearly requires it. Use the exact `account`, numeric
+message `id`, and `mailboxPath` returned by the Apple Mail local screen:
 
 ```bash
 opl-relay --json draft reply-all \
@@ -181,6 +184,14 @@ Relay does not reconstruct recipients from a flattened mail record. It rejects
 self-addresses, duplicates, Bcc, empty recipient sets, and ambiguous source
 tuples before registering the stable review draft. The saved draft is the
 review surface; provider-native Reply All is the routing authority.
+
+The body file contains only the new response, which is inserted above Apple
+Mail's configured signature. Do not duplicate the account signature or replace
+the quoted content. After saving, reread the draft and verify the complete
+To/Cc route, subject, exactly one signature, `In-Reply-To`/`References`, and at
+least one recognizable quoted-thread anchor. If any item is missing, restart
+from the source message with native Reply All instead of repairing the thread
+from memory.
 
 Sending is a separate, explicit action. Inspect the current draft after review
 and use only the fingerprint returned by that readback. Any content change

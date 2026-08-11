@@ -139,9 +139,25 @@ They do not authorize sending. Let the user review the draft in Apple Mail, run
 `draft send`. Any content change invalidates approval. Never retry an `unknown`
 send result.
 
-For a reply to an existing multi-recipient Apple Mail message, use Mail's
-native Reply All route rather than rebuilding recipients from a flattened Relay
-record:
+For a reply in an existing multi-recipient Apple Mail thread, Reply All is the
+default workflow. Use Mail's native Reply All route rather than creating a new
+message or rebuilding recipients from a flattened Relay record. A private reply
+is appropriate only when the user explicitly requests it or confidentiality
+clearly requires it.
+
+Treat the thread context as part of the reply, not as optional decoration:
+
+1. Preserve Mail's complete native To/Cc route. Do not manually remove existing
+   participants merely because they are not the primary follow-up owner.
+2. Preserve the quoted message chain and the provider threading headers. Do not
+   replace the composer body with body-only text.
+3. Insert only the new response above the account signature. Do not include a
+   hand-written copy of the configured Apple Mail signature in `--body-file`.
+4. After saving, reread the Apple Mail draft and verify To/Cc, subject, exactly
+   one signature, `In-Reply-To`/`References`, and at least one recognizable
+   quoted-thread anchor before reporting the draft ready.
+5. If any recipient or quoted context is missing, stop and rebuild from the
+   original message with native Reply All. Do not repair the route from memory.
 
 ```bash
 opl-relay --json draft reply-all \
