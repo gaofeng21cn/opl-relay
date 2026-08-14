@@ -58,6 +58,10 @@ A host integrates Relay by providing:
 - view contributions and read-model rendering;
 - secure credential-store availability.
 
+In the OPL composition, that host is OPL Framework's single Cordis Host. Relay
+only exposes its declared Package and `app-contribution` surfaces; it does not
+create a second Cordis Host, service registry, or lifecycle manager.
+
 Relay continues to own mail identities, memory evidence rules, draft
 fingerprints, and send receipts. Persona owns cross-domain provenance and
 proposal state. A host may visualize these contracts but must not recreate them

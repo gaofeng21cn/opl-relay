@@ -21,7 +21,7 @@ long-term user entry rather than building a second Persona-specific macOS shell.
 ```text
 OPL App
   visual mail, memory, knowledge, Persona proposal, and work views
-  generic Package contribution host
+  generic Package contribution UI
         |
         v
 Codex / OPL app-server runtime
@@ -122,6 +122,12 @@ branch on a Relay package id or force `standard_agent` fields onto a capability.
 The Relay descriptor and carrier-root ABI are present in this repository;
 whether the current App renders or invokes them remains an App/Framework
 readback question, not a Relay source claim.
+
+OPL Framework is the single Cordis Host for this composition. Relay remains a
+Python mail capability provider behind its existing Package and
+`app-contribution` ABI; it does not create a Cordis Host, service registry, or
+parallel lifecycle manager. Framework owns host assembly and lifecycle, while
+Relay retains mail identities, evidence, draft fingerprints, and send receipts.
 
 The first useful Relay contribution set is:
 
