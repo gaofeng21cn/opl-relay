@@ -148,7 +148,7 @@ Repository readiness:
 - full Python tests;
 - Package descriptor and content-lock tests;
 - Plugin manifest and Marketplace validation;
-- isolated Plugin discovery and install test in CI;
+- isolated Plugin discovery and install test in manual CI qualification;
 - no private Profile Workspace data in Git.
 
 Managed Package verification requires all of the following:

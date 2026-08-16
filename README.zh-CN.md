@@ -224,7 +224,7 @@ make test
 make validate-package
 ```
 
-GitHub CI 还会校验插件结构，并在隔离的 Codex 环境中验证插件发现和安装流程。
+GitHub CI 会校验源码测试和插件结构；手动 CI 资格验证会在隔离的 Codex 环境中验证插件发现和安装流程。
 
 ## 许可证
 

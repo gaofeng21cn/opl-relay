@@ -247,8 +247,9 @@ make test
 make validate-package
 ```
 
-The repository CI also validates the Plugin structure and exercises discovery
-and installation through an isolated local Codex Marketplace.
+The repository CI validates source tests and Plugin structure. The manual CI
+qualification exercises discovery and installation through an isolated local
+Codex Marketplace.
 
 ## License
 
