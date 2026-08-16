@@ -50,15 +50,15 @@ operation. When it succeeds, use `sync` and inspect the local evidence.
 
 The OPL Package exports four stable capability contracts:
 
-- `communications.mail.v1`: local mailbox evidence, sync, retrieval, and
-  review-gated Apple Mail drafts;
+- `communications.mail.v1`: local mailbox evidence, sync, retrieval, controlled
+  Archive/Trash movement, and review-gated Apple Mail drafts;
 - `personal.context.v1`: bounded drafting context assembled from evidence;
 - `personal.memory.v1`: proposed and explicitly approved relationship memory;
 - `knowledge.obsidian.v1`: read-only indexing and retrieval from configured
   Obsidian sources.
 
-These identifiers describe available contracts. They do not grant new mailbox
-writes or move private data into the plugin.
+These identifiers describe available contracts. They do not move private data
+into the plugin or authorize a mailbox write by themselves.
 
 ## Mail And Context
 
@@ -67,6 +67,30 @@ use `recent`, `search`, and `read` through stable `email-store://` references.
 Before drafting for a known person or project, run `context build`. Use only
 approved memories as active relationship memory and re-read raw mail for
 high-risk dates, roles, commitments, or invitations.
+
+## Controlled Mailbox Movement
+
+Mailbox movement is a separate, explicitly authorized operation. Preserve the
+user's keep/watch/uncertain boundary and prepare the exact `email-store://`
+references before invoking it. The command defaults to a read-only live
+preflight; only `--apply` permits a remote change:
+
+```bash
+opl-relay --json mailbox move \
+  --account work \
+  --destination archive \
+  --storage-ref 'email-store://...' \
+  --apply
+```
+
+Relay resolves only an already advertised `Archive` or `Trash` folder. For
+each reference it re-fetches the source UID, compares the complete raw-message
+SHA-256 and `Message-ID`, verifies the destination copy and source absence,
+then records a local `mailbox-operation://` receipt. It prefers UID MOVE and
+uses UIDPLUS COPY plus UID EXPUNGE only as a bounded fallback; it never issues
+an unscoped EXPUNGE, creates folders, permanently deletes mail, or continues a
+batch after an uncertain result. Run a fresh account sync and readback after
+an applied batch.
 
 ## Apple Mail Local Screen
 
@@ -196,4 +220,4 @@ Relay-owned inputs. This command only saves an Apple Mail draft and returns
 `send_allowed=false`. Inspect the returned draft in Apple Mail before any
 separate, fingerprint-bound `draft send` operation.
 
-Mailbox delete, archive, move, and mark are outside the current Relay contract.
+Permanent mailbox deletion and marking remain outside the Relay contract.

@@ -22,6 +22,7 @@ from .config import (
 from .context import ContextBuilder
 from .drafts import DraftLedger, DraftService, Recipient
 from .knowledge import KnowledgeIndex, load_sources_config
+from .mailbox import move_messages
 from .memory import (
     MEMORY_CATEGORIES,
     MEMORY_STATUSES,
@@ -838,6 +839,22 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mailbox_move(args: argparse.Namespace) -> int:
+    try:
+        payload = move_messages(
+            config_path=Path(args.config).expanduser(),
+            db_path=Path(args.db).expanduser(),
+            account_id=args.account,
+            destination=args.destination,
+            storage_refs=args.storage_ref,
+            apply=args.apply,
+        )
+    except (ValueError, LookupError) as exc:
+        return fail(str(exc), as_json=args.json, code=2)
+    emit(payload, as_json=args.json)
+    return 0 if payload.get("ok") is True else 1
+
+
 def memory_store(args: argparse.Namespace) -> MemoryStore:
     return MemoryStore(Path(args.memory_db).expanduser())
 
@@ -1314,6 +1331,22 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--limit-per-folder", type=int, default=None)
     sync.add_argument("--dry-run", action="store_true")
     sync.set_defaults(func=cmd_sync)
+
+    mailbox = sub.add_parser("mailbox", help="逐封受控 IMAP 邮箱移动")
+    mailbox_actions = mailbox.add_subparsers(dest="mailbox_action", required=True)
+    mailbox_move = mailbox_actions.add_parser(
+        "move",
+        help="只将经实时验证的精确邮件移动到 Archive 或 Trash",
+    )
+    mailbox_move.add_argument("--account", required=True)
+    mailbox_move.add_argument("--destination", choices=["archive", "trash"], required=True)
+    mailbox_move.add_argument("--storage-ref", action="append", required=True)
+    mailbox_move.add_argument(
+        "--apply",
+        action="store_true",
+        help="执行移动；省略时仅做远端实时预检",
+    )
+    mailbox_move.set_defaults(func=cmd_mailbox_move)
 
     memory = sub.add_parser("memory", help="私有人物、项目与关系记忆")
     memory_actions = memory.add_subparsers(dest="memory_action", required=True)

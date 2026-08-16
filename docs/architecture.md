@@ -83,7 +83,8 @@ mail-draft://apple-mail/<account_id>/<apple-mail-uuid>
 ## Safety Boundary
 
 Relay remains read-first. Local memory lifecycle and derived knowledge indexing
-are private local writes. The only externally visible write is the Apple Mail
-draft flow, and sending requires the current post-review fingerprint. Delete,
-archive, move, and mark remain unavailable until separately contracted and
-authorized.
+are private local writes. Apple Mail drafts remain review-gated, and sending
+requires the current post-review fingerprint. A separately contracted
+`mailbox move` may move exact, freshly verified references to an existing
+Archive or Trash folder under explicit `--apply`; permanent delete and mark
+remain unavailable.

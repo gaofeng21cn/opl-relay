@@ -36,7 +36,7 @@ installation directory or process working directory.
 | Plugin manifest and Skills | Plugin source | Yes |
 | Package contribution manifest | OPL Package source | Yes |
 | Accounts and credential references | Data root | No |
-| Mail, draft, and memory SQLite | Data root | No |
+| Mail, mailbox-operation receipts, draft, and memory SQLite | Data root | No |
 | Sync cursors and indexes | Data root | No |
 | Keychain secrets | Keychain | No |
 | Profile and policies | Workspace | Only in a deliberately private repo |
@@ -59,6 +59,9 @@ A host integrates Relay by providing:
 - secure credential-store availability.
 
 Relay continues to own mail identities, memory evidence rules, draft
-fingerprints, and send receipts. Persona owns cross-domain provenance and
-proposal state. A host may visualize these contracts but must not recreate them
-as a second source of truth.
+fingerprints, controlled mailbox-operation receipts, and send receipts. Persona
+owns cross-domain provenance and proposal state. A host may visualize these
+contracts but must not recreate them as a second source of truth. Mailbox
+movement remains limited to exact references, existing Archive/Trash folders,
+fresh raw-message and `Message-ID` verification, explicit `--apply`, and
+post-operation source/target readback.

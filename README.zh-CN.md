@@ -140,6 +140,20 @@ opl-relay --json read 'email-store://...'
 opl-relay --json context build --person "示例教授" --query "年度邀请"
 ```
 
+对于已经明确批准的、可恢复的邮箱整理，先省略 `--apply` 做实时预检；只有精确的当前
+`email-store://` 引用可以移动，目标只能是服务器已经提供的 Archive 或 Trash 文件夹：
+
+```bash
+opl-relay --json mailbox move \
+  --account work \
+  --destination archive \
+  --storage-ref 'email-store://...' \
+  --apply
+```
+
+Relay 会重新获取源 UID，比对完整原文 SHA-256 和 `Message-ID`，验证目标副本及源邮件消失，
+并保存本地操作回执。不会创建文件夹、执行无范围 `EXPUNGE`、永久删除邮件或标记邮件。
+
 建立并查看 Apple Mail 草稿：
 
 ```bash
@@ -204,7 +218,8 @@ Package publication 必须从公开不可变 GHCR digest 回读；installed/curr
 
 - 用户邮件、账号配置、SQLite、原始 EML、同步游标、私人规则、Obsidian 路径和凭据
   都不能进入 Git 或插件缓存。
-- Relay 默认只读，目前不开放删除、归档、移动或标记邮件。
+- Relay 默认只读；只有显式 `--apply` 才能按精确引用将邮件移动到已存在的 Archive 或 Trash。
+  永久删除和标记邮件仍不开放。
 - Persona 的提案批准不等于授权发送邮件。
 - Apple Mail 草稿审核和基于内容指纹的发送批准始终分开。
 

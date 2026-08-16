@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -40,6 +41,22 @@ def ensure_email_store_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_email_messages_date_live
         ON email_messages(date_iso, deleted);
+
+        CREATE TABLE IF NOT EXISTS mailbox_operations (
+          operation_ref TEXT PRIMARY KEY,
+          account_id TEXT NOT NULL,
+          storage_ref TEXT NOT NULL,
+          source_folder TEXT NOT NULL,
+          source_uid INTEGER NOT NULL,
+          destination_folder TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          method TEXT NOT NULL,
+          raw_sha256 TEXT NOT NULL,
+          occurred_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mailbox_operations_storage_ref
+        ON mailbox_operations(storage_ref);
         """
     )
     conn.commit()
@@ -346,3 +363,51 @@ def get_message_by_storage_ref(
     if not row:
         return None
     return _row_to_message(row)
+
+
+def record_mailbox_move(
+    conn: sqlite3.Connection,
+    *,
+    account_id: str,
+    storage_ref: str,
+    source_folder: str,
+    source_uid: int,
+    destination_folder: str,
+    method: str,
+    raw_sha256: str,
+    occurred_at: str,
+) -> str:
+    operation_ref = f"mailbox-operation://{uuid.uuid4()}"
+    cursor = conn.execute(
+        """
+        UPDATE email_messages
+        SET deleted=1, deleted_ts=?
+        WHERE storage_ref=? AND deleted=0
+        """,
+        (occurred_at, storage_ref),
+    )
+    if cursor.rowcount != 1:
+        conn.rollback()
+        raise LookupError("live local message not found for mailbox receipt")
+    conn.execute(
+        """
+        INSERT INTO mailbox_operations (
+          operation_ref, account_id, storage_ref, source_folder, source_uid,
+          destination_folder, operation, method, raw_sha256, occurred_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'move', ?, ?, ?)
+        """,
+        (
+            operation_ref,
+            account_id,
+            storage_ref,
+            source_folder,
+            int(source_uid),
+            destination_folder,
+            method,
+            raw_sha256,
+            occurred_at,
+        ),
+    )
+    conn.commit()
+    return operation_ref

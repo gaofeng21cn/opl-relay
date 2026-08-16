@@ -150,6 +150,24 @@ opl-relay --json read 'email-store://...'
 opl-relay --json context build --person "Professor Example" --query "invitation"
 ```
 
+For an explicitly approved, reversible mailbox cleanup, first run the same
+command without `--apply` to perform a live preflight. Only exact current
+`email-store://` references may be moved, and only to an existing Archive or
+Trash folder:
+
+```bash
+opl-relay --json mailbox move \
+  --account work \
+  --destination archive \
+  --storage-ref 'email-store://...' \
+  --apply
+```
+
+Relay verifies the source raw-message SHA-256 and `Message-ID`, verifies the
+target copy and source absence, and stores a local operation receipt. It never
+creates folders, performs an unscoped `EXPUNGE`, permanently deletes mail, or
+marks messages.
+
 Create and inspect an Apple Mail draft:
 
 ```bash
@@ -227,7 +245,9 @@ boundaries.
 - User mail, account configuration, SQLite files, raw EML, sync cursors,
   private policies, Obsidian paths, and credentials never belong in Git or a
   Plugin cache.
-- Relay is read-first. Delete, archive, move, and mark are not exposed.
+- Relay is read-first. Controlled exact-reference movement to an existing
+  Archive or Trash folder is available only with explicit `--apply`; permanent
+  delete and mark remain unavailable.
 - A Persona approval does not authorize mail sending.
 - Apple Mail draft review and fingerprint-bound send approval remain separate.
 
