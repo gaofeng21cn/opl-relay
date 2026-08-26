@@ -1,6 +1,6 @@
 ---
 name: codex-mail-workbench
-description: Compatibility skill for OPL Relay mail, private memory, Obsidian context, and review-gated Apple Mail drafts.
+description: Use only for full-inbox, multi-day, synchronized, bulk, or auditable mail work through OPL Relay, including its private memory/Obsidian context and review-gated Apple Mail drafts. Do not use for a quick same-day Mail.app triage or an ordinary single-message question; route those to mail-triage or apple-apps.
 ---
 
 # Codex Mail Workbench Compatibility
