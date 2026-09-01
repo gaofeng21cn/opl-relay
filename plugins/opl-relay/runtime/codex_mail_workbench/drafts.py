@@ -60,6 +60,7 @@ class DraftSnapshot:
     body_text: str
     attachments: list[Attachment] = field(default_factory=list)
     provider_guard: dict[str, Any] = field(default_factory=dict, repr=False)
+    provider_threading: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -648,6 +649,25 @@ class DraftService:
                 pass
             raise DraftError(
                 "Apple Mail Reply All 保存后的审核正文与输入不一致；"
+                + ("异常草稿已移入已删除邮件" if cleaned else "异常草稿仍保留在 Mail 中")
+            )
+        threading = snapshot.provider_threading
+        if not (
+            threading.get("in_reply_to") is True
+            and threading.get("references") is True
+            and threading.get("quoted_context") is True
+            and threading.get("current_signature_count") == 1
+        ):
+            cleaned = False
+            try:
+                cleaned = self.provider.discard(
+                    provider_account=snapshot.provider_account,
+                    provider_uuid=snapshot.provider_uuid,
+                )
+            except Exception:
+                pass
+            raise DraftError(
+                "Apple Mail Reply All 未保留完整线程上下文或当前签名；"
                 + ("异常草稿已移入已删除邮件" if cleaned else "异常草稿仍保留在 Mail 中")
             )
         source = {

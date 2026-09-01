@@ -169,6 +169,13 @@ message or rebuilding recipients from a flattened Relay record. A private reply
 is appropriate only when the user explicitly requests it or confidentiality
 clearly requires it.
 
+For Codex-operated mail, use Computer Use for the Apple Mail interaction: open
+the exact source message, invoke the visible native Reply All control, and paste
+the reviewed response at Mail's default insertion point. Relay remains the
+authority for source lookup, account and recipient readback, draft adoption,
+thread validation, and approval gating. Do not use background body replacement
+or construct a same-subject outgoing message as a substitute for Reply All.
+
 Treat the thread context as part of the reply, not as optional decoration:
 
 1. Preserve Mail's complete native To/Cc route. Do not manually remove existing
@@ -183,6 +190,18 @@ Treat the thread context as part of the reply, not as optional decoration:
 5. If any recipient or quoted context is missing, stop and rebuild from the
    original message with native Reply All. Do not repair the route from memory.
 
+Functional testing must use a dedicated low-consequence thread whose recipients
+are test addresses or people explicitly approved for the test. Never use an
+active editorial, conference, clinical, administrative, or collaboration thread
+with real multi-recipient routing merely because the test does not intend to
+send. A diagnostic marker in the body is not a safety control. Before the UI
+test, read back To/Cc and confirm the test boundary; never invoke Send. After the
+test, discard the draft through the provider path and verify all three surfaces:
+no matching Drafts item, no compose window, and no diagnostic marker in Sent.
+Important live threads may be used only for read-only comparison after the
+workflow has passed on the controlled test thread, or for the actual requested
+draft content.
+
 ```bash
 opl-relay --json draft reply-all \
   --account work \
@@ -193,11 +212,12 @@ opl-relay --json draft reply-all \
 ```
 
 The Apple Mail `account`, numeric message `id`, and `mailboxPath` must be the
-exact tuple returned by the local screen. Relay calls provider-native Reply All
-to derive routing, materializes that route as a stable review draft, then fails
-closed if the route contains the sender's own address, duplicates, Bcc, no
-recipients, or an ambiguous source. The command returns `send_allowed=false`;
-sending still requires the separate fingerprint-bound `draft send` operation.
+exact tuple returned by the local screen. Relay invokes Mail's visible native
+Reply All editor so Mail owns the signature and quoted chain. It fails closed
+if the route contains the sender's own address, duplicates, Bcc, no recipients,
+an ambiguous source, or if saved readback lacks `In-Reply-To`, `References`, the
+source quote anchor, or exactly one current signature above the quote. Sending
+still requires the separate fingerprint-bound `draft send` operation.
 
 ## Persona Draft Handoff
 

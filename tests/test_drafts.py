@@ -46,6 +46,13 @@ def snapshot(**changes: object) -> DraftSnapshot:
             )
         ],
         provider_guard={"subject": "Review request"},
+        provider_threading={
+            "in_reply_to": True,
+            "references": True,
+            "quoted_context": True,
+            "source_anchor": "On Aug 4, Chair wrote:",
+            "current_signature_count": 1,
+        },
     )
     return replace(base, **changes)
 
@@ -272,6 +279,33 @@ def test_reply_all_cleans_up_when_reviewed_body_is_not_preserved(tmp_path: Path)
             body_text="Approved reply.",
             attachments=[],
             visible=False,
+        )
+    assert provider.discard_calls == 1
+
+
+def test_reply_all_cleans_up_when_thread_context_is_missing(tmp_path: Path) -> None:
+    current = snapshot(
+        body_text="Approved reply.",
+        provider_threading={
+            "in_reply_to": False,
+            "references": False,
+            "quoted_context": False,
+            "current_signature_count": 0,
+        },
+    )
+    provider = FakeProvider(current)
+    service = DraftService(DraftLedger(tmp_path / "drafts.sqlite"), provider)
+
+    with pytest.raises(DraftError, match="未保留完整线程上下文"):
+        service.reply_all(
+            account_id="work",
+            sender="work@example.test",
+            provider_account="Work",
+            source_message_id=141819,
+            mailbox_path="INBOX",
+            body_text="Approved reply.",
+            attachments=[],
+            visible=True,
         )
     assert provider.discard_calls == 1
 

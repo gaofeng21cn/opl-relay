@@ -41,6 +41,13 @@ def raw_draft() -> dict[str, object]:
         ],
         "source": source,
         "guard": {"subject": "Review request"},
+        "threading": {
+            "inReplyTo": True,
+            "references": True,
+            "quotedContext": True,
+            "sourceAnchor": "Source message",
+            "currentSignatureCount": 1,
+        },
     }
 
 
@@ -49,6 +56,7 @@ def test_snapshot_prefers_mime_body_and_hashes_attachments() -> None:
     assert current.body_text == "First paragraph.\n\nSecond paragraph."
     assert current.attachments[0].content_sha256
     assert current.attachments[0].provider_id == "attachment-1"
+    assert current.provider_threading["quoted_context"] is True
 
 
 def test_provider_passes_guard_to_atomic_send() -> None:
@@ -132,9 +140,29 @@ def test_provider_reply_all_uses_exact_source_tuple_and_absolute_attachments(
 
 
 def test_jxa_reply_all_is_provider_native_and_recipient_guarded() -> None:
+    reply_all_source = JXA_SOURCE.split("function replyAllDraft", 1)[1].split(
+        "function inspectDraft", 1
+    )[0]
+
     assert "nativeReply = app.reply(sourceMessage" in JXA_SOURCE
     assert "replyToAll: true" in JXA_SOURCE
     assert "messageById(sourceMailbox, payload.sourceMessageId)" in JXA_SOURCE
     assert "validateReplyRecipients(account, nativeReply)" in JXA_SOURCE
-    assert 'pushRecipients(app, reviewDraft, "to", route.to)' in JXA_SOURCE
-    assert "validateReplyRecipients(account, reviewDraft)" in JXA_SOURCE
+    assert "openingWindow: true" in reply_all_source
+    assert 'systemEvents.keystroke("v", {using: "command down"})' in reply_all_source
+    assert "nativeReply.content.attachments.push" in reply_all_source
+    assert "app.save(nativeReply)" in reply_all_source
+    assert "reviewDraft" not in reply_all_source
+    assert "disableSignature(nativeReply)" not in reply_all_source
+    assert "row.threading.quotedContext" in reply_all_source
+
+
+def test_jxa_discard_closes_matching_compose_window() -> None:
+    discard_source = JXA_SOURCE.split("function discardDraft", 1)[1].split(
+        "function run", 1
+    )[0]
+
+    assert "outgoingForGuard(app, guardForMessage(message))" in discard_source
+    assert "outgoingForRoute(app, routingKey(message))" in discard_source
+    assert "app.delete(outgoing)" in discard_source
+    assert "app.delete(message)" in discard_source

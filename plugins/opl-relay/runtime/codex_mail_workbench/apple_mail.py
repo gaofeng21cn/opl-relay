@@ -81,6 +81,44 @@ function uuidFromHeaders(headers) {
   return match ? String(match[1]).trim() : "";
 }
 
+function providerIdentity(message) {
+  var uuid = uuidFromHeaders(message.allHeaders());
+  if (uuid) {
+    return uuid;
+  }
+  var messageId = String(message.messageId() || "").trim();
+  if (messageId) {
+    return "message-id:" + messageId;
+  }
+  return "mail-id:" + String(message.id());
+}
+
+function quotedAnchor(message) {
+  var lines = normalizedContent(message.content()).split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = String(lines[i] || "").trim();
+    if (line.length >= 8) {
+      return line;
+    }
+  }
+  return "";
+}
+
+function threadingRow(message, sourceMessage) {
+  var source = String(message.source() || "");
+  var content = normalizedContent(message.content());
+  var anchor = sourceMessage ? quotedAnchor(sourceMessage) : "";
+  var quoteIndex = anchor ? content.indexOf(anchor) : -1;
+  var currentContent = quoteIndex >= 0 ? content.slice(0, quoteIndex) : content;
+  return {
+    inReplyTo: /^In-Reply-To:/mi.test(source),
+    references: /^References:/mi.test(source),
+    quotedContext: sourceMessage ? quoteIndex >= 0 : null,
+    sourceAnchor: anchor,
+    currentSignatureCount: (currentContent.match(/Best regards,/g) || []).length
+  };
+}
+
 function guardForMessage(message) {
   return {
     sender: String(message.sender() || ""),
@@ -93,13 +131,13 @@ function guardForMessage(message) {
   };
 }
 
-function draftRow(message, account, mailbox) {
+function draftRow(message, account, mailbox, sourceMessage) {
   var headers = String(message.allHeaders() || "");
   return {
     providerAccount: String(account.name()),
     mailbox: String(mailbox.name()),
     id: Number(message.id()),
-    uuid: uuidFromHeaders(headers),
+    uuid: providerIdentity(message),
     messageId: String(message.messageId() || ""),
     sender: String(message.sender() || ""),
     to: addresses(message.toRecipients()),
@@ -109,7 +147,8 @@ function draftRow(message, account, mailbox) {
     content: String(message.content() || ""),
     attachments: attachmentRows(message),
     source: String(message.source() || ""),
-    guard: guardForMessage(message)
+    guard: guardForMessage(message),
+    threading: threadingRow(message, sourceMessage || null)
   };
 }
 
@@ -259,7 +298,7 @@ function findDraft(mailbox, uuid) {
   var messages = mailbox.messages();
   for (var i = 0; i < messages.length; i++) {
     try {
-      if (uuidFromHeaders(messages[i].allHeaders()) === String(uuid)) {
+      if (providerIdentity(messages[i]) === String(uuid)) {
         return messages[i];
       }
     } catch (error) {
@@ -409,17 +448,16 @@ function replyAllDraft(app, payload) {
   var oldMessages = drafts.messages();
   for (var i = 0; i < oldMessages.length; i++) {
     try {
-      baseline[uuidFromHeaders(oldMessages[i].allHeaders())] = true;
+      baseline[String(oldMessages[i].id())] = true;
     } catch (error) {
       continue;
     }
   }
 
   var nativeReply = null;
-  var reviewDraft = null;
   try {
     nativeReply = app.reply(sourceMessage, {
-      openingWindow: false,
+      openingWindow: true,
       replyToAll: true
     });
     if (!nativeReply) {
@@ -427,44 +465,45 @@ function replyAllDraft(app, payload) {
     }
     delay(2);
     validateReplyRecipients(account, nativeReply);
-    var route = routingKey(nativeReply);
-    var quotedContent = normalizedContent(nativeReply.content());
     var reviewedBody = normalizedContent(payload.bodyText);
-    var materializedBody = reviewedBody +
-      (quotedContent ? "\n\n" + quotedContent : "");
-
-    reviewDraft = app.OutgoingMessage({
-      sender: payload.sender,
-      subject: route.subject,
-      content: materializedBody,
-      visible: Boolean(payload.visible)
-    });
-    app.outgoingMessages.push(reviewDraft);
-    disableSignature(reviewDraft);
-    pushRecipients(app, reviewDraft, "to", route.to);
-    pushRecipients(app, reviewDraft, "cc", route.cc);
-    pushRecipients(app, reviewDraft, "bcc", route.bcc);
+    var automation = Application.currentApplication();
+    automation.includeStandardAdditions = true;
+    var systemEvents = Application("System Events");
+    var previousClipboard = null;
+    var restoreClipboard = false;
+    try {
+      previousClipboard = automation.theClipboard();
+      restoreClipboard = true;
+    } catch (ignored) {}
+    automation.setTheClipboardTo(reviewedBody + "\n\n");
+    app.activate();
+    delay(0.8);
+    systemEvents.keystroke("v", {using: "command down"});
+    delay(0.5);
+    if (restoreClipboard) {
+      try {
+        automation.setTheClipboardTo(previousClipboard);
+      } catch (ignored) {}
+    }
     for (var attachmentIndex = 0;
          attachmentIndex < (payload.attachments || []).length;
          attachmentIndex++) {
-      reviewDraft.content.attachments.push(
+      nativeReply.content.attachments.push(
         app.Attachment({fileName: Path(payload.attachments[attachmentIndex])})
       );
     }
-    validateReplyRecipients(account, reviewDraft);
-    app.delete(nativeReply);
-    nativeReply = null;
-    app.save(reviewDraft);
+    validateReplyRecipients(account, nativeReply);
+    app.save(nativeReply);
 
-    var expectedRoute = routingKey(reviewDraft);
+    var expectedRoute = routingKey(nativeReply);
     for (var attempt = 0; attempt < 30; attempt++) {
       delay(0.2);
       var current = drafts.messages();
       var matches = [];
       for (var currentIndex = 0; currentIndex < current.length; currentIndex++) {
         try {
-          var uuid = uuidFromHeaders(current[currentIndex].allHeaders());
-          if (!baseline[uuid] &&
+          var mailId = String(current[currentIndex].id());
+          if (!baseline[mailId] &&
               sameGuard(routingKey(current[currentIndex]), expectedRoute)) {
             matches.push(current[currentIndex]);
           }
@@ -473,7 +512,16 @@ function replyAllDraft(app, payload) {
         }
       }
       if (matches.length === 1) {
-        return draftRow(matches[0], account, drafts);
+        var row = draftRow(matches[0], account, drafts, sourceMessage);
+        if (!row.threading.inReplyTo ||
+            !row.threading.references ||
+            !row.threading.quotedContext ||
+            row.threading.currentSignatureCount !== 1) {
+          throw new Error(
+            "Apple Mail Reply All did not preserve threading, quoted context, and one current signature"
+          );
+        }
+        return row;
       }
       if (matches.length > 1) {
         throw new Error("More than one new Reply All review draft matched the source");
@@ -484,11 +532,6 @@ function replyAllDraft(app, payload) {
     if (nativeReply) {
       try {
         app.delete(nativeReply);
-      } catch (ignored) {}
-    }
-    if (reviewDraft) {
-      try {
-        app.delete(reviewDraft);
       } catch (ignored) {}
     }
     throw error;
@@ -609,6 +652,13 @@ function discardDraft(app, payload) {
   var message = findDraft(drafts, payload.uuid);
   if (!message) {
     return {deleted: false};
+  }
+  var outgoing = outgoingForGuard(app, guardForMessage(message));
+  if (!outgoing) {
+    outgoing = outgoingForRoute(app, routingKey(message));
+  }
+  if (outgoing) {
+    app.delete(outgoing);
   }
   app.delete(message);
   return {deleted: true};
@@ -776,6 +826,15 @@ def _snapshot(raw: dict[str, Any]) -> DraftSnapshot:
         body_text=_body_from_source(source, str(raw.get("content") or "")),
         attachments=attachments,
         provider_guard=dict(raw.get("guard") or {}),
+        provider_threading={
+            "in_reply_to": bool((raw.get("threading") or {}).get("inReplyTo")),
+            "references": bool((raw.get("threading") or {}).get("references")),
+            "quoted_context": (raw.get("threading") or {}).get("quotedContext"),
+            "source_anchor": str((raw.get("threading") or {}).get("sourceAnchor") or ""),
+            "current_signature_count": int(
+                (raw.get("threading") or {}).get("currentSignatureCount") or 0
+            ),
+        },
     )
 
 

@@ -198,7 +198,10 @@ opl-relay --json draft reply-all \
   --body-file ./reply.txt
 ```
 
-Relay does not reconstruct recipients from a flattened mail record. It rejects
+For Codex-operated replies, use Computer Use to invoke Apple Mail's visible
+native Reply All and paste the reviewed response at Mail's default insertion
+point. Relay handles source lookup and saved-draft readback; it must not replace
+this with a same-subject outgoing message. Relay rejects
 self-addresses, duplicates, Bcc, empty recipient sets, and ambiguous source
 tuples before registering the stable review draft. The saved draft is the
 review surface; provider-native Reply All is the routing authority.
@@ -210,6 +213,11 @@ To/Cc route, subject, exactly one signature, `In-Reply-To`/`References`, and at
 least one recognizable quoted-thread anchor. If any item is missing, restart
 from the source message with native Reply All instead of repairing the thread
 from memory.
+
+Run functional tests only on a dedicated low-consequence thread with controlled
+test recipients. Do not use active editorial, conference, clinical,
+administrative, or collaboration threads as diagnostics. After each test,
+verify that Drafts, compose windows, and Sent contain no diagnostic artifact.
 
 Sending is a separate, explicit action. Inspect the current draft after review
 and use only the fingerprint returned by that readback. Any content change
