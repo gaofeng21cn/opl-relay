@@ -104,6 +104,14 @@ def test_package_content_lock_matches_plugin_bytes() -> None:
     assert content_lock["digest"] == f"sha256:{digest.hexdigest()}"
 
 
+def test_plugin_default_prompts_fit_codex_limits() -> None:
+    plugin = load_json(PLUGIN_PATH)
+    interface = plugin["interface"]
+    prompts = interface["defaultPrompt"]
+    assert isinstance(prompts, list) and 1 <= len(prompts) <= 3
+    assert all(isinstance(prompt, str) and 0 < len(prompt) <= 128 for prompt in prompts)
+
+
 def test_plugin_uses_a_dedicated_small_format_icon() -> None:
     plugin = load_json(PLUGIN_PATH)
     interface = plugin["interface"]
