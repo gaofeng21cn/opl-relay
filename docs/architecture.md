@@ -5,9 +5,8 @@ Purpose: `relay_implementation_architecture`
 State: `active_current`
 Machine boundary: This document explains Relay-owned source and data boundaries. Package publication, configured-carrier installation, Framework aggregation, App rendering, and live runtime state remain authoritative only in their owning descriptors, repositories, carrier readback, and runtime output.
 
-For the cross-repository product and authority model, read
-`opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
-repository first. This document is the Relay-specific implementation view.
+Cross-repository handoffs belong to [Product Integration](product-architecture.md).
+This document owns only the Relay implementation view.
 
 OPL Relay is the mail capability module in the planned personal digital
 delegate stack. It is local-first, evidence-backed, and useful independently of
@@ -43,9 +42,8 @@ OPL Persona or OPL App.
 - Triage evidence: a facts-only v2 envelope exposes mail headers, recipient
   routing, and reference-set provenance. Persona owns private Markdown reading,
   content digests, and all triage judgments.
-- CLI: `opl-relay` is the only command entry. The retained
-  `codex-mail-workbench` compatibility Skill and Keychain service name do not
-  create a `codex-mail` command alias.
+- CLI: `opl-relay` is the only public command entry. Internal Python names and
+  credential-store identifiers do not create additional command identities.
 
 ## Runtime Ownership
 

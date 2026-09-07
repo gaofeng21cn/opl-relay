@@ -1,171 +1,83 @@
-# OPL Relay, Persona, And App Product Architecture
+# OPL Relay Product Integration
 
 Owner: `opl-relay`
 Purpose: `relay_cross_repo_product_boundary`
 State: `active_current`
-Machine boundary: This document records Relay's cross-repository product boundary and owner handoffs. Relay source cannot prove Framework admission, App or Shell rendering, Package publication, configured-carrier installation, or another repository's current state.
 
-The cross-repository design authority is
-`opl-persona/docs/architecture-guidance.md` in the sibling `opl-persona`
-repository. This document records the Relay-specific consequences of that
-guidance.
+This document owns Relay's handoffs to Persona and App. Relay's internal
+implementation belongs to [Architecture](architecture.md), runtime data
+invariants to [Workspace Contract](workspace-contract.md), and physical
+delivery to [Distribution](distribution.md). Other repositories own their
+actual implementation and operational state.
 
-## Decision
+## Product And Owners
 
-Use two business repos: `opl-relay` owns communication and `opl-persona` owns
-cross-domain PI context and proposal orchestration. Keep OPL App as the
-long-term user entry rather than building a second Persona-specific macOS shell.
+Relay is independently usable mail software. Persona combines cross-domain
+PI context and produces proposals; it does not own Relay's mail store.
+OPL App supplies the chat and visual product. There is no separate Relay UI
+repository or Persona desktop product.
 
-## Product Model
+| Boundary | Owner |
+| --- | --- |
+| Stable mail identities, raw evidence, relationship memory, draft fingerprints and send receipts | Relay |
+| Cross-domain context, private policy interpretation, provenance and proposals | Persona |
+| User knowledge and personal profile values | User-selected Obsidian vault |
+| Public content, approved local website changes and publication | `gflab_web` |
+| Runtime, Package discovery, carrier delegation and App projection | Framework |
+| App product contracts and acceptance | `one-person-lab-app` |
+| Stable desktop rendering | `opl-aion-shell` |
+| DSH application host, native Codex and delivery composition | `opl-studio` |
 
-```text
-OPL App
-  visual mail, memory, knowledge, Persona proposal, and work views
-  generic Package contribution UI
-        |
-        v
-Codex / OPL app-server runtime
-  chat-first reasoning, tools, approvals, session continuity
-        |
-        +--> OPL Persona Plugin / Package
-        |
-        +--> OPL Relay Plugin / Package
-               |
-               v
-             Relay engine
-               |
-               +--> user data root
-               +--> active workspace
-               +--> Apple Mail review UI
-               +--> Obsidian read-only source
-```
+The target relationship is described in
+[Persona Architecture Guidance](https://github.com/gaofeng21cn/opl-persona/blob/main/docs/architecture-guidance.md).
+It does not override the current contracts of App, Framework, a carrier or a
+domain provider. A host never absorbs domain identities or private state.
 
-## Repository Boundaries
+## Persona Handoff
 
-| Repository | Keep/Create | Responsibility |
-| --- | --- | --- |
-| `opl-relay` | Renamed from the Codex Mail Workbench repo; current mail repository | Mail engine, CLI, Relay Skill/plugin, Package owner descriptor, and mail-context bridge |
-| `opl-persona` | Current cross-domain repository | PI context, provenance, review-gated proposals, and cross-domain Skills |
-| `one-person-lab` | Keep | Generic Package/runtime/workspace contracts |
-| `one-person-lab-app` | Keep | App product shell and role-neutral contribution UX |
-| `opl-aion-shell` | Keep | Desktop shell projection and navigation |
+Relay's `triage evidence` returns an evidence-only
+`opl-relay-mail-triage-evidence.v2` envelope for one synced
+`email-store://` reference. It includes original-message readback, parsed
+recipient facts, freshness and policy references. Its `policy_digest` hashes
+the ordered reference set; it does not read or hash Persona's private Markdown.
 
-Do not create separate repositories for the Relay plugin, shared core, Relay UI,
-or Persona App. Those boundaries would duplicate lifecycle and distribution
-before they have independent owners.
-
-## Package, Plugin, And Workspace Boundary
-
-Relay exposes one capability through three deliberately different surfaces:
-
-| Surface | Authority | Must not own |
-| --- | --- | --- |
-| Relay Core | Mail identities, evidence, memory rules, draft fingerprints, send receipts | Host navigation or plugin installation |
-| Codex Plugin | Codex discovery and the `opl-relay` Skill | Package lifecycle or user data |
-| OPL Package | Stable capability IDs and role-neutral `app_contributions` | Private state, credentials, approvals, or runtime truth |
-
-The source Package descriptor is the carrier-root
-`plugins/opl-relay/opl-package.json`. The installable Codex Plugin therefore
-carries the owner descriptor without a second catalog. Its content lock covers
-the plugin manifest and Skill, while deliberately excluding the descriptor
-itself to avoid a recursive digest. App contributions contain declarative views
-and opaque action references only; they never embed executable UI code.
-
-All three surfaces resolve the same user-owned Profile Workspace:
-
-- `OPL_PROFILE_WORKSPACE` is the single profile root;
-- Relay's durable state is `<profile>/data/relay`;
-- Persona's durable state is the sibling `<profile>/data/persona`;
-- a source checkout, installed Package, or Codex plugin cache is never either
-  authority.
-
-### Triage evidence boundary
-
-`opl-relay triage evidence <email-store://...> --policy-ref <ref>` reads one
-already-synced message through the local email store and returns the portable
-`opl-relay-mail-triage-evidence.v2` envelope. It carries the stable source
-reference, `From`/`To`/`Cc`/`Bcc` header facts, recipient routing facts,
-original-message readback, local-read freshness, and explicit policy references.
-Its `policy_digest` is only a deterministic digest of the ordered reference set,
-never a private Markdown content digest.
-
-The envelope is evidence-only: it does not prioritize a message, infer a
-personal decision, or expose a mailbox-provider write route. Its risk fields
-always require human review, forbid external writes, and report provider write
-as unreachable. `opl-relay triage validate --input <file|->` validates that
-provenance, policy-reference digest, and read-only boundary before Persona or
-another consumer uses the envelope. Persona reads private Markdown only from its
-own Profile Workspace and computes its own content digest. Relay accepts either
-the bare evidence envelope or
-the exact successful JSON wrapper emitted by `triage evidence`, so the
-read-only pipeline can be composed directly:
+The envelope requires human review and forbids external writes. Relay
+`triage validate` validates identity, provenance, reference-set digest and
+the read-only boundary. It accepts the bare envelope or the exact successful
+JSON wrapper emitted by `triage evidence`:
 
 ```bash
-opl-relay --json triage evidence 'email-store://…' --policy-ref 'policy://…' \
+opl-relay --json triage evidence 'email-store://...' --policy-ref 'policy://...' \
   | opl-relay --json triage validate --input -
 ```
 
-## OPL App Integration
+Persona owns interpretation, policy-content digests and Inbox staging.
+Relay validates a separately approved Persona `mail.draft_context` proposal
+before creating an Apple Mail review draft. Persona approval never authorizes
+a send. Relay still owns the account and recipient route, draft identity,
+post-review fingerprint and authoritative send result.
 
-Relay and Persona are not OPL standard agents. OPL App should consume them
-through a role-neutral `app_contributions` contract:
+## App Contributions
 
-- navigation items and views;
-- commands and command palette entries;
-- read models and status summaries;
-- approval surfaces;
-- capability and permission declarations;
-- optional background services.
+The carrier-root `plugins/opl-relay/opl-package.json` declares the current
+role-neutral `app_contributions` and `app-contribution` CLI ABI. App consumes
+structured data and opaque actions through Framework; it must not special-case
+Relay identity, require a `standard_agent` role or embed Package UI code.
 
-The Package declares contributions; OPL App renders them. The platform must not
-branch on a Relay package id or force `standard_agent` fields onto a capability.
-The Relay descriptor and carrier-root ABI are present in this repository;
-whether the current App renders or invokes them remains an App/Framework
-readback question, not a Relay source claim.
+Framework owns the Host within runtime, Package graph and App projection.
+Studio's separate DSH Host composes profile/plugin/executor and delivery
+transport; public App state/action, authentication and channel callbacks join
+the scopes without sharing registries, sessions or currentness. Relay remains
+a Python capability behind its declared ABI and introduces no Host or second
+lifecycle manager.
 
-OPL Framework is the single Cordis Host for this composition. Relay remains a
-Python mail capability provider behind its existing Package and
-`app-contribution` ABI; it does not create a Cordis Host, service registry, or
-parallel lifecycle manager. Framework owns host assembly and lifecycle, while
-Relay retains mail identities, evidence, draft fingerprints, and send receipts.
+Current declared views and callable refs come from the descriptor and
+`cli.py`, not a second hand-maintained UI inventory here. Their presence does
+not prove App rendering, native-carrier installation, healthy accounts or a
+completed external write. A host can show unavailable contributions locally
+without blocking unrelated Packages.
 
-The first useful Relay contribution set is:
-
-- inbox/triage view;
-- draft review queue;
-- people and relationship-memory review;
-- knowledge-source status;
-- sync freshness and account health;
-- explicit send approval.
-
-Apple Mail remains a supported review frontend in the Apple ecosystem. OPL App
-may provide a richer review UI, but both surfaces must use the same draft
-identity, fingerprint, and receipt contract.
-
-## Persona Relationship
-
-Relay is independently useful and independently installable. Persona may call
-Relay but does not own its mail store or safety model. Persona's current job is
-cross-domain judgment: maintaining the user's working context, preserving
-provenance, and coordinating longer-running personal work through proposals.
-
-This avoids two bad couplings:
-
-- Mail does not wait for Persona to become a complete product.
-- Persona does not become a monolith containing mail, knowledge, research, and
-  every future domain engine.
-
-## Current Delivery Boundary
-
-| Surface | Current Relay-owned state | External owner boundary |
-| --- | --- | --- |
-| Product and data boundary | Branding, one `opl-relay` CLI, Profile Workspace separation, and stable mail identities are implemented in Relay source and tests | Live account, mail, workspace, and runtime truth still require Relay CLI/runtime readback |
-| Codex carrier | The installable Codex Plugin carries the Relay Skill and runtime without owning user data | Installed/current state belongs to fresh Codex Plugin carrier readback |
-| Package contribution | The owner descriptor declares stable capability exports, role-neutral `app_contributions`, a carrier-root ABI, and content lock | Publication belongs to immutable owner-channel digest readback; physical lifecycle belongs to the configured native carrier |
-| Persona bridge | Relay validates an approved Persona mail-draft context and creates an Apple Mail review draft without sending | Persona owns the cross-domain proposal contract; Relay retains draft identity, review, fingerprint, and final delivery boundaries |
-| Host consumption | Relay exposes generic data/action refs without embedding host UI | Framework admission, OPL App rendering/action invocation, and Shell navigation remain host-owned and require fresh evidence from those repositories |
-| Website adapter | Relay does not become a CMS or website writer | `gflab_web` owns its proposal-only Hugo adapter |
-
-New adapters belong at the authority that owns the target system. This rule
-keeps Persona proposal-first and prevents Relay or Persona from becoming a
-central CMS, Package lifecycle manager, or second mail store.
+Apple Mail remains the review frontend for the implemented draft workflow.
+Any future App review surface must preserve the same draft identity,
+fingerprint, explicit send gate and final receipt. Unified review must not
+merge Persona proposal approval with Relay sending authority.

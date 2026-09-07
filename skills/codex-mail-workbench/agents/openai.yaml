@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Mail Workbench"
-  short_description: "Use local mail, private memory, and drafting context safely"
-  default_prompt: "Use $codex-mail-workbench to inspect configured mailboxes, retrieve approved private memory and knowledge context, and preserve explicit freshness, evidence, and review gates."
+  short_description: "Audit mailbox coverage, freshness, and evidence"
+  default_prompt: "Use $codex-mail-workbench to audit configured mailboxes over an explicit date range, report per-account freshness and review coverage, and route requested follow-up actions through OPL Relay."

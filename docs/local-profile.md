@@ -12,24 +12,10 @@ Do not place new private state under a Git checkout or plugin directory.
 
 ## Data Root
 
-The default user-owned Profile Workspace is:
-
-```text
-~/OPL/profiles/<user>/
-  AGENTS.md
-  profile/
-  policies/
-  context/
-  templates/
-  exports/
-  data/
-    relay/
-    persona/
-```
-
-Relay stores accounts, SQLite databases, sources, and sync state under
-`<profile>/data/relay`. `OPL_PROFILE_WORKSPACE` is the only runtime selector;
-Relay does not inspect old state directories or alternate environment variables.
+This guide owns workspace setup and explicit overlay copying. The default
+root, selector and durable-state invariants belong to
+[Workspace Contract](workspace-contract.md). Relay stores module state under
+the selected workspace's `data/relay` directory.
 
 Credentials remain in macOS Keychain service `codex-mail-workbench`. The service
 name is a local credential contract; it is never exported to Git or the Profile

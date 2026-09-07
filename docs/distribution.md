@@ -69,7 +69,7 @@ does not tell OPL App to clone `main`.
 
 The Package and carrier path is:
 
-1. The package workflow publishes a complete, immutable Relay payload to GHCR.
+1. The Package owner publishes a complete, immutable Relay payload to GHCR.
 2. OPL Base may download, verify, and hand off selected immutable OCI bytes.
 3. The configured native carrier installs, updates, repairs, or removes those
    bytes and owns physical installed state.
@@ -142,6 +142,9 @@ Install, update, repair, and uninstall must preserve the Profile Workspace.
 ## Distribution Verification
 
 Repository readiness:
+
+Source CI validates tests and Plugin structure; it does not itself publish an
+OCI Package. Publication requires the owner channel and immutable digest.
 
 - bilingual user-facing README;
 - stable logo and license;
