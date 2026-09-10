@@ -32,9 +32,10 @@
     "canonicalization": "ordered_path_length_file_length_bytes",
     "paths": [
       ".codex-plugin/plugin.json",
-      "assets/icon.png",
-      "bin/opl-relay",
-      "runtime/codex_mail_workbench/__init__.py",
+    "assets/icon.png",
+    "bin/opl-relay",
+    "plugin.json",
+    "runtime/codex_mail_workbench/__init__.py",
       "runtime/codex_mail_workbench/apple_mail.py",
       "runtime/codex_mail_workbench/cli.py",
       "runtime/codex_mail_workbench/config.py",
@@ -53,7 +54,7 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:d97be5009d7a0c1a110e72726fefb5affe0484d28727ee39f844e240f43e960f"
+    "digest": "sha256:9cb3d819fa183321eaff6b23a5f35a306ec5038d7ea6b8686fb524602082e8b0"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

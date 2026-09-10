@@ -1,0 +1,45 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "opl-relay",
+  "version": "0.5.4",
+  "description": "Local-first mail evidence, relationship context, and review-gated drafting for Codex.",
+  "author": {
+    "name": "OPL"
+  },
+  "repository": "https://github.com/gaofeng21cn/opl-relay",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mail",
+    "memory",
+    "obsidian",
+    "apple-mail",
+    "local-first"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "OPL Relay",
+        "shortDescription": "Evidence-first mail and Apple Mail review for Codex.",
+        "longDescription": "Manage local mail evidence, approved relationship memory, Obsidian context, and Apple Mail drafts without storing user data in the plugin.",
+        "developerName": "OPL",
+        "category": "Productivity",
+        "capabilities": [
+          "Mail evidence",
+          "Relationship context",
+          "Approved memory",
+          "Obsidian knowledge",
+          "Review-gated drafting"
+        ],
+        "websiteURL": "https://github.com/gaofeng21cn/opl-relay",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png",
+        "defaultPrompt": [
+          "检查最近三天的邮件并告诉我需要决定什么。",
+          "结合往来邮件和记忆，在 Apple Mail 为这个联系人起草回复，等我审核后再发送。",
+          "初始化 Profile Workspace 并配置一个 IMAP 邮箱。"
+        ],
+        "brandColor": "#1260E8"
+      }
+    }
+  }
+}
