@@ -171,7 +171,13 @@ clearly requires it.
 
 For Codex-operated mail, use Computer Use for the Apple Mail interaction: open
 the exact source message, invoke the visible native Reply All control, and paste
-the reviewed response at Mail's default insertion point. Relay remains the
+the reviewed response at Mail's default insertion point. In Mail's rich-text
+editor, do not place the cursor by clicking near the first character of the
+signature or use coordinate-based insertion at the signature boundary. This
+can leave a stray character in the greeting, remove the first character of the
+signature, or introduce unwanted line breaks. If the default insertion point is
+unavailable, recreate the Reply All draft from the original message instead of
+repairing the body around the signature. Relay remains the
 authority for source lookup, account and recipient readback, draft adoption,
 thread validation, and approval gating. Do not use background body replacement
 or construct a same-subject outgoing message as a substitute for Reply All.
@@ -184,9 +190,11 @@ Treat the thread context as part of the reply, not as optional decoration:
    replace the composer body with body-only text.
 3. Insert only the new response above the account signature. Do not include a
    hand-written copy of the configured Apple Mail signature in `--body-file`.
-4. After saving, reread the Apple Mail draft and verify To/Cc, subject, exactly
-   one signature, `In-Reply-To`/`References`, and at least one recognizable
-   quoted-thread anchor before reporting the draft ready.
+4. After saving, reread the Apple Mail draft and verify To/Cc, subject, the
+   greeting's first character, expected paragraph breaks, exactly one intact
+   signature, `In-Reply-To`/`References`, and at least one recognizable
+   quoted-thread anchor before reporting the draft ready. Confirm that
+   user-added attachments remain present and unchanged.
 5. If any recipient or quoted context is missing, stop and rebuild from the
    original message with native Reply All. Do not repair the route from memory.
 

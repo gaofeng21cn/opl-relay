@@ -200,19 +200,26 @@ opl-relay --json draft reply-all \
 
 For Codex-operated replies, use Computer Use to invoke Apple Mail's visible
 native Reply All and paste the reviewed response at Mail's default insertion
-point. Relay handles source lookup and saved-draft readback; it must not replace
-this with a same-subject outgoing message. Relay rejects
-self-addresses, duplicates, Bcc, empty recipient sets, and ambiguous source
-tuples before registering the stable review draft. The saved draft is the
-review surface; provider-native Reply All is the routing authority.
+point. In Mail's rich-text editor, do not place the cursor by clicking near the
+first character of the signature or use coordinate-based insertion at the
+signature boundary; that can leave a stray character in the greeting, remove the
+first character of the signature, or introduce unwanted line breaks. If the
+default insertion point is unavailable, recreate the Reply All draft from the
+source message instead of repairing the body around the signature. Relay handles
+source lookup and saved-draft readback; it must not replace this with a
+same-subject outgoing message. Relay rejects self-addresses, duplicates, Bcc,
+empty recipient sets, and ambiguous source tuples before registering the stable
+review draft. The saved draft is the review surface; provider-native Reply All is
+the routing authority.
 
 The body file contains only the new response, which is inserted above Apple
 Mail's configured signature. Do not duplicate the account signature or replace
 the quoted content. After saving, reread the draft and verify the complete
-To/Cc route, subject, exactly one signature, `In-Reply-To`/`References`, and at
-least one recognizable quoted-thread anchor. If any item is missing, restart
-from the source message with native Reply All instead of repairing the thread
-from memory.
+To/Cc route, subject, the greeting's first character, expected paragraph breaks,
+exactly one intact signature, `In-Reply-To`/`References`, and at least one
+recognizable quoted-thread anchor, and confirm that any user-added attachments
+are still present and unchanged. If any item is missing, restart from the source
+message with native Reply All instead of repairing the thread from memory.
 
 Run functional tests only on a dedicated low-consequence thread with controlled
 test recipients. Do not use active editorial, conference, clinical,
