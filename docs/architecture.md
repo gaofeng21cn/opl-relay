@@ -67,6 +67,38 @@ See [Workspace Contract](workspace-contract.md) for the single-root rule and
 [Product Architecture](product-architecture.md) for the broader OPL
 integration.
 
+## Server Drafts For Mobile Review
+
+`draft server-create` and `draft server-reply-all` are IMAP-only alternatives to
+the desktop draft provider. They prepare locally by default; `--apply` appends
+only to one advertised Drafts folder with the `\\Draft` flag. There is no SMTP,
+send, source-marking, draft-overwrite or draft-delete operation on this route.
+The user reviews and sends through their preferred mail client.
+
+Reply All binds the full raw source by `email-store://` and hash. Recipients are
+From (or Reply-To), original To, and Cc, excluding all configured own addresses,
+explicit verified aliases, and duplicates. Replies to an own sent message retain
+the original external recipients. Bcc-bearing, malformed, or ambiguous sources
+fail closed. In-Reply-To and References preserve the conversation relationship.
+The full readable source body supplies quoted history; HTML-only sources are
+converted to safe text without active content. Original attachments are not
+automatically forwarded. Explicit attachments retain their names and bytes.
+
+New prose and an approved signature are separate inputs. The builder adds the
+signature once above the quote and generates UTF-8 plain text plus escaped HTML
+paragraphs. Wording quality remains an agent responsibility. Existing drafts
+edited on a phone are never silently overwritten or replaced.
+
+The existing private `drafts.sqlite` holds `server_draft_requests`: one stable
+request ID, account, content identity, MIME bytes, target folder and state.
+SQLite serializes writers; attempted state is committed before APPEND. A retry
+uses the original Message-ID and reconciles by server search and BODY.PEEK[];
+an uncertain or disappeared draft is never blindly appended again. The remote
+Draft flag, recipients, thread headers, decoded plain/HTML bodies and attachment
+content must match before `server_verified=true` is returned. `server-inspect`
+performs this readback without creating another draft. A saved server draft does
+not prove that a particular phone has completed synchronization or rendered it.
+
 ## Stable References
 
 Mail and memory use stable references rather than direct SQLite facts:
@@ -78,11 +110,77 @@ mail-memory://fact/<uuid>
 mail-draft://apple-mail/<account_id>/<apple-mail-uuid>
 ```
 
+## Mail Membership, Search, And Review Progress
+
+Raw evidence and current folder membership are separate. `present` projects a
+validated IMAP `SELECT` / `SEARCH ALL` snapshot; it is not a remote delete or
+read flag. Rows remain readable by `storage_ref` after movement or UIDVALIDITY
+changes. New UID generations must not overwrite earlier raw evidence. Mailbox
+operations require a current reference and retain their live provider checks.
+
+Immutable MIME bytes live once per SHA-256 in `email_blobs`; `email_messages`
+retains every folder identity and joins that content on read. The one-time
+in-place migration verifies byte equality before removing duplicate inline
+payloads. Back up the store before migration; `VACUUM` can reclaim freed pages
+after verification. This storage change does not delete provider messages.
+
+Sync resumes from missing UIDs in the current UIDVALIDITY, not just a high-water
+cursor. Newest missing UIDs are fetched first; older failed fetches remain retryable.
+Empty folders reconcile to zero only
+after a valid matching SELECT/SEARCH response. A partial or failed folder is
+reported as incomplete; `status` includes the snapshot timestamp, server count,
+and local current count. Sync processes share one local database lock. FETCH
+batches are bounded by declared message size; large MIME messages are fetched
+in verified 1 MiB chunks so attachments cannot stall an entire batch. Partial
+reads are verified against the requested byte count. A full read whose length
+disagrees with the advertised `RFC822.SIZE` is accepted only when an independent
+re-retrieval returns identical bytes; otherwise it stays a retryable gap.
+
+`recent` and `search` default to `active` (current Inbox and Sent). `history`
+adds archived and retained correspondence; known Trash/Junk copies are excluded.
+History includes `Archive/` and `Archives/` descendants and `Bill`, `Bill/`,
+and `Bill ` collections. Sync still respects configured folder inclusion rules;
+a folder's existence does not mean its messages have been downloaded.
+`all` is an explicit evidence-inspection scope. An explicit `--folder` selects
+that current folder by display name or slug. Results are local evidence, not
+proof of server freshness; sync and inspect snapshot completeness first.
+
+The decoded body index is keyed by raw SHA-256, so identical copies are parsed
+once. SQLite FTS5 trigram accelerates substring search, including Chinese;
+shorter-than-three-character queries scan decoded text. `index` backfills old
+stores. Search refuses an incomplete body index rather than claiming no matches.
+The retained `--max-scan` option no longer truncates candidate history. Results
+deduplicate by account and Message-ID (falling back to hash), preferring a
+current location. A result limit bounds output, not the searchable history.
+
+`review pending` selects current Inbox messages without an identity-specific
+review receipt, independent of the message's Date header. `review record`
+stores supplied judgments and open/waiting/closed states in the private store
+(`none` means reviewed evidence without a tracked task, not a resolved matter);
+it performs no classification itself and grants no provider write authority.
+Optional `category` and `suggested_folder` fields keep the subject area separate
+from the next action. A folder suggestion is descriptive, not a move receipt or
+a promise that the move API supports that folder. Use `none` for batched archive
+or cleanup proposals that should not clutter the actionable reminder queue.
+`review status` returns open items only while their evidence is still in Inbox.
+Persona or the calling agent owns interpretation and the user's private policy.
+Closed items stay recorded, while Archive never creates reminders. All hosts
+consume the same review table rather than maintaining competing date ledgers.
+
+`review prepare` combines active sync, pending messages, and open items across
+configured accounts in one CLI call. Its default per-folder sync limit is 200;
+remaining holes are explicit, not silently skipped. `available_for_review`
+distinguishes a freshly validated Inbox snapshot with some missing bodies from
+an account whose connection or UID enumeration failed. Only the former provides
+a current queue; both keep their completeness gap visible. The caller controls
+how many judgments to perform in a run and stores only completed judgments.
+
 ## Safety Boundary
 
 Relay remains read-first. Local memory lifecycle and derived knowledge indexing
 are private local writes. Apple Mail drafts remain review-gated, and sending
 requires the current post-review fingerprint. A separately contracted
 `mailbox move` may move exact, freshly verified references to an existing
-Archive or Trash folder under explicit `--apply`; permanent delete and mark
-remain unavailable.
+Archive, Trash, or Bill folder under explicit `--apply`; the destination must
+already exist and is resolved by name, with no folder creation. Permanent
+delete and mark remain unavailable.

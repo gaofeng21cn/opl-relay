@@ -2,6 +2,8 @@ import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from codex_mail_workbench import mailbox as mailbox_module
 from codex_mail_workbench.config import MailAccount, MailEndpoint
 from codex_mail_workbench.store import (
@@ -143,6 +145,18 @@ def test_parse_imap_list_entry_resolves_special_use_folder() -> None:
     assert "\\trash" in entry.flags
 
 
+def test_bill_destination_requires_an_existing_exact_folder() -> None:
+    mailboxes = [
+        mailbox_module.ImapMailbox(name="Archive", flags=frozenset()),
+        mailbox_module.ImapMailbox(name="Bill", flags=frozenset()),
+        mailbox_module.ImapMailbox(name="Bill Travel", flags=frozenset()),
+    ]
+    assert mailbox_module._resolve_destination("bill", mailboxes) == "Bill"
+    with pytest.raises(mailbox_module.MailboxMoveFailure) as missing:
+        mailbox_module._resolve_destination("bill", mailboxes[:1])
+    assert missing.value.code == "destination_missing"
+
+
 def test_move_dry_run_does_not_mutate_mailbox_or_local_store(monkeypatch, tmp_path: Path) -> None:
     db_path = tmp_path / "mail.sqlite"
     storage_ref = seed_message(db_path)
@@ -194,7 +208,7 @@ def test_move_apply_verifies_target_and_records_local_receipt(monkeypatch, tmp_p
     assert fake.mailboxes["Trash"][101] == RAW_MESSAGE
     conn = connect_email_store(db_path)
     try:
-        assert get_message_by_storage_ref(conn, storage_ref) is None
+        assert get_message_by_storage_ref(conn, storage_ref)["present"] is False
         operation = conn.execute(
             "SELECT destination_folder FROM mailbox_operations WHERE storage_ref=?",
             (storage_ref,),

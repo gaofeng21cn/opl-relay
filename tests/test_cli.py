@@ -120,6 +120,27 @@ def test_cli_recent_search_and_read_json(tmp_path: Path) -> None:
     assert "Please review" in read_payload["message"]["body_text"]
 
 
+def test_review_prepare_distinguishes_partial_body_backlog_from_connection_failure(monkeypatch, capsys, tmp_path):
+    db = tmp_path / "mail.sqlite"
+    seed_message(db)
+    monkeypatch.setattr(cli, "load_accounts_config", lambda path: {"work": object(), "offline": object()})
+    def sync_result(**kwargs):
+        if kwargs["account_id"] == "offline":
+            raise TimeoutError("test offline")
+        return {"ok": False, "folders": [{"folder": "INBOX", "remote_count": 2,
+                 "complete": False, "remaining": 1}]}
+    monkeypatch.setattr(cli, "sync_account", sync_result)
+    args = cli.build_parser().parse_args(["--json", "--db", str(db), "review", "prepare"])
+    assert args.func(args) == 1
+    payload = json.loads(capsys.readouterr().out)
+    work, offline = payload["accounts"]
+    assert work["available_for_review"] is True
+    assert work["pending"]["pending_count"] == 1
+    assert work["sync"]["folders"][0]["remaining"] == 1
+    assert offline["available_for_review"] is False
+    assert offline["sync"]["error"] == "test offline"
+
+
 def test_app_contribution_abi_describes_declared_refs_and_reads_package_owned_data(
     tmp_path: Path,
 ) -> None:

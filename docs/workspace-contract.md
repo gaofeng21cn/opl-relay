@@ -62,6 +62,6 @@ Relay continues to own mail identities, memory evidence rules, draft
 fingerprints, controlled mailbox-operation receipts, and send receipts. Persona
 owns cross-domain provenance and proposal state. A host may visualize these
 contracts but must not recreate them as a second source of truth. Mailbox
-movement remains limited to exact references, existing Archive/Trash folders,
+movement remains limited to exact references, existing Archive/Trash/Bill folders,
 fresh raw-message and `Message-ID` verification, explicit `--apply`, and
 post-operation source/target readback.

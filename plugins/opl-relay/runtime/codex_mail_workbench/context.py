@@ -117,6 +117,7 @@ class ContextBuilder:
                     queries=mail_terms,
                     limit=max(1, min(int(mail_limit), 50)),
                     max_scan=max(mail_limit * 20, 100),
+                    scope="history" if person or project else "active",
                 )
                 for row in rows:
                     raw = fetch_raw_email_by_storage_ref(mail_conn, row["storage_ref"])

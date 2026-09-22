@@ -140,8 +140,20 @@ opl-relay --json read 'email-store://...'
 opl-relay --json context build --person "示例教授" --query "年度邀请"
 ```
 
+日常 `recent`、`search` 默认只查当前收件箱和已发送邮件。追溯历史往来时加
+`--scope history`，垃圾箱和废纸篓仍被排除；`--folder` 则明确选择一个当前文件夹。
+已有邮件库升级前应备份，升级后运行一次 `opl-relay --json index` 补齐正文索引。
+邮件移动后，原有引用仍可读取原文。
+
+增量整理使用 `review prepare --account work`，一次完成有效文件夹同步、待审队列和未决事项查询。
+通过 `review record --file reviews.json` 记录逐封判断，文件是包含 `storage_ref`、
+`action`、`status`、`note` 的 JSON 数组，可增加 `category` 主题和 `suggested_folder`
+建议目录；`review status --account work` 查看待办。
+这些只更新本地审阅记录，不授权发送或移动邮件。`status --account work` 提供带时间的
+服务器快照计数与同步完整性。实现边界见[架构文档](docs/architecture.md#mail-membership-search-and-review-progress)。
+
 对于已经明确批准的、可恢复的邮箱整理，先省略 `--apply` 做实时预检；只有精确的当前
-`email-store://` 引用可以移动，目标只能是服务器已经提供的 Archive 或 Trash 文件夹：
+`email-store://` 引用可以移动，目标只能是服务器已经提供的 Archive、Trash 或 Bill 文件夹：
 
 ```bash
 opl-relay --json mailbox move \
@@ -154,7 +166,22 @@ opl-relay --json mailbox move \
 Relay 会重新获取源 UID，比对完整原文 SHA-256 和 `Message-ID`，验证目标副本及源邮件消失，
 并保存本地操作回执。不会创建文件夹、执行无范围 `EXPUNGE`、永久删除邮件或标记邮件。
 
-建立并查看 Apple Mail 草稿：
+通过微信提出需求、在手机审核时，直接准备服务器“回复所有人”草稿：
+
+```bash
+opl-relay --json draft server-reply-all \
+  --account work --storage-ref 'email-store://...' --request-id reply-unique-id \
+  --body-file ./reply.txt --signature-file ./signature.txt
+```
+
+先核对预览，再用同一命令加 `--apply` 保存到服务器 Drafts；由用户在自己的邮件 App
+审核并发送。新邮件使用 `server-create`，提供 `--to`、可选 `--cc` 和 `--subject`。
+中断后使用 `draft server-inspect --account work --request-id reply-unique-id` 回读，
+不要换请求 ID 盲目重建。回复保留完整收件人路由、线程标头和引用历史，以 UTF-8
+纯文本/HTML 输出，并在新正文后添加一次指定签名。不会覆盖手机上的现有草稿，
+也不会自动重发原邮件附件。详见[服务器草稿合同](docs/architecture.md#server-drafts-for-mobile-review)。
+
+在桌面审核时，建立并查看 Apple Mail 草稿：
 
 ```bash
 opl-relay --json draft create \
@@ -224,7 +251,7 @@ Package publication 必须从公开不可变 GHCR digest 回读；installed/curr
 
 - 用户邮件、账号配置、SQLite、原始 EML、同步游标、私人规则、Obsidian 路径和凭据
   都不能进入 Git 或插件缓存。
-- Relay 默认只读；只有显式 `--apply` 才能按精确引用将邮件移动到已存在的 Archive 或 Trash。
+- Relay 默认只读；只有显式 `--apply` 才能按精确引用将邮件移动到已存在的 Archive、Trash 或 Bill。
   永久删除和标记邮件仍不开放。
 - Persona 的提案批准不等于授权发送邮件。
 - Apple Mail 草稿审核和基于内容指纹的发送批准始终分开。

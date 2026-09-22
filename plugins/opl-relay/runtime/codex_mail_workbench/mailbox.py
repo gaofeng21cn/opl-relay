@@ -109,6 +109,7 @@ def _resolve_destination(destination: str, mailboxes: list[ImapMailbox]) -> str:
     candidates = {
         "archive": {"archive", "archives"},
         "trash": {"trash", "deleted items", "deleted messages", "bin"},
+        "bill": {"bill"},
     }[destination]
     name_matches = [
         mailbox
@@ -357,6 +358,8 @@ def _message_from_local_store(conn: Any, storage_ref: str, account_id: str) -> d
     raw = fetch_raw_email_by_storage_ref(conn, storage_ref)
     if message is None or raw is None:
         raise MailboxMoveFailure("local_message_missing", "本地邮件证据不存在或已失效")
+    if not message.get("present", False):
+        raise MailboxMoveFailure("local_message_not_current", "历史引用可读取，但不能据此操作旧文件夹；请同步并定位当前引用")
     if str(message["account_id"]) != account_id:
         raise MailboxMoveFailure("account_mismatch", "邮件不属于指定账号")
     local_hash = hashlib.sha256(raw).hexdigest()
@@ -399,8 +402,8 @@ def move_messages(
     storage_refs: list[str],
     apply: bool,
 ) -> dict[str, object]:
-    if destination not in {"archive", "trash"}:
-        raise ValueError("destination must be archive or trash")
+    if destination not in {"archive", "trash", "bill"}:
+        raise ValueError("destination must be archive, trash, or bill")
     unique_refs = list(dict.fromkeys(ref.strip() for ref in storage_refs if ref.strip()))
     if not unique_refs:
         raise ValueError("at least one storage_ref is required")

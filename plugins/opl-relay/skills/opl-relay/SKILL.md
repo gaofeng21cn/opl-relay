@@ -51,7 +51,7 @@ operation. When it succeeds, use `sync` and inspect the local evidence.
 The OPL Package exports four stable capability contracts:
 
 - `communications.mail.v1`: local mailbox evidence, sync, retrieval, controlled
-  Archive/Trash movement, and review-gated Apple Mail drafts;
+  Archive/Trash/Bill movement, and review-gated Apple Mail drafts;
 - `personal.context.v1`: bounded drafting context assembled from evidence;
 - `personal.memory.v1`: proposed and explicitly approved relationship memory;
 - `knowledge.obsidian.v1`: read-only indexing and retrieval from configured
@@ -67,6 +67,37 @@ use `recent`, `search`, and `read` through stable `email-store://` references.
 Before drafting for a known person or project, run `context build`. Use only
 approved memories as active relationship memory and re-read raw mail for
 high-risk dates, roles, commitments, or invitations.
+
+Default `recent`/`search` scope is current Inbox/Sent. Use `--scope history`
+only for requested historical correspondence; it excludes Junk/Trash. A named
+`context build --person/--project` uses history. `--folder` explicitly selects
+one current folder by name or slug. Run `index` once for older stores; indexed
+search covers the entire selected scope without a recency scan cap.
+
+For routine review, `review prepare --account <id>` combines active sync,
+snapshot freshness, pending mail, and open items. Omit the account to prepare
+all configured accounts. A partial sync can still return fresh available mail
+when `available_for_review=true`; retain the explicit remaining coverage gap.
+False means the connection or snapshot failed, so the queue is stale context.
+Use `review pending --account <id>` for subsequent batches without another sync.
+After actually classifying each returned message, write a JSON array containing
+`storage_ref`, `action`, `status` (`open`, `waiting`, `closed`, or `none` for no
+tracked task), and `note`, with optional `category` and `suggested_folder`,
+then run `review record --file <path>`. `review status --account <id>` returns
+remaining unreviewed mail and open items still in Inbox. A review record is a
+local judgment receipt, never permission to mutate the mailbox. Do not replace
+identity-specific progress with a Date-header watermark or mark unexamined
+messages reviewed. Archive is historical evidence, not a source of reminders.
+Keep a topic category separate from an outstanding action. A suggested folder
+does not move mail; use only existing account-specific folders, and preserve
+unresolved matters in Inbox. History also includes Archive/Archives descendants
+and Bill collections when they have been synchronized.
+
+Sync retries missing UIDs, reports incomplete fetches, and reconciles external
+moves without deleting evidence. `read` preserves old references and reports
+`present=false` for historical locations; locate a fresh current reference
+before proposing a mailbox operation. Snapshot counts are timestamped, not
+live counts. A sync failure cannot justify reporting "no new mail".
 
 ## Controlled Mailbox Movement
 
@@ -156,6 +187,25 @@ Keep website credentials and session state outside the repository. Do not copy
 external-site content into public skill files.
 
 ## Draft Approval
+
+For messaging-channel requests reviewed on a phone, use server Drafts instead
+of requiring a desktop editor. `draft server-reply-all --account ...
+--storage-ref ... --request-id ... --body-file ... --signature-file ...` prepares
+a preview; the same command with `--apply` writes only an IMAP draft and verifies
+it by fresh server readback. Use `server-create` with explicit To/Cc/subject for
+new correspondence, and `server-inspect` with the account and stable request ID
+after an interruption. These commands never send. The user reviews and sends
+from their own mail app. Implementation and limits are described in
+[the server draft contract](../../../../docs/architecture.md#server-drafts-for-mobile-review).
+
+The server Reply All route derives recipients from complete raw headers,
+preserves thread identifiers and readable quoted history, and excludes verified
+own addresses and duplicates. Supply only new prose in the body file and the
+approved signature separately. Review wording and both text/HTML layout; never
+turn Markdown formatting into literal email syntax. Preserve user edits and
+attachments: this route does not overwrite or delete existing mobile drafts.
+Only `server_verified=true` with `state=draft` proves server delivery. Reuse the
+same request ID to reconcile an unknown result; do not blindly recreate it.
 
 `draft create` and `draft reply-all` may create and open an Apple Mail draft.
 They do not authorize sending. Let the user review the draft in Apple Mail, run

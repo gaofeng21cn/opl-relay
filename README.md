@@ -150,6 +150,20 @@ opl-relay --json read 'email-store://...'
 opl-relay --json context build --person "Professor Example" --query "invitation"
 ```
 
+Routine `recent` and `search` queries default to current Inbox/Sent mail. Add
+`--scope history` for a named historical correspondence search; Trash/Junk stay
+excluded. An explicit `--folder` selects that current folder. After upgrading
+an existing store, back it up and run `opl-relay --json index` once to populate
+the body index. Historical references remain readable after a message moves.
+
+For incremental review, use `review prepare --account work` to sync active
+folders and retrieve the pending queue and open items in one call. Save classified exact references with `review record --file reviews.json`
+(a JSON array of `storage_ref`, `action`, `status`, and `note`, optionally
+`category` and `suggested_folder`), and inspect
+`review status --account work`. These are local review records, not send/move
+permissions. `status --account work` reports timestamped IMAP snapshots and
+incomplete folders. See [architecture](docs/architecture.md#mail-membership-search-and-review-progress).
+
 For an explicitly approved, reversible mailbox cleanup, first run the same
 command without `--apply` to perform a live preflight. Only exact current
 `email-store://` references may be moved, and only to an existing Archive or
@@ -168,7 +182,25 @@ target copy and source absence, and stores a local operation receipt. It never
 creates folders, performs an unscoped `EXPUNGE`, permanently deletes mail, or
 marks messages.
 
-Create and inspect an Apple Mail draft:
+For phone-based review (including requests through Weixin), prepare a server
+Reply All draft from an exact source message:
+
+```bash
+opl-relay --json draft server-reply-all \
+  --account work --storage-ref 'email-store://...' --request-id reply-unique-id \
+  --body-file ./reply.txt --signature-file ./signature.txt
+```
+
+Check the preview, then repeat with `--apply` to save only to server Drafts.
+The user reviews and sends in their mail app. For new correspondence use
+`server-create` with `--to`, optional `--cc`, and `--subject`. After interruption,
+use `draft server-inspect --account work --request-id reply-unique-id`; never
+change IDs just to retry. The route preserves Reply All recipients, thread
+headers, quoted history and a single new signature in UTF-8 plain text/HTML.
+It does not edit existing mobile drafts or automatically reattach original files.
+See the [server draft contract](docs/architecture.md#server-drafts-for-mobile-review).
+
+For desktop review, create and inspect an Apple Mail draft:
 
 ```bash
 opl-relay --json draft create \
@@ -261,7 +293,7 @@ boundaries.
   private policies, Obsidian paths, and credentials never belong in Git or a
   Plugin cache.
 - Relay is read-first. Controlled exact-reference movement to an existing
-  Archive or Trash folder is available only with explicit `--apply`; permanent
+  Archive, Trash, or Bill folder is available only with explicit `--apply`; permanent
   delete and mark remain unavailable.
 - A Persona approval does not authorize mail sending.
 - Apple Mail draft review and fingerprint-bound send approval remain separate.

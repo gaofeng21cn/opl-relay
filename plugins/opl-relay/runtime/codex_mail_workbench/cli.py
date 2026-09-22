@@ -52,6 +52,12 @@ from .store import (
     get_message_by_storage_ref,
     list_messages,
     search_messages,
+    SCOPES,
+    folder_status,
+    index_messages,
+    record_reviews,
+    review_pending,
+    review_status,
 )
 from .sync import connect_imap, sync_account
 from .triage import build_triage_evidence, validate_triage_evidence
@@ -783,6 +789,7 @@ def cmd_recent(args: argparse.Namespace) -> int:
             since=args.since,
             until=args.until,
             limit=args.limit,
+            scope=args.scope,
         )
     finally:
         conn.close()
@@ -803,10 +810,75 @@ def cmd_search(args: argparse.Namespace) -> int:
             include_body=args.include_body,
             max_scan=args.max_scan,
             limit=args.limit,
+            scope=args.scope,
         )
     finally:
         conn.close()
-    emit({"ok": True, "messages": rows}, as_json=args.json)
+    emit({"ok": True, "scope": args.scope, "messages": rows,
+          "search_complete": True, "result_limit": args.limit}, as_json=args.json)
+    return 0
+
+
+def cmd_index(args: argparse.Namespace) -> int:
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        emit(index_messages(conn), as_json=args.json)
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_mail_status(args: argparse.Namespace) -> int:
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        emit({"ok": True, "folders": folder_status(conn, args.account),
+              "counts_are": "last verified IMAP snapshot, not a live server query"}, as_json=args.json)
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    if args.review_action == "prepare":
+        accounts = [args.account] if args.account else list(load_accounts_config(Path(args.config).expanduser()))
+        prepared = []
+        for account in accounts:
+            try:
+                sync_result = sync_account(config_path=Path(args.config).expanduser(),
+                                          db_path=Path(args.db).expanduser(), account_id=account,
+                                          scope="active", limit_per_folder=args.sync_limit)
+            except Exception as exc:
+                sync_result = {"ok": False, "error": str(exc), "folders": []}
+            conn = connect_email_store(Path(args.db).expanduser())
+            try:
+                queue = review_pending(conn, account=account, limit=args.limit)
+                state = review_status(conn, account=account)
+            finally:
+                conn.close()
+            # Successful UID enumeration proves membership of available rows,
+            # even while an old body-download backlog remains incomplete.
+            validated = any(f.get("folder", "").lower() == "inbox" and "remote_count" in f
+                            for f in sync_result.get("folders", []))
+            prepared.append({"account": account, "sync": sync_result,
+                             "available_for_review": validated, "pending": queue,
+                             "open_items": state["open_items"]})
+        payload = {"ok": all(p["sync"].get("ok") for p in prepared), "accounts": prepared}
+        emit(payload, as_json=args.json)
+        return 0 if payload["ok"] else 1
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        if args.review_action == "pending":
+            payload = review_pending(conn, account=args.account, limit=args.limit)
+        elif args.review_action == "status":
+            payload = review_status(conn, account=args.account)
+        else:
+            records = json.loads(Path(args.file).expanduser().read_text(encoding="utf-8"))
+            if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
+                raise ValueError("review file must be a JSON array of records")
+            payload = record_reviews(conn, records)
+        emit(payload, as_json=args.json)
+    finally:
+        conn.close()
     return 0
 
 
@@ -834,9 +906,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
         mode=args.mode,
         limit_per_folder=args.limit_per_folder,
         dry_run=args.dry_run,
+        scope=args.scope,
+        folder=args.folder,
     )
     emit(payload, as_json=args.json)
-    return 0
+    return 0 if payload.get("ok") else 1
 
 
 def cmd_mailbox_move(args: argparse.Namespace) -> int:
@@ -1181,6 +1255,25 @@ def draft_service(args: argparse.Namespace) -> tuple[DraftService, AppleMailProv
     return DraftService(ledger, provider), provider
 
 
+def cmd_server_draft(args: argparse.Namespace) -> int:
+    from .server_drafts import server_draft
+
+    inspect = args.draft_action == "server-inspect"
+    payload = server_draft(
+        config_path=Path(args.config).expanduser(), db_path=Path(args.db).expanduser(),
+        ledger_path=Path(args.draft_db).expanduser(), account_id=args.account,
+        request_id=args.request_id, inspect=inspect,
+        body="" if inspect else read_body(args),
+        signature="" if inspect else Path(args.signature_file).expanduser().read_text(encoding="utf-8"),
+        source_ref=getattr(args, "storage_ref", None),
+        to=getattr(args, "to", []), cc=getattr(args, "cc", []),
+        subject=getattr(args, "subject", ""), attachments=getattr(args, "attach", []),
+        self_aliases=getattr(args, "self_address", []), apply=getattr(args, "apply", False),
+    )
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
+
+
 def cmd_draft_create(args: argparse.Namespace) -> int:
     account = load_account(Path(args.config).expanduser(), args.account)
     attachments = [Path(value).expanduser() for value in args.attach]
@@ -1307,6 +1400,7 @@ def build_parser() -> argparse.ArgumentParser:
     recent.add_argument("--since", default="", help="include messages at or after this ISO datetime")
     recent.add_argument("--until", default="", help="include messages before this ISO datetime")
     recent.add_argument("--limit", type=int, default=20)
+    recent.add_argument("--scope", choices=SCOPES, default="active")
     recent.set_defaults(func=cmd_recent)
 
     search = sub.add_parser("search", help="搜索本地邮件元数据")
@@ -1316,8 +1410,9 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--since", default="", help="include messages at or after this ISO datetime")
     search.add_argument("--until", default="", help="include messages before this ISO datetime")
     search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--scope", choices=SCOPES, default="active")
     search.add_argument("--include-body", action=argparse.BooleanOptionalAction, default=True)
-    search.add_argument("--max-scan", type=int, default=500)
+    search.add_argument("--max-scan", type=int, default=500, help="compatibility option; indexed search always covers the full selected scope")
     search.set_defaults(func=cmd_search)
 
     read = sub.add_parser("read", help="读取一封邮件正文")
@@ -1330,16 +1425,37 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--mode", choices=["initial", "incremental"], default="incremental")
     sync.add_argument("--limit-per-folder", type=int, default=None)
     sync.add_argument("--dry-run", action="store_true")
+    sync.add_argument("--scope", choices=SCOPES, default="all")
+    sync.add_argument("--folder", default="", help="sync one configured folder")
     sync.set_defaults(func=cmd_sync)
+
+    index = sub.add_parser("index", help="建立或补齐本地正文索引（按原文哈希去重）")
+    index.set_defaults(func=cmd_index)
+    status = sub.add_parser("status", help="读取各文件夹最后一次 IMAP 对账与完整性")
+    status.add_argument("--account", default="")
+    status.set_defaults(func=cmd_mail_status)
+    review = sub.add_parser("review", help="本地逐封审阅进度，不更改服务器邮件")
+    review_actions = review.add_subparsers(dest="review_action", required=True)
+    for name in ("prepare", "pending", "status", "record"):
+        command = review_actions.add_parser(name)
+        command.set_defaults(func=cmd_review)
+        if name == "record":
+            command.add_argument("--file", required=True, help="JSON records: storage_ref, action, status, note")
+        else:
+            command.add_argument("--account", required=name != "prepare", default="")
+        if name in ("prepare", "pending"):
+            command.add_argument("--limit", type=int, default=50)
+        if name == "prepare":
+            command.add_argument("--sync-limit", type=int, default=200, help="每个文件夹每轮最多补抓的邮件数，优先新信")
 
     mailbox = sub.add_parser("mailbox", help="逐封受控 IMAP 邮箱移动")
     mailbox_actions = mailbox.add_subparsers(dest="mailbox_action", required=True)
     mailbox_move = mailbox_actions.add_parser(
         "move",
-        help="只将经实时验证的精确邮件移动到 Archive 或 Trash",
+        help="只将经实时验证的精确邮件移动到已存在的 Archive、Trash 或 Bill",
     )
     mailbox_move.add_argument("--account", required=True)
-    mailbox_move.add_argument("--destination", choices=["archive", "trash"], required=True)
+    mailbox_move.add_argument("--destination", choices=["archive", "trash", "bill"], required=True)
     mailbox_move.add_argument("--storage-ref", action="append", required=True)
     mailbox_move.add_argument(
         "--apply",
@@ -1527,8 +1643,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     credential_set.set_defaults(func=cmd_credential_set)
 
-    draft = sub.add_parser("draft", help="Apple Mail 草稿审核与受控发送")
+    draft = sub.add_parser("draft", help="服务器审核草稿、Apple Mail 草稿与受控发送")
     draft_actions = draft.add_subparsers(dest="draft_action", required=True)
+
+    for action, help_text in (
+        ("server-create", "准备服务器草稿；--apply 保存至 IMAP Drafts，不发送"),
+        ("server-reply-all", "按完整原邮件回复所有人，保存服务器草稿，不依赖桌面"),
+        ("server-inspect", "从服务器回读同一请求的草稿，不重建或覆盖"),
+    ):
+        command = draft_actions.add_parser(action, help=help_text)
+        command.add_argument("--account", required=True)
+        command.add_argument("--request-id", required=True)
+        if action != "server-inspect":
+            body_source = command.add_mutually_exclusive_group(required=True)
+            body_source.add_argument("--body")
+            body_source.add_argument("--body-file")
+            command.add_argument("--signature-file", required=True)
+            command.add_argument("--attach", action="append", default=[])
+            command.add_argument("--apply", action="store_true", help="仅写入服务器 Drafts；不会发送")
+            if action == "server-reply-all":
+                command.add_argument("--storage-ref", required=True)
+                command.add_argument("--self-address", action="append", default=[], help="额外已确认的本人邮箱别名")
+            else:
+                command.add_argument("--to", action="append", required=True)
+                command.add_argument("--cc", action="append", default=[])
+                command.add_argument("--subject", required=True)
+        command.set_defaults(func=cmd_server_draft)
 
     draft_create = draft_actions.add_parser("create", help="创建并保存 Apple Mail 草稿")
     draft_create.add_argument("--account", required=True)
