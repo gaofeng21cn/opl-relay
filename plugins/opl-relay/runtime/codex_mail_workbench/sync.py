@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from .config import MailAccount, keychain_get_secret, load_account
+from .config import MailAccount, keychain_read_secret, load_account
 from .message import extract_attachments, parse_headers
 from .paths import default_config_path, default_db_path, default_sync_state_dir
 from .store import ACTIVE_FOLDERS, HISTORY_FOLDERS, connect_email_store, reconcile_folder, upsert_email_message
@@ -189,9 +189,10 @@ def _sync_account(
     folder: str = "",
 ) -> dict[str, object]:
     account = load_account(config_path, account_id)
-    secret = keychain_get_secret(account.imap.credential_ref)
+    credential = keychain_read_secret(account.imap.credential_ref,
+                                      fallback_keychain=account.imap.fallback_keychain)
     client = connect_imap(account)
-    client.login(account.imap.username, secret)
+    client.login(account.imap.username, credential.value)
     state_path = state_dir / f"{account_id}.json"
     state = load_json(state_path, {"account_id": account_id, "folders": {}})
     assert isinstance(state, dict)
@@ -201,6 +202,7 @@ def _sync_account(
     summary: dict[str, object] = {
         "ok": True,
         "account": account_id,
+        "credential_source": credential.source,
         "mode": mode,
         "folders": [],
         "new_messages": 0,

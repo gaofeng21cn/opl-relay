@@ -10,9 +10,10 @@ import sqlite3
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import formatdate, make_msgid
+from email.utils import formatdate, make_msgid, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
+from datetime import timedelta
 
 from .config import keychain_get_secret, load_accounts_config
 from .drafts import normalize_body
@@ -202,6 +203,211 @@ def resolve_drafts(client):
     return matches[0]
 
 
+def resolve_sent(client):
+    boxes = _list_mailboxes(client)
+    matches = [b.name for b in boxes if "\\sent" in b.flags and "\\noselect" not in b.flags]
+    if not matches:
+        matches = [b.name for b in boxes
+                   if b.name.casefold() in {"sent", "sent items", "sent messages", "[gmail]/sent mail"}
+                   and "\\noselect" not in b.flags]
+    if len(matches) != 1:
+        raise ValueError("Sent folder is missing or ambiguous; cannot reconcile drafts")
+    return matches[0]
+
+
+def _address_set(message, *fields):
+    addresses = set()
+    for field in fields:
+        for header in message.get_all(field, []):
+            try:
+                addresses.update(a.addr_spec.casefold() for a in header.addresses if a.addr_spec)
+            except (AttributeError, ValueError):
+                continue
+    return frozenset(addresses)
+
+
+def _subject_key(value):
+    return re.sub(r"(?i)^\s*(?:(?:re|fw|fwd)\s*:\s*)+", "", value or "").strip().casefold()
+
+
+def _message_date(message):
+    raw = str(message.get("Date", "")).strip()
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _is_superseded(draft, sent):
+    """Decide whether a sent message already carries this review draft's reply.
+
+    Same reply target (``In-Reply-To``), same recipients, same subject, and not
+    older than the draft: the draft is a leftover the client failed to consume.
+    Anything weaker stays untouched so a pending edit is never destroyed.
+    """
+    draft_parent = str(draft.get("In-Reply-To", "")).strip()
+    sent_parent = str(sent.get("In-Reply-To", "")).strip()
+    if draft_parent and sent_parent != draft_parent:
+        return False
+    if _subject_key(str(sent.get("Subject", ""))) != _subject_key(str(draft.get("Subject", ""))):
+        return False
+    recipients = _address_set(draft, "To", "Cc")
+    if not recipients or recipients != _address_set(sent, "To", "Cc"):
+        return False
+    draft_date, sent_date = _message_date(draft), _message_date(sent)
+    if draft_date is None or sent_date is None:
+        return False
+    # Tolerate small clock skew between the sending client and this host.
+    return sent_date >= draft_date - timedelta(minutes=5)
+
+
+def _search_message(client, folder, message_id, *, readonly):
+    typ, _ = client.select(_quoted_mailbox(folder), readonly=readonly)
+    if typ != "OK":
+        raise ValueError("Cannot open the server folder for reconciliation")
+    typ, data = client.uid("search", None, "HEADER", "Message-ID", '"' + message_id + '"')
+    if typ != "OK":
+        raise ValueError("Cannot search the server folder")
+    found = []
+    for uid in b" ".join(x for x in data if isinstance(x, bytes)).split():
+        typ, fetched = client.uid("fetch", uid.decode(), "(UID FLAGS BODY.PEEK[])")
+        if typ != "OK":
+            raise ValueError("Cannot reread a server message")
+        raw = parse_fetch_uid_rfc822_map(fetched).get(int(uid))
+        if not raw:
+            raise ValueError("Message fetch returned no content")
+        actual = BytesParser(policy=policy.default).parsebytes(raw)
+        if str(actual.get("Message-ID", "")) != message_id:
+            continue
+        flags = b" ".join(x[0] if isinstance(x, tuple) else x for x in fetched if isinstance(x, (tuple, bytes)))
+        match = re.search(rb"FLAGS\s+\(([^)]*)\)", flags, re.I)
+        tokens = set(match[1].lower().split()) if match else set()
+        found.append({"uid": int(uid), "message": actual, "deleted": b"\\deleted" in tokens,
+                      "draft": b"\\draft" in tokens, "raw": raw})
+    if len(found) > 1:
+        raise ValueError("Multiple messages share one Message-ID; reconcile manually")
+    return found[0] if found else None
+
+
+def _recent_sent_messages(client, folder, since):
+    typ, _ = client.select(_quoted_mailbox(folder), readonly=True)
+    if typ != "OK":
+        raise ValueError("Cannot read the Sent folder")
+    criteria = ["SINCE", since.strftime("%d-%b-%Y")] if since is not None else ["ALL"]
+    typ, data = client.uid("search", None, *criteria)
+    if typ != "OK":
+        raise ValueError("Cannot search the Sent folder")
+    messages = []
+    for uid in b" ".join(x for x in data if isinstance(x, bytes)).split():
+        typ, fetched = client.uid("fetch", uid.decode(), "(UID BODY.PEEK[HEADER])")
+        if typ != "OK":
+            raise ValueError("Cannot reread the Sent folder")
+        raw = parse_fetch_uid_rfc822_map(fetched).get(int(uid))
+        if not raw:
+            raise ValueError("Sent fetch returned no content")
+        messages.append(BytesParser(policy=policy.default).parsebytes(raw))
+    return messages
+
+
+def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False):
+    """Delete review drafts that a client left behind after sending the reply.
+
+    Only drafts this ledger created and verified on the server are considered.
+    A draft is removed only when a sent message already carries the same reply
+    target, recipients and subject, so a pending edit is never destroyed. The
+    default is a read-only preview; ``apply`` performs the removal.
+    """
+    accounts = load_accounts_config(config_path)
+    account = accounts[account_id]
+    conn = _ledger(ledger_path)
+    client = None
+    entries = []
+    try:
+        rows = conn.execute(
+            "SELECT request_id, raw FROM server_draft_requests"
+            " WHERE account_id=? AND state='verified' ORDER BY request_id", (account_id,)).fetchall()
+        if not rows:
+            return {"account_id": account_id, "checked": 0, "candidates": 0, "cleaned": 0, "drafts": []}
+        client = connect_imap(account, timeout_sec=20)
+        client.login(account.imap.username, keychain_get_secret(
+            account.imap.credential_ref, fallback_keychain=account.imap.fallback_keychain))
+        drafts_folder = resolve_drafts(client)
+        sent_folder = resolve_sent(client)
+        sent_cache = {}
+        for row in rows:
+            expected = bytes(row["raw"])
+            draft = BytesParser(policy=policy.default).parsebytes(expected)
+            message_id = str(draft.get("Message-ID", "")).strip()
+            entry = {"request_id": row["request_id"], "message_id": message_id,
+                     "to": str(draft.get("To", "")), "subject": str(draft.get("Subject", "")),
+                     "action": "keep", "reason": "no matching sent message",
+                     "user_edited": False, "uid": None}
+            found = _search_message(client, drafts_folder, message_id, readonly=True)
+            if not found:
+                entry.update(action="absent", reason="draft is no longer on the server")
+                entries.append(entry)
+                continue
+            if found["deleted"] or not found["draft"]:
+                entry.update(action="absent", reason="message is not a live draft")
+                entries.append(entry)
+                continue
+            entry["uid"] = found["uid"]
+            entry["user_edited"] = content_snapshot(found["raw"]) != content_snapshot(expected)
+            if entry["user_edited"]:
+                entry["reason"] = "server draft changed after creation; preserve user edits"
+                entries.append(entry)
+                continue
+            since = _message_date(draft)
+            since = since - timedelta(days=2) if since is not None else None
+            cache_key = since.date() if since is not None else None
+            if cache_key not in sent_cache:
+                sent_cache[cache_key] = _recent_sent_messages(client, sent_folder, since)
+            match = next((sent for sent in sent_cache[cache_key] if _is_superseded(draft, sent)), None)
+            if match is None:
+                entries.append(entry)
+                continue
+            entry.update(action="candidate", reason="a sent reply already covers this draft",
+                         sent_message_id=str(match.get("Message-ID", "")))
+            if apply:
+                _expunge_draft(client, drafts_folder, found["uid"])
+                if _search_message(client, drafts_folder, message_id, readonly=True):
+                    raise ValueError("Draft removal could not be confirmed on the server")
+                conn.execute("UPDATE server_draft_requests SET state='cleaned' WHERE request_id=?",
+                             (row["request_id"],))
+                conn.commit()
+                entry.update(action="cleaned")
+            entries.append(entry)
+        return {"account_id": account_id, "checked": len(entries),
+                "candidates": sum(1 for e in entries if e["action"] in {"candidate", "cleaned"}),
+                "cleaned": sum(1 for e in entries if e["action"] == "cleaned"), "drafts": entries}
+    finally:
+        conn.close()
+        if client is not None:
+            try:
+                client.logout()
+            except Exception:
+                pass
+
+
+def _expunge_draft(client, folder, uid):
+    typ, data = client.capability()
+    capabilities = b" ".join(x for x in (data or []) if isinstance(x, bytes)).upper()
+    if typ != "OK" or b"UIDPLUS" not in capabilities:
+        raise ValueError("Server lacks UIDPLUS; refusing an unscoped expunge")
+    typ, _ = client.select(_quoted_mailbox(folder), readonly=False)
+    if typ != "OK":
+        raise ValueError("Cannot open Drafts for cleanup")
+    typ, _ = client.uid("store", str(uid), "+FLAGS.SILENT", "(\\Deleted)")
+    if typ != "OK":
+        raise ValueError("Cannot flag the leftover draft for deletion")
+    typ, _ = client.uid("expunge", str(uid))
+    if typ != "OK":
+        raise ValueError("Cannot expunge the leftover draft")
+
+
 def inspect_message(client, folder, expected):
     typ, _ = client.select(_quoted_mailbox(folder), readonly=True)
     if typ != "OK":
@@ -304,7 +510,8 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
                     "body_text": msg.get_body(preferencelist=("plain",)).get_content(),
                     "body_html": msg.get_body(preferencelist=("html",)).get_content()}
         client = connect_imap(account, timeout_sec=20)
-        client.login(account.imap.username, keychain_get_secret(account.imap.credential_ref))
+        client.login(account.imap.username, keychain_get_secret(
+            account.imap.credential_ref, fallback_keychain=account.imap.fallback_keychain))
         folder = row["folder"] or resolve_drafts(client)
         found = inspect_message(client, folder, raw)
         if found:

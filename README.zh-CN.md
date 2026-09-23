@@ -101,6 +101,13 @@ codex plugin add opl-relay@opl-relay --json
 
 安装后请新建一个 Codex 任务，让新任务加载刚安装的插件快照。
 
+## 在 OpenClaw 中使用
+
+同一份插件载体也包含 [OpenClaw 邮件接入说明](plugins/opl-relay/openclaw/SKILL.md)。
+在 OpenClaw 的本机 Skill 中指定已安装 Relay 载体里的可执行文件和当前数字分身工作空间。
+OpenClaw 负责微信等对话入口；邮件库、处理进度和草稿操作仍由 Relay 统一维护。
+日常使用不需要依赖源码仓库，也不需要另装一套 IMAP 插件。
+
 > **分发边界：** 上述命令由 Codex 直接从 GitHub 安装插件。OPL App 使用下文说明的
 > GHCR 能力包通道；两条路径交付同一套 Relay 载体，但安装、更新和状态权威彼此独立。
 

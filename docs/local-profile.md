@@ -19,7 +19,16 @@ the selected workspace's `data/relay` directory.
 
 Credentials remain in macOS Keychain service `codex-mail-workbench`. The service
 name is a local credential contract; it is never exported to Git or the Profile
-Workspace.
+Workspace. Relay reads the login keychain first. An account may opt in to a
+second copy in `/Library/Keychains/System.keychain` by setting
+`fallback_keychain = "/Library/Keychains/System.keychain"` in its `[accounts.imap]`
+section. Relay uses that copy only when the login-keychain read fails, and sync
+reports `credential_source = "system_fallback"`. Provision the same service,
+account reference and secret in the System keychain, restrict its trusted reader
+to `/usr/bin/security`, and verify a normal-user read before enabling fallback.
+On password rotation, update and read back both copies before resuming sync.
+This fallback does not bypass IMAP authentication or make a locked System
+keychain readable; a failed read of both sources still stops the operation.
 
 ## Workspace
 

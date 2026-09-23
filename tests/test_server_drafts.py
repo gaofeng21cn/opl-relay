@@ -1,6 +1,8 @@
+import itertools
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
+from email.utils import formatdate
 from types import SimpleNamespace
 
 import pytest
@@ -137,9 +139,10 @@ class FakeImap:
 def service(tmp_path, monkeypatch):
     client = FakeImap()
     monkeypatch.setattr(sd, "load_accounts_config", lambda p: {"work": SimpleNamespace(
-        email="owner@example.test", imap=SimpleNamespace(username="owner", credential_ref="secret-ref"))})
+        email="owner@example.test", imap=SimpleNamespace(username="owner", credential_ref="secret-ref",
+                                                            fallback_keychain=None))})
     monkeypatch.setattr(sd, "connect_imap", lambda *a, **k: client)
-    monkeypatch.setattr(sd, "keychain_get_secret", lambda ref: "secret")
+    monkeypatch.setattr(sd, "keychain_get_secret", lambda ref, **kwargs: "secret")
     kwargs = dict(config_path=tmp_path / "accounts.toml", db_path=tmp_path / "mail.sqlite",
                   ledger_path=tmp_path / "drafts.sqlite", account_id="work", request_id="one",
                   to=["member@example.test"], subject="Test", body="Hello\n\nApproved content", signature=SIGNATURE)
@@ -199,3 +202,189 @@ def test_ambiguous_drafts_folder_not_guessed(service):
     with pytest.raises(ValueError, match="ambiguous"):
         sd.server_draft(**kwargs, apply=True)
     assert client.appends == 0
+
+
+_SENT_SEQUENCE = itertools.count(1)
+
+
+def sent_message(*, to="Coordinator <coord@example.test>, Person <person@example.test>",
+                 cc="Member <member@example.test>",
+                 subject="Re: 会議の旅程 / Conference",
+                 parent="<latest@example.test>", date=None):
+    msg = EmailMessage()
+    msg["From"] = "owner@example.test"
+    msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    msg["Subject"] = subject
+    msg["Message-ID"] = f"<sent-{next(_SENT_SEQUENCE)}@mail.example.test>"
+    msg["Date"] = date or formatdate(localtime=True)
+    if parent:
+        msg["In-Reply-To"] = parent
+    msg.set_content("Approved content\n\n" + SIGNATURE)
+    return msg.as_bytes()
+
+
+class ReconcilerImap:
+    """Drafts plus a Sent folder, with UIDPLUS deletion for the leftover drafts."""
+
+    def __init__(self, drafts=(), sent=(), uidplus=True):
+        self.drafts = list(drafts)
+        self.sent = list(sent)
+        self.mutations = []
+        self.uidplus = uidplus
+        self.selected = None
+
+    def login(self, *args):
+        return "OK", []
+
+    def logout(self):
+        pass
+
+    def capability(self):
+        return "OK", [b"IMAP4rev1 UIDPLUS" if self.uidplus else b"IMAP4rev1"]
+
+    def list(self):
+        return "OK", [b'(\\Drafts) "/" "Drafts"', b'(\\Sent) "/" "Sent Items"']
+
+    def select(self, folder, readonly):
+        self.selected = folder
+        return "OK", []
+
+    def uid(self, command, *args):
+        if command == "search":
+            folder = self.drafts if self.selected == '"Drafts"' else self.sent
+            if args[0] == "HEADER":
+                wanted = args[2].strip('"')
+                hits = [str(i) for i, item in enumerate(folder, 1)
+                        if BytesParser(policy=policy.default).parsebytes(item)["Message-ID"] == wanted]
+            else:
+                hits = [str(i) for i in range(1, len(folder) + 1)]
+            return "OK", [" ".join(hits).encode()]
+        if command == "fetch":
+            folder = self.drafts if self.selected == '"Drafts"' else self.sent
+            index = int(args[0]) - 1
+            item = folder[index]
+            flags = b"\\Draft" if self.selected == '"Drafts"' else b"\\Seen"
+            return "OK", [(b"1 (UID " + str(index + 1).encode() + b" FLAGS (" + flags + b") BODY[])", item)]
+        if command == "store":
+            self.mutations.append(("store", args[0]))
+            return "OK", []
+        if command == "expunge":
+            assert self.selected == '"Drafts"', "expunge must be scoped to Drafts"
+            self.mutations.append(("expunge", args[0]))
+            del self.drafts[int(args[0]) - 1]
+            return "OK", []
+        raise AssertionError("Unexpected command: " + command)
+
+
+@pytest.fixture
+def reconciler(tmp_path, monkeypatch):
+    def install(client):
+        monkeypatch.setattr(sd, "load_accounts_config", lambda p: {"work": SimpleNamespace(
+            email="owner@example.test",
+            imap=SimpleNamespace(username="owner", credential_ref="secret-ref", fallback_keychain=None))})
+        monkeypatch.setattr(sd, "connect_imap", lambda *a, **k: client)
+        monkeypatch.setattr(sd, "keychain_get_secret", lambda ref, **kwargs: "secret")
+        kwargs = dict(config_path=tmp_path / "accounts.toml",
+                      ledger_path=tmp_path / "drafts.sqlite", account_id="work")
+        return kwargs
+    return install
+
+
+def seed_verified_draft(tmp_path, *, reply=True, request_id="one"):
+    """Record one ledger-owned draft, built by the production message builder."""
+    raw = (build(  # noqa: E501 - a threaded reply to the shared fixture source
+        sender="owner@example.test", self_addresses=["owner@example.test", "alias@example.test"]
+    ) if reply else sd.build_message(
+        sender="owner@example.test", self_addresses=["owner@example.test"],
+        body="Approved content", signature=SIGNATURE,
+        to=["person@example.test"], subject="Direct note"))
+    conn = sd._ledger(tmp_path / "drafts.sqlite")
+    conn.execute("INSERT INTO server_draft_requests VALUES (?,?,?,?,?,?)",
+                 (request_id, "work", "digest-" + request_id, raw, "verified", "Drafts"))
+    conn.commit()
+    conn.close()
+    return raw
+
+
+def test_reconcile_removes_draft_already_carried_by_a_sent_reply(tmp_path, monkeypatch, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    client = ReconcilerImap(drafts=[draft], sent=[sent_message()])
+    result = sd.reconcile_server_drafts(**reconciler(client))
+    assert result["candidates"] == 1 and result["cleaned"] == 0
+    assert result["drafts"][0]["action"] == "candidate"
+    assert client.mutations == []  # preview never mutates
+
+    result = sd.reconcile_server_drafts(**reconciler(client), apply=True)
+    assert result["cleaned"] == 1 and result["drafts"][0]["action"] == "cleaned"
+    assert client.drafts == [] and ("expunge", "1") in client.mutations
+
+
+def test_reconcile_keeps_a_pending_draft(tmp_path, monkeypatch, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    other = sent_message(to="Someone <other@example.test>")
+    client = ReconcilerImap(drafts=[draft], sent=[other])
+    result = sd.reconcile_server_drafts(**reconciler(client), apply=True)
+    assert result["candidates"] == 0 and client.drafts == [draft]
+    assert result["drafts"][0]["reason"] == "no matching sent message"
+
+
+def test_reconcile_requires_same_reply_target_not_only_subject(tmp_path, monkeypatch, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    same_subject = sent_message(parent="<a-different-parent@example.test>")
+    client = ReconcilerImap(drafts=[draft], sent=[same_subject])
+    result = sd.reconcile_server_drafts(**reconciler(client), apply=True)
+    assert result["candidates"] == 0 and client.drafts == [draft]
+
+
+def test_reconcile_requires_same_subject_even_with_same_reply_target(tmp_path, monkeypatch, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    different_subject = sent_message(subject="Re: An unrelated question")
+    client = ReconcilerImap(drafts=[draft], sent=[different_subject])
+    result = sd.reconcile_server_drafts(**reconciler(client), apply=True)
+    assert result["candidates"] == 0 and client.drafts == [draft]
+
+
+def test_reconcile_preserves_a_draft_edited_on_another_client(tmp_path, monkeypatch, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    edited = BytesParser(policy=policy.default).parsebytes(draft)
+    edited.get_body(preferencelist=("plain",)).set_content(
+        "A different reply that the user is still editing.")
+    client = ReconcilerImap(drafts=[edited.as_bytes()], sent=[sent_message()])
+    result = sd.reconcile_server_drafts(**reconciler(client), apply=True)
+    assert result["candidates"] == 0 and client.drafts == [edited.as_bytes()]
+    assert result["drafts"][0]["user_edited"] is True
+
+
+def test_reconcile_ignores_a_sent_copy_older_than_the_draft(tmp_path, monkeypatch, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    older = sent_message(date="Mon, 01 Jan 2024 09:00:00 +0800")
+    client = ReconcilerImap(drafts=[draft], sent=[older])
+    assert sd.reconcile_server_drafts(**reconciler(client), apply=True)["candidates"] == 0
+
+
+def test_reconcile_reports_absent_draft_without_mutating(tmp_path, monkeypatch, reconciler):
+    seed_verified_draft(tmp_path)
+    client = ReconcilerImap(drafts=[], sent=[sent_message()])
+    result = sd.reconcile_server_drafts(**reconciler(client), apply=True)
+    assert result["drafts"][0]["action"] == "absent" and client.mutations == []
+
+
+def test_reconcile_refuses_unscoped_expunge_without_uidplus(tmp_path, monkeypatch, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    client = ReconcilerImap(drafts=[draft], sent=[sent_message()], uidplus=False)
+    with pytest.raises(ValueError, match="UIDPLUS"):
+        sd.reconcile_server_drafts(**reconciler(client), apply=True)
+    assert client.drafts == [draft] and client.mutations == []
+
+
+def test_reconcile_with_no_verified_drafts_does_not_connect(tmp_path, monkeypatch, reconciler):
+    client = ReconcilerImap(drafts=[], sent=[])
+    monkeypatch.setattr(sd, "connect_imap", lambda *a, **k: pytest.fail("unexpected connection"))
+    monkeypatch.setattr(sd, "load_accounts_config", lambda p: {"work": SimpleNamespace(
+        email="owner@example.test",
+        imap=SimpleNamespace(username="owner", credential_ref="secret-ref", fallback_keychain=None))})
+    result = sd.reconcile_server_drafts(config_path=tmp_path / "accounts.toml",
+                                        ledger_path=tmp_path / "drafts.sqlite", account_id="work", apply=True)
+    assert result["checked"] == 0

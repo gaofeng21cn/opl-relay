@@ -15,6 +15,7 @@ from .config import (
     add_account,
     keychain_get_secret,
     keychain_has_secret,
+    keychain_read_secret,
     keychain_set_secret,
     load_account,
     load_accounts_config,
@@ -738,7 +739,8 @@ def cmd_credential_set(args: argparse.Namespace) -> int:
 
 def cmd_account_check(args: argparse.Namespace) -> int:
     account = load_account(Path(args.config).expanduser(), args.account)
-    configured = keychain_has_secret(account.imap.credential_ref)
+    configured = keychain_has_secret(account.imap.credential_ref,
+                                      fallback_keychain=account.imap.fallback_keychain)
     payload: dict[str, object] = {
         "ok": True,
         "account": account.account_id,
@@ -757,9 +759,11 @@ def cmd_account_check(args: argparse.Namespace) -> int:
         else:
             client = None
             try:
-                secret = keychain_get_secret(account.imap.credential_ref)
+                credential = keychain_read_secret(account.imap.credential_ref,
+                    fallback_keychain=account.imap.fallback_keychain)
+                payload["credential_source"] = credential.source
                 client = connect_imap(account)
-                typ, _ = client.login(account.imap.username, secret)
+                typ, _ = client.login(account.imap.username, credential.value)
                 payload["connection"] = {
                     "status": "healthy" if typ == "OK" else "unavailable",
                     "server_response": typ,
@@ -1274,6 +1278,19 @@ def cmd_server_draft(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_draft_server_reconcile(args: argparse.Namespace) -> int:
+    from .server_drafts import reconcile_server_drafts
+
+    payload = reconcile_server_drafts(
+        config_path=Path(args.config).expanduser(),
+        ledger_path=Path(args.draft_db).expanduser(),
+        account_id=args.account,
+        apply=args.apply,
+    )
+    emit({"ok": True, "reconcile": payload}, as_json=args.json)
+    return 0
+
+
 def cmd_draft_create(args: argparse.Namespace) -> int:
     account = load_account(Path(args.config).expanduser(), args.account)
     attachments = [Path(value).expanduser() for value in args.attach]
@@ -1669,6 +1686,13 @@ def build_parser() -> argparse.ArgumentParser:
                 command.add_argument("--cc", action="append", default=[])
                 command.add_argument("--subject", required=True)
         command.set_defaults(func=cmd_server_draft)
+
+    reconcile = draft_actions.add_parser(
+        "server-reconcile",
+        help="对账 Drafts 与 Sent，清除已由已发件取代的残留服务器草稿")
+    reconcile.add_argument("--account", required=True)
+    reconcile.add_argument("--apply", action="store_true", help="执行删除；默认只做只读预览")
+    reconcile.set_defaults(func=cmd_draft_server_reconcile)
 
     draft_create = draft_actions.add_parser("create", help="创建并保存 Apple Mail 草稿")
     draft_create.add_argument("--account", required=True)

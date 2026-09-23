@@ -42,7 +42,9 @@ opl-relay --json account check --account work --connect
 
 `account add` writes only IMAP metadata. `credential set` reads a password
 interactively (or from stdin with `--secret-stdin`) and stores it in macOS
-Keychain; never put a password in a prompt, JSON input, command argument, or
+login Keychain. An optional account-level System-keychain fallback is documented
+in [the local profile guide](../../../../docs/local-profile.md); credential
+rotation must update both copies. Never put a password in a prompt, JSON input, command argument, or
 Profile Workspace file. The optional `--connect` check is the first network
 operation. When it succeeds, use `sync` and inspect the local evidence.
 
@@ -206,6 +208,18 @@ turn Markdown formatting into literal email syntax. Preserve user edits and
 attachments: this route does not overwrite or delete existing mobile drafts.
 Only `server_verified=true` with `state=draft` proves server delivery. Reuse the
 same request ID to reconcile an unknown result; do not blindly recreate it.
+
+Once the user reports sending a review draft, run
+`draft server-reconcile --account <id>` and read the per-draft actions. It is a
+read-only preview that removes nothing. Pass `--apply` to delete the drafts a
+sent reply already covers, which is the normal outcome after the user sends from
+a client that does not consume the stored draft. A `keep` result means the
+evidence was weaker than an exact reply target, recipients, and subject, so the
+draft may still be pending; never widen the match by hand. An `absent` result
+means the server copy is already gone. This route never sends, never edits the
+Sent copy, and refuses to act without UIDPLUS. If the user's desktop mail client
+still lists a reconciled draft, that is a local client cache: remove it through
+the Mail.app route instead of writing IMAP again.
 
 `draft create` and `draft reply-all` may create and open an Apple Mail draft.
 They do not authorize sending. Let the user review the draft in Apple Mail, run

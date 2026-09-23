@@ -99,6 +99,38 @@ content must match before `server_verified=true` is returned. `server-inspect`
 performs this readback without creating another draft. A saved server draft does
 not prove that a particular phone has completed synchronization or rendered it.
 
+### Leftover draft reconciliation
+
+Mail clients commonly send a review draft as a new message and leave the stored
+draft behind. The server keeps the draft, and a client that already downloaded
+it keeps a local copy, so the same text can be sent twice by accident.
+`draft server-reconcile` compares this account's verified drafts against its Sent
+folder and removes the ones a sent reply already covers:
+
+```bash
+opl-relay --json draft server-reconcile --account <account-id>          # preview
+opl-relay --json draft server-reconcile --account <account-id> --apply  # remove
+```
+
+Only ledger-owned rows in state `verified` are considered, so a draft this
+engine did not create is never touched. A draft becomes a candidate only when a
+sent message shares its reply target (`In-Reply-To`), its complete To/Cc address
+set, and its subject, and is not older than the draft. A weaker signal leaves the
+draft alone. A server draft whose contents differ from Relay's verified copy is
+always kept, preserving edits made in another mail client. The same subject with a
+different reply target, a different recipient set, or an earlier sent copy is
+reported as `keep`. An already-deleted or otherwise absent draft is reported as
+`absent` without a write.
+
+Removal requires UIDPLUS; without it the command fails closed rather than
+issuing an unscoped EXPUNGE. The draft is flagged `\Deleted` and removed with a
+UID-scoped EXPUNGE, then the Message-ID is searched again; a removal that cannot
+be confirmed is an error, not a success. Applied rows move to state `cleaned`, so
+a later `server_draft` call with the same request ID still refuses to recreate
+the draft. The Sent copy is never modified, and the Apple Mail local copy is a
+client cache: after the server draft is gone, remove any remaining local copy
+through the Mail.app route rather than by writing IMAP again.
+
 ## Stable References
 
 Mail and memory use stable references rather than direct SQLite facts:

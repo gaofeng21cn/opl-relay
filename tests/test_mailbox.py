@@ -131,7 +131,7 @@ class FakeImap:
 
 def configure_mailbox(monkeypatch, fake: FakeImap) -> None:
     monkeypatch.setattr(mailbox_module, "load_account", lambda path, account_id: account())
-    monkeypatch.setattr(mailbox_module, "keychain_get_secret", lambda ref: "secret")
+    monkeypatch.setattr(mailbox_module, "keychain_get_secret", lambda ref, **kwargs: "secret")
     monkeypatch.setattr(mailbox_module, "connect_imap", lambda loaded: fake)
 
 

@@ -3,7 +3,7 @@
   "package_id": "opl-relay",
   "display_name": "OPL Relay",
   "publisher": "one-person-lab",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "source": "first_party",
   "package_role": "capability_package",
   "source_repo": "https://github.com/gaofeng21cn/opl-relay",
@@ -34,6 +34,7 @@
       ".codex-plugin/plugin.json",
       "assets/icon.png",
       "bin/opl-relay",
+      "openclaw/SKILL.md",
       "plugin.json",
       "runtime/codex_mail_workbench/__init__.py",
       "runtime/codex_mail_workbench/apple_mail.py",
@@ -55,7 +56,7 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:2f8ffa170d7e809e14713f2e790967650c7a75682383e0f7f370768bbe26078f"
+    "digest": "sha256:2882bac61901bcbb0ad0c0c18a8b662a4a67f3067e1ec18d50c252708e862d4d"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

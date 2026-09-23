@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import os
+import pty
+import select
+import signal
 import subprocess
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +13,8 @@ from typing import Any
 
 
 KEYCHAIN_SERVICE = "codex-mail-workbench"
+LOGIN_KEYCHAIN = str(Path.home() / "Library/Keychains/login.keychain-db")
+SYSTEM_KEYCHAIN = "/Library/Keychains/System.keychain"
 
 
 @dataclass(frozen=True)
@@ -17,6 +24,13 @@ class MailEndpoint:
     security: str
     username: str
     credential_ref: str
+    fallback_keychain: str | None = None
+
+
+@dataclass(frozen=True)
+class CredentialSecret:
+    value: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -65,12 +79,16 @@ def _string_list(value: Any, field: str, default: list[str]) -> list[str]:
 
 
 def _endpoint(raw: dict[str, Any], field: str) -> MailEndpoint:
+    fallback = raw.get("fallback_keychain")
+    if fallback is not None and fallback != SYSTEM_KEYCHAIN:
+        raise ValueError(f"{field}.fallback_keychain 必须是系统钥匙串路径")
     return MailEndpoint(
         host=_str(raw.get("host"), f"{field}.host"),
         port=_int(raw.get("port"), f"{field}.port"),
         security=_str(raw.get("security"), f"{field}.security").lower(),
         username=_str(raw.get("username"), f"{field}.username"),
         credential_ref=_str(raw.get("credential_ref"), f"{field}.credential_ref"),
+        fallback_keychain=fallback,
     )
 
 
@@ -158,6 +176,8 @@ def add_account(
                 f"security = {_toml_string(item.imap.security)}",
                 f"username = {_toml_string(item.imap.username)}",
                 f"credential_ref = {_toml_string(item.imap.credential_ref)}",
+                *([f"fallback_keychain = {_toml_string(item.imap.fallback_keychain)}"]
+                  if item.imap.fallback_keychain else []),
                 "",
                 "[accounts.folders]",
                 "include = [" + ", ".join(_toml_string(value) for value in item.include_folders) + "]",
@@ -173,11 +193,32 @@ def keychain_get_secret(
     credential_ref: str,
     *,
     service: str = KEYCHAIN_SERVICE,
+    fallback_keychain: str | None = None,
 ) -> str:
-    cmd = ["security", "find-generic-password", "-s", service, "-a", credential_ref, "-w"]
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if result.returncode == 0:
-        return result.stdout.strip()
+    return keychain_read_secret(credential_ref, service=service,
+                                fallback_keychain=fallback_keychain).value
+
+
+def keychain_read_secret(
+    credential_ref: str,
+    *,
+    service: str = KEYCHAIN_SERVICE,
+    fallback_keychain: str | None = None,
+) -> CredentialSecret:
+    if fallback_keychain is not None and fallback_keychain != SYSTEM_KEYCHAIN:
+        raise ValueError("不支持的后备钥匙串路径")
+    cmd = ["/usr/bin/security", "find-generic-password", "-s", service,
+           "-a", credential_ref, "-w"]
+    for path, source in ((LOGIN_KEYCHAIN, "login"), (fallback_keychain, "system_fallback")):
+        if source == "system_fallback" and path is None:
+            continue
+        try:
+            result = subprocess.run([*cmd, path], check=False,
+                                    capture_output=True, text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            continue
+        if result.returncode == 0 and result.stdout.rstrip("\r\n"):
+            return CredentialSecret(result.stdout.rstrip("\r\n"), source)
     raise RuntimeError(f"Keychain 读取失败: account={credential_ref}")
 
 
@@ -185,16 +226,16 @@ def keychain_has_secret(
     credential_ref: str,
     *,
     service: str = KEYCHAIN_SERVICE,
+    fallback_keychain: str | None = None,
 ) -> bool:
     """Check presence without reading or printing the secret."""
 
-    result = subprocess.run(
-        ["security", "find-generic-password", "-s", service, "-a", credential_ref],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
+    try:
+        keychain_read_secret(credential_ref, service=service,
+                             fallback_keychain=fallback_keychain)
+        return True
+    except RuntimeError:
+        return False
 
 
 def keychain_set_secret(
@@ -203,25 +244,39 @@ def keychain_set_secret(
     *,
     service: str = KEYCHAIN_SERVICE,
 ) -> None:
-    """Store a secret through stdin so it never appears in process arguments."""
+    """Store a secret through security's private TTY prompts, then verify it."""
 
     if not isinstance(secret, str) or not secret:
         raise ValueError("credential secret must not be empty")
-    result = subprocess.run(
-        [
-            "security",
-            "add-generic-password",
-            "-U",
-            "-s",
-            service,
-            "-a",
-            _str(credential_ref, "credential_ref"),
-            "-w",
-        ],
-        input=secret + "\n",
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
+    command = ["/usr/bin/security", "add-generic-password", "-U", "-s", service,
+               "-a", _str(credential_ref, "credential_ref"), "-T", "/usr/bin/security", "-w"]
+    pid, master = pty.fork()
+    if pid == 0:
+        os.execv(command[0], command)
+    prompts = (b"password data for new item:", b"retype password for new item:")
+    seen = bytearray()
+    sent = 0
+    status = None
+    deadline = time.monotonic() + 15
+    try:
+        while time.monotonic() < deadline:
+            finished, child_status = os.waitpid(pid, os.WNOHANG)
+            if finished:
+                status = os.waitstatus_to_exitcode(child_status)
+                break
+            if select.select([master], [], [], 0.1)[0]:
+                try:
+                    seen.extend(os.read(master, 4096))
+                except OSError:
+                    pass
+                if sent < len(prompts) and prompts[sent] in seen:
+                    os.write(master, secret.encode("utf-8") + b"\n")
+                    sent += 1
+                    seen.clear()
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+    finally:
+        os.close(master)
+    if status != 0 or sent != 2 or keychain_get_secret(credential_ref, service=service) != secret:
         raise RuntimeError(f"Keychain 写入失败: account={credential_ref}")

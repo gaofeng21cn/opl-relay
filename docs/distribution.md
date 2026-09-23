@@ -18,6 +18,7 @@ substitute for another.
 | Source code | `https://github.com/gaofeng21cn/opl-relay` | Public Git repository |
 | Codex Marketplace | Repository `.agents/plugins/marketplace.json` | Usable from a local clone or as a Git-backed Marketplace |
 | Codex Plugin | `plugins/opl-relay` | Installable carrier containing Skill, metadata, and runtime |
+| OpenClaw adapter | `plugins/opl-relay/openclaw/SKILL.md` | Host instructions carried with the same versioned Plugin; no second mail engine |
 | Python engine | `plugins/opl-relay/runtime` | Carried by the Plugin; no source checkout required |
 | OPL Package descriptor | `plugins/opl-relay/opl-package.json` | Declares capability identity and App contributions |
 | OPL Package publication | Relay owner descriptor plus immutable GHCR payload | Publication comes from public immutable digest readback; it is separate from installed state |

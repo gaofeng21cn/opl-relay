@@ -108,6 +108,15 @@ codex plugin add opl-relay@opl-relay --json
 
 Start a new Codex task after installation so the new Plugin snapshot is loaded.
 
+## Use With OpenClaw
+
+The same installed Plugin carries an [OpenClaw mail adapter](plugins/opl-relay/openclaw/SKILL.md).
+Configure the local OpenClaw Skill with the absolute executable from the
+installed Relay carrier and the selected Profile Workspace. OpenClaw handles
+the conversation channel; Relay remains the only mailbox store, review ledger,
+and draft operator. A source checkout or a second IMAP plugin is not required
+for normal mail work.
+
 > **Distribution boundary:** this command installs the Codex Plugin directly
 > from GitHub. OPL App uses the separate GHCR Package channel described below;
 > both deliver the same public Relay carrier but have independent lifecycle

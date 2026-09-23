@@ -3,7 +3,7 @@ import json
 import pytest
 
 from codex_mail_workbench import sync
-from codex_mail_workbench.config import MailAccount, MailEndpoint
+from codex_mail_workbench.config import CredentialSecret, MailAccount, MailEndpoint
 from codex_mail_workbench.store import (
     connect_email_store, fetch_raw_email_by_storage_ref, list_messages,
     folder_status, get_message_by_storage_ref,
@@ -55,7 +55,7 @@ def environment(monkeypatch, tmp_path):
         include_folders=["INBOX"], exclude_folders=[])
     client = FakeImap()
     monkeypatch.setattr(sync, "load_account", lambda *a: account)
-    monkeypatch.setattr(sync, "keychain_get_secret", lambda *a: "fake")
+    monkeypatch.setattr(sync, "keychain_read_secret", lambda *a, **k: CredentialSecret("fake", "login"))
     monkeypatch.setattr(sync, "connect_imap", lambda *a: client)
     kwargs = dict(config_path=tmp_path / "accounts.toml", db_path=tmp_path / "mail.sqlite",
                   state_dir=tmp_path / "sync-state", account_id="work")

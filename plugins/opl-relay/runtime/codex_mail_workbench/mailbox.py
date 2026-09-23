@@ -412,7 +412,8 @@ def move_messages(
     conn = connect_email_store(db_path)
     client: imaplib.IMAP4 | None = None
     try:
-        secret = keychain_get_secret(account.imap.credential_ref)
+        secret = keychain_get_secret(account.imap.credential_ref,
+                                     fallback_keychain=account.imap.fallback_keychain)
         client = connect_imap(account)
         login_type, _ = client.login(account.imap.username, secret)
         if login_type != "OK":
