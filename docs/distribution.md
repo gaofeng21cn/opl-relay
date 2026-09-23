@@ -26,6 +26,8 @@ substitute for another.
 
 The public Git repository is the source and Codex Git Marketplace authority.
 OPL App installation and updates use the separate GHCR Package channel.
+The owner descriptor declares Codex-only Skill synchronization; workspace and
+quest Skill copies are not implicit.
 
 ## Codex Marketplace
 

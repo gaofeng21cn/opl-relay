@@ -1,6 +1,6 @@
 {
   "name": "opl-relay",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Local-first mail evidence, relationship context, and review-gated drafting for Codex.",
   "author": {
     "name": "OPL"

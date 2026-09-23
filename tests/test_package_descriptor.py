@@ -66,6 +66,11 @@ def test_package_identity_capabilities_and_plugin_version_are_aligned() -> None:
     assert set(project["project"]["scripts"]) == {"opl-relay"}
     assert set(package["exports"]["core_module_ids"]) == CAPABILITY_IDS
     assert package["exports"]["core_skill_ids"] == ["opl-relay"]
+    assert package["connect_skill_sync_policy"] == {
+        "default_scope": "codex",
+        "allowed_scopes": ["codex"],
+        "implicit_without_target": "require_target",
+    }
     assert package["codex_surface"]["plugin_id"] == plugin["name"] == "opl-relay"
     assert package["codex_surface"]["configured_codex_plugin_carrier"] == {
         "kind": "codex_plugin_manager",

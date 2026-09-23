@@ -3,7 +3,7 @@
   "package_id": "opl-relay",
   "display_name": "OPL Relay",
   "publisher": "one-person-lab",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "source": "first_party",
   "package_role": "capability_package",
   "source_repo": "https://github.com/gaofeng21cn/opl-relay",
@@ -12,6 +12,11 @@
     "id": "opl-relay.capabilities",
     "version": "1.0.0",
     "compatibility_policy": "same_major"
+  },
+  "connect_skill_sync_policy": {
+    "default_scope": "codex",
+    "allowed_scopes": ["codex"],
+    "implicit_without_target": "require_target"
   },
   "exports": {
     "core_skill_ids": [
@@ -56,7 +61,7 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:2882bac61901bcbb0ad0c0c18a8b662a4a67f3067e1ec18d50c252708e862d4d"
+    "digest": "sha256:12e93e86ac74c243a7d6effb19187509ac5c0f2a8bb7c30a2530a098128cb8a8"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
