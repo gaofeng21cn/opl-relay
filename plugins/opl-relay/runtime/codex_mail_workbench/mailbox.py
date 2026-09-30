@@ -129,6 +129,66 @@ def _resolve_destination(destination: str, mailboxes: list[ImapMailbox]) -> str:
     )
 
 
+def _find_all_mail(mailboxes: list[ImapMailbox]) -> ImapMailbox | None:
+    matches = [mailbox for mailbox in mailboxes if "\\all" in mailbox.flags]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _resolve_exact_folder(folder: str, mailboxes: list[ImapMailbox]) -> str:
+    target = folder.strip()
+    exact_matches = [mailbox for mailbox in mailboxes if mailbox.name == target]
+    matches = exact_matches or [
+        mailbox
+        for mailbox in mailboxes
+        if mailbox.name.casefold() == target.casefold()
+    ]
+    if len(matches) > 1:
+        raise MailboxMoveFailure("destination_ambiguous", f"检测到多个匹配的文件夹：{target}")
+    if not matches:
+        raise MailboxMoveFailure(
+            "destination_missing",
+            f"未找到现有文件夹：{target}（不创建新文件夹）",
+        )
+    if "\\noselect" in matches[0].flags:
+        raise MailboxMoveFailure("destination_not_selectable", f"目标文件夹不可选中：{target}")
+    return matches[0].name
+
+
+def _resolve_move_target(
+    *,
+    destination: str,
+    exact_folder: str,
+    mailboxes: list[ImapMailbox],
+    capabilities: set[str],
+) -> tuple[str, bool]:
+    # Gmail archive is a MOVE from Inbox to All Mail, preserving the existing
+    # All Mail copy while removing the Inbox membership.
+    if exact_folder:
+        return _resolve_exact_folder(exact_folder, mailboxes), False
+    all_mail = _find_all_mail(mailboxes) if "X-GM-EXT-1" in capabilities else None
+    if destination == "archive" and all_mail is not None:
+        if "\\noselect" in all_mail.flags:
+            raise MailboxMoveFailure("destination_not_selectable", "All Mail 文件夹不可选中")
+        return all_mail.name, True
+    try:
+        resolved_folder = _resolve_destination(destination, mailboxes)
+    except MailboxMoveFailure:
+        if destination == "archive" and all_mail is not None:
+            return all_mail.name, True
+        raise
+    resolved_mailbox = next(
+        (mailbox for mailbox in mailboxes if mailbox.name == resolved_folder), None
+    )
+    if destination == "archive" and resolved_mailbox is not None and "\\noselect" in resolved_mailbox.flags:
+        if all_mail is None:
+            raise MailboxMoveFailure(
+                "destination_not_selectable",
+                "Archive 文件夹不可选中，且未找到 All Mail 文件夹",
+            )
+        return all_mail.name, True
+    return resolved_folder, False
+
+
 def _capabilities(client: imaplib.IMAP4) -> set[str]:
     typ, values = client.capability()
     if typ != "OK":
@@ -233,6 +293,32 @@ def _preflight_message(
         raise MailboxMoveFailure(
             "destination_already_contains_message",
             "目标文件夹已存在相同邮件，拒绝产生重复副本",
+        )
+
+
+def _preflight_gmail_archive(
+    client: imaplib.IMAP4,
+    *,
+    message: dict[str, Any],
+    all_mail_folder: str,
+) -> None:
+    if not str(message["message_id"]):
+        raise MailboxMoveFailure(
+            "message_id_missing",
+            "本地邮件缺少 Message-ID，无法验证目标副本",
+        )
+    if str(message["folder"]).casefold() != "inbox":
+        raise MailboxMoveFailure("source_not_inbox", "Gmail 归档只接受收件箱中的邮件")
+    _remote_source_matches(client, message)
+    if _destination_uid_with_hash(
+        client,
+        destination_folder=all_mail_folder,
+        message_id=str(message["message_id"]),
+        raw_sha256=str(message["raw_sha256"]),
+    ) is None:
+        raise MailboxMoveFailure(
+            "all_mail_copy_missing",
+            "All Mail 中未找到同一原文，拒绝移除 Inbox 标签",
         )
 
 
@@ -401,8 +487,13 @@ def move_messages(
     destination: str,
     storage_refs: list[str],
     apply: bool,
+    exact_folder: str = "",
 ) -> dict[str, object]:
-    if destination not in {"archive", "trash", "bill"}:
+    if destination and exact_folder:
+        raise ValueError("use either destination or exact_folder, not both")
+    if not destination and not exact_folder:
+        raise ValueError("destination or exact_folder is required")
+    if destination and destination not in {"archive", "trash", "bill"}:
         raise ValueError("destination must be archive, trash, or bill")
     unique_refs = list(dict.fromkeys(ref.strip() for ref in storage_refs if ref.strip()))
     if not unique_refs:
@@ -418,9 +509,22 @@ def move_messages(
         login_type, _ = client.login(account.imap.username, secret)
         if login_type != "OK":
             raise MailboxMoveFailure("login_rejected", "IMAP 登录被拒绝")
-        destination_folder = _resolve_destination(destination, _list_mailboxes(client))
         capabilities = _capabilities(client)
-        if "MOVE" in capabilities:
+        mailboxes = _list_mailboxes(client)
+        destination_folder, gmail_archive = _resolve_move_target(
+            destination=destination,
+            exact_folder=exact_folder,
+            mailboxes=mailboxes,
+            capabilities=capabilities,
+        )
+        if gmail_archive:
+            if "MOVE" not in capabilities:
+                raise MailboxMoveFailure(
+                    "move_unsupported",
+                    "Gmail 未提供 UID MOVE，拒绝使用未验证的标签修改代替归档",
+                )
+            move_method = "uid_move_to_all_mail"
+        elif "MOVE" in capabilities:
             move_method = "uid_move"
         elif "UIDPLUS" in capabilities:
             move_method = "uid_copy_uid_expunge"
@@ -436,11 +540,18 @@ def move_messages(
             message: dict[str, Any] | None = None
             try:
                 message = _message_from_local_store(conn, storage_ref, account_id)
-                _preflight_message(
-                    client,
-                    message=message,
-                    destination_folder=destination_folder,
-                )
+                if gmail_archive:
+                    _preflight_gmail_archive(
+                        client,
+                        message=message,
+                        all_mail_folder=destination_folder,
+                    )
+                else:
+                    _preflight_message(
+                        client,
+                        message=message,
+                        destination_folder=destination_folder,
+                    )
                 receipt = _receipt(message, storage_ref)
                 receipt.update(
                     {
@@ -460,7 +571,7 @@ def move_messages(
                 "phase": "preflight",
                 "apply": apply,
                 "account": account_id,
-                "destination": destination,
+                "destination": destination or exact_folder,
                 "destination_folder": destination_folder,
                 "requested": len(unique_refs),
                 "ready": len(prepared),
@@ -478,7 +589,7 @@ def move_messages(
                 "phase": "preflight",
                 "apply": False,
                 "account": account_id,
-                "destination": destination,
+                "destination": destination or exact_folder,
                 "destination_folder": destination_folder,
                 "requested": len(unique_refs),
                 "ready": len(prepared),
@@ -490,29 +601,42 @@ def move_messages(
         for message, receipt in prepared:
             try:
                 _remote_source_matches(client, message)
-                existing_target = _destination_uid_with_hash(
-                    client,
-                    destination_folder=destination_folder,
-                    message_id=str(message["message_id"]),
-                    raw_sha256=str(message["raw_sha256"]),
-                )
-                if existing_target is not None:
-                    raise MailboxMoveFailure(
-                        "destination_already_contains_message",
-                        "执行前目标文件夹已出现相同邮件，停止批次",
+                if gmail_archive:
+                    _preflight_gmail_archive(
+                        client,
+                        message=message,
+                        all_mail_folder=destination_folder,
                     )
-                if move_method == "uid_move":
-                    method = _move_with_uid_move(
+                    _move_with_uid_move(
                         client,
                         message=message,
                         destination_folder=destination_folder,
                     )
+                    method = "uid_move_to_all_mail"
                 else:
-                    method = _move_with_uidplus_fallback(
+                    existing_target = _destination_uid_with_hash(
                         client,
-                        message=message,
                         destination_folder=destination_folder,
+                        message_id=str(message["message_id"]),
+                        raw_sha256=str(message["raw_sha256"]),
                     )
+                    if existing_target is not None:
+                        raise MailboxMoveFailure(
+                            "destination_already_contains_message",
+                            "执行前目标文件夹已出现相同邮件，停止批次",
+                        )
+                    if move_method == "uid_move":
+                        method = _move_with_uid_move(
+                            client,
+                            message=message,
+                            destination_folder=destination_folder,
+                        )
+                    else:
+                        method = _move_with_uidplus_fallback(
+                            client,
+                            message=message,
+                            destination_folder=destination_folder,
+                        )
                 occurred_at = now_iso()
                 operation_ref = record_mailbox_move(
                     conn,
@@ -541,7 +665,7 @@ def move_messages(
                     "phase": "execute",
                     "apply": True,
                     "account": account_id,
-                    "destination": destination,
+                    "destination": destination or exact_folder,
                     "destination_folder": destination_folder,
                     "requested": len(unique_refs),
                     "ready": len(prepared),
@@ -568,7 +692,7 @@ def move_messages(
                     "phase": "execute",
                     "apply": True,
                     "account": account_id,
-                    "destination": destination,
+                    "destination": destination or exact_folder,
                     "destination_folder": destination_folder,
                     "requested": len(unique_refs),
                     "ready": len(prepared),
@@ -584,7 +708,7 @@ def move_messages(
             "phase": "complete",
             "apply": True,
             "account": account_id,
-            "destination": destination,
+            "destination": destination or exact_folder,
             "destination_folder": destination_folder,
             "requested": len(unique_refs),
             "ready": len(prepared),

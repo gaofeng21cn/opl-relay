@@ -238,3 +238,213 @@ def test_move_preflight_hash_mismatch_performs_no_remote_write(monkeypatch, tmp_
     assert result["moved"] == 0
     assert fake.move_called is False
     assert result["messages"][0]["error"]["code"] == "source_hash_mismatch"
+
+
+class FakeGmailImap(FakeImap):
+    def __init__(self) -> None:
+        super().__init__(capabilities=b"IMAP4rev1 UIDPLUS MOVE X-GM-EXT-1")
+        self.mailboxes = {
+            "INBOX": {7: RAW_MESSAGE},
+            "[Gmail]/All Mail": {101: RAW_MESSAGE},
+        }
+
+    def list(self):
+        return "OK", [
+            b'(\\HasNoChildren) "/" "INBOX"',
+            b'(\\Noselect \\HasChildren) "/" "Archive"',
+            b'(\\All \\HasNoChildren) "/" "[Gmail]/All Mail"',
+        ]
+
+
+class FakeFolderImap(FakeImap):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mailboxes["Bill Finance"] = {}
+
+    def list(self):
+        return "OK", [
+            b'(\\HasNoChildren) "/" "INBOX"',
+            b'(\\HasNoChildren) "/" "Bill Finance"',
+        ]
+
+
+def test_resolve_move_target_gmail_noselect_archive_uses_all_mail() -> None:
+    mailboxes = [
+        mailbox_module.ImapMailbox(name="INBOX", flags=frozenset()),
+        mailbox_module.ImapMailbox(
+            name="Archive", flags=frozenset({"\\haschildren", "\\noselect"})
+        ),
+        mailbox_module.ImapMailbox(name="[Gmail]/All Mail", flags=frozenset({"\\all"})),
+    ]
+
+    target, gmail_archive = mailbox_module._resolve_move_target(
+        destination="archive",
+        exact_folder="",
+        mailboxes=mailboxes,
+        capabilities={"IMAP4REV1", "X-GM-EXT-1"},
+    )
+
+    assert target == "[Gmail]/All Mail"
+    assert gmail_archive is True
+
+
+def test_gmail_archive_ignores_selectable_custom_archive() -> None:
+    mailboxes = [
+        mailbox_module.ImapMailbox(name="Archive", flags=frozenset()),
+        mailbox_module.ImapMailbox(name="[Gmail]/All Mail", flags=frozenset({"\\all"})),
+    ]
+
+    target, gmail_archive = mailbox_module._resolve_move_target(
+        destination="archive",
+        exact_folder="",
+        mailboxes=mailboxes,
+        capabilities={"X-GM-EXT-1"},
+    )
+
+    assert target == "[Gmail]/All Mail"
+    assert gmail_archive is True
+
+
+def test_resolve_exact_folder_requires_existing_selectable_name() -> None:
+    mailboxes = [
+        mailbox_module.ImapMailbox(name="Bill Finance", flags=frozenset()),
+        mailbox_module.ImapMailbox(name="Archive", flags=frozenset({"\\noselect"})),
+    ]
+
+    assert mailbox_module._resolve_exact_folder("Bill Finance", mailboxes) == "Bill Finance"
+    with pytest.raises(mailbox_module.MailboxMoveFailure) as missing:
+        mailbox_module._resolve_exact_folder("Bill Orders", mailboxes)
+    assert missing.value.code == "destination_missing"
+    with pytest.raises(mailbox_module.MailboxMoveFailure) as unselectable:
+        mailbox_module._resolve_exact_folder("Archive", mailboxes)
+    assert unselectable.value.code == "destination_not_selectable"
+
+
+def test_gmail_archive_removes_inbox_label_and_records_receipt(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "mail.sqlite"
+    storage_ref = seed_message(db_path)
+    fake = FakeGmailImap()
+    configure_mailbox(monkeypatch, fake)
+
+    result = mailbox_module.move_messages(
+        config_path=tmp_path / "accounts.toml",
+        db_path=db_path,
+        account_id="work",
+        destination="archive",
+        storage_refs=[storage_ref],
+        apply=True,
+    )
+
+    assert result["ok"] is True
+    assert result["moved"] == 1
+    assert result["destination_folder"] == "[Gmail]/All Mail"
+    message_receipt = result["messages"][0]
+    assert message_receipt["status"] == "moved"
+    assert message_receipt["method"] == "uid_move_to_all_mail"
+    assert fake.mailboxes["INBOX"] == {}
+    assert 101 in fake.mailboxes["[Gmail]/All Mail"]
+    conn = connect_email_store(db_path)
+    try:
+        assert get_message_by_storage_ref(conn, storage_ref)["present"] is False
+        operation = conn.execute(
+            "SELECT destination_folder, method FROM mailbox_operations WHERE storage_ref=?",
+            (storage_ref,),
+        ).fetchone()
+        assert operation == ("[Gmail]/All Mail", "uid_move_to_all_mail")
+    finally:
+        conn.close()
+
+
+def test_gmail_archive_dry_run_never_touches_the_mailbox(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "mail.sqlite"
+    storage_ref = seed_message(db_path)
+    fake = FakeGmailImap()
+    configure_mailbox(monkeypatch, fake)
+
+    result = mailbox_module.move_messages(
+        config_path=tmp_path / "accounts.toml",
+        db_path=db_path,
+        account_id="work",
+        destination="archive",
+        storage_refs=[storage_ref],
+        apply=False,
+    )
+
+    assert result["ok"] is True
+    assert result["ready"] == 1
+    assert result["moved"] == 0
+    assert 7 in fake.mailboxes["INBOX"]
+
+
+def test_gmail_archive_requires_matching_all_mail_copy_before_write(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "mail.sqlite"
+    storage_ref = seed_message(db_path)
+    fake = FakeGmailImap()
+    fake.mailboxes["[Gmail]/All Mail"].clear()
+    configure_mailbox(monkeypatch, fake)
+
+    result = mailbox_module.move_messages(
+        config_path=tmp_path / "accounts.toml",
+        db_path=db_path,
+        account_id="work",
+        destination="archive",
+        storage_refs=[storage_ref],
+        apply=True,
+    )
+
+    assert result["ok"] is False
+    assert result["moved"] == 0
+    assert result["messages"][0]["error"]["code"] == "all_mail_copy_missing"
+    assert 7 in fake.mailboxes["INBOX"]
+
+
+def test_move_to_exact_existing_folder(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "mail.sqlite"
+    storage_ref = seed_message(db_path)
+    fake = FakeFolderImap()
+    configure_mailbox(monkeypatch, fake)
+
+    result = mailbox_module.move_messages(
+        config_path=tmp_path / "accounts.toml",
+        db_path=db_path,
+        account_id="work",
+        destination="",
+        exact_folder="Bill Finance",
+        storage_refs=[storage_ref],
+        apply=True,
+    )
+
+    assert result["ok"] is True
+    assert result["moved"] == 1
+    assert result["destination"] == "Bill Finance"
+    assert result["destination_folder"] == "Bill Finance"
+    assert fake.mailboxes["INBOX"] == {}
+    assert fake.mailboxes["Bill Finance"][101] == RAW_MESSAGE
+
+
+def test_move_requires_exactly_one_target(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "mail.sqlite"
+    storage_ref = seed_message(db_path)
+    fake = FakeImap()
+    configure_mailbox(monkeypatch, fake)
+
+    with pytest.raises(ValueError):
+        mailbox_module.move_messages(
+            config_path=tmp_path / "accounts.toml",
+            db_path=db_path,
+            account_id="work",
+            destination="archive",
+            exact_folder="Bill Finance",
+            storage_refs=[storage_ref],
+            apply=False,
+        )
+    with pytest.raises(ValueError):
+        mailbox_module.move_messages(
+            config_path=tmp_path / "accounts.toml",
+            db_path=db_path,
+            account_id="work",
+            destination="",
+            exact_folder="",
+            storage_refs=[storage_ref],
+            apply=False,
+        )

@@ -146,14 +146,17 @@ opl-relay --json mailbox move \
   --apply
 ```
 
-Relay resolves only an already advertised `Archive` or `Trash` folder. For
-each reference it re-fetches the source UID, compares the complete raw-message
-SHA-256 and `Message-ID`, verifies the destination copy and source absence,
-then records a local `mailbox-operation://` receipt. It prefers UID MOVE and
-uses UIDPLUS COPY plus UID EXPUNGE only as a bounded fallback; it never issues
-an unscoped EXPUNGE, creates folders, permanently deletes mail, or continues a
-batch after an uncertain result. Run a fresh account sync and readback after
-an applied batch.
+Relay resolves an existing Archive, Trash, or Bill folder, or an explicitly
+named existing folder via `--destination-folder`. For each reference it checks
+the source UID, complete raw-message SHA-256, and `Message-ID`, then verifies
+the target and source absence and records a `mailbox-operation://` receipt.
+Gmail archive uses UID MOVE from Inbox to the advertised All Mail folder after
+confirming the identical message is already there; `-X-GM-LABELS` is not a
+verified archive path. Other moves prefer UID MOVE and use UIDPLUS COPY plus
+UID EXPUNGE only as a bounded fallback. Never retry an unknown outcome before
+read-only reconciliation. Relay never issues an unscoped EXPUNGE, creates
+folders, permanently deletes mail, or continues after an uncertain result.
+Run a fresh account sync and readback after an applied batch.
 
 ## Apple Mail Local Screen
 

@@ -40,6 +40,18 @@ authorize a provider write. A historical message can be read after movement,
 but a mailbox action needs a freshly verified current reference and explicit
 approval of the exact action.
 
+## Approved Mailbox Moves
+
+Use `--json mailbox move --account <id> --destination archive --storage-ref
+<exact-ref>` for a live preflight, then add `--apply` for the approved batch.
+Gmail archive uses UID MOVE from Inbox to the advertised All Mail folder,
+verifying the raw message there before and after movement and Inbox absence.
+Do not substitute Bill or a guessed Archive folder, and do not use raw
+`-X-GM-LABELS` commands. On an uncertain outcome, reconcile source and target
+before another write. On a capability failure, report the exact blocked
+operation; a mailbox request does not authorize editing the Relay installation
+or spending the conversation turn repairing source code.
+
 ## Drafts For Phone Review
 
 For a continuing thread, use `draft server-reply-all` with the exact source

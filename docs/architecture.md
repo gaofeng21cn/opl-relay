@@ -328,6 +328,9 @@ Relay remains read-first. Local memory lifecycle and derived knowledge indexing
 are private local writes. Apple Mail drafts remain review-gated, and sending
 requires the current post-review fingerprint. A separately contracted
 `mailbox move` may move exact, freshly verified references to an existing
-Archive, Trash, or Bill folder under explicit `--apply`; the destination must
-already exist and is resolved by name, with no folder creation. Permanent
-delete and mark remain unavailable.
+Archive, Trash, Bill, or explicitly named folder under `--apply`; it never
+creates folders. Gmail archive uses UID MOVE from Inbox to its advertised All
+Mail after verifying an identical raw message there. A successful command
+response alone is insufficient: the target copy and source absence must be
+verified before recording the operation. Permanent delete and mark remain
+unavailable.

@@ -175,8 +175,8 @@ incomplete folders. See [architecture](docs/architecture.md#mail-membership-sear
 
 For an explicitly approved, reversible mailbox cleanup, first run the same
 command without `--apply` to perform a live preflight. Only exact current
-`email-store://` references may be moved, and only to an existing Archive or
-Trash folder:
+`email-store://` references may be moved to an existing Archive, Trash, Bill,
+or explicitly named folder:
 
 ```bash
 opl-relay --json mailbox move \
@@ -187,9 +187,10 @@ opl-relay --json mailbox move \
 ```
 
 Relay verifies the source raw-message SHA-256 and `Message-ID`, verifies the
-target copy and source absence, and stores a local operation receipt. It never
-creates folders, performs an unscoped `EXPUNGE`, permanently deletes mail, or
-marks messages.
+target copy and source absence, and stores a local operation receipt. Gmail
+archive uses UID MOVE from Inbox to the advertised All Mail folder. Unknown
+results require a fresh readback before retrying. Relay never creates folders,
+performs an unscoped `EXPUNGE`, permanently deletes mail, or marks messages.
 
 For phone-based review (including requests through Weixin), prepare a server
 Reply All draft from an exact source message:

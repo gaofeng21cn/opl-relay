@@ -25,7 +25,7 @@ from .config import (
 from .context import ContextBuilder
 from .drafts import DraftLedger, DraftService, Recipient
 from .knowledge import KnowledgeIndex, load_sources_config
-from .mailbox import move_messages
+from .mailbox import MailboxMoveFailure, move_messages
 from .memory import (
     MEMORY_CATEGORIES,
     MEMORY_STATUSES,
@@ -1251,10 +1251,11 @@ def cmd_mailbox_move(args: argparse.Namespace) -> int:
             db_path=Path(args.db).expanduser(),
             account_id=args.account,
             destination=args.destination,
+            exact_folder=args.destination_folder,
             storage_refs=args.storage_ref,
             apply=args.apply,
         )
-    except (ValueError, LookupError) as exc:
+    except (ValueError, LookupError, MailboxMoveFailure) as exc:
         return fail(str(exc), as_json=args.json, code=2)
     emit(payload, as_json=args.json)
     return 0 if payload.get("ok") is True else 1
@@ -1796,10 +1797,15 @@ def build_parser() -> argparse.ArgumentParser:
     mailbox_actions = mailbox.add_subparsers(dest="mailbox_action", required=True)
     mailbox_move = mailbox_actions.add_parser(
         "move",
-        help="只将经实时验证的精确邮件移动到已存在的 Archive、Trash 或 Bill",
+        help="只将经实时验证的精确邮件移动到已存在的 Archive、Trash、Bill 或精确指定的现有文件夹",
     )
     mailbox_move.add_argument("--account", required=True)
-    mailbox_move.add_argument("--destination", choices=["archive", "trash", "bill"], required=True)
+    mailbox_move.add_argument("--destination", choices=["archive", "trash", "bill"])
+    mailbox_move.add_argument(
+        "--destination-folder",
+        default="",
+        help="精确指定一个已存在的现有文件夹（不创建新文件夹）",
+    )
     mailbox_move.add_argument("--storage-ref", action="append", required=True)
     mailbox_move.add_argument(
         "--apply",

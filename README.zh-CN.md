@@ -160,7 +160,7 @@ opl-relay --json context build --person "示例教授" --query "年度邀请"
 服务器快照计数与同步完整性。实现边界见[架构文档](docs/architecture.md#mail-membership-search-and-review-progress)。
 
 对于已经明确批准的、可恢复的邮箱整理，先省略 `--apply` 做实时预检；只有精确的当前
-`email-store://` 引用可以移动，目标只能是服务器已经提供的 Archive、Trash 或 Bill 文件夹：
+`email-store://` 引用可以移动到服务器已有的 Archive、Trash、Bill 或精确指定的文件夹：
 
 ```bash
 opl-relay --json mailbox move \
@@ -171,7 +171,9 @@ opl-relay --json mailbox move \
 ```
 
 Relay 会重新获取源 UID，比对完整原文 SHA-256 和 `Message-ID`，验证目标副本及源邮件消失，
-并保存本地操作回执。不会创建文件夹、执行无范围 `EXPUNGE`、永久删除邮件或标记邮件。
+并保存本地操作回执。Gmail 归档使用 UID MOVE 从 Inbox 移到服务器提供的 All Mail；
+结果不确定时先重新读取状态，不盲目重试。不会创建文件夹、执行无范围 `EXPUNGE`、
+永久删除邮件或标记邮件。
 
 通过微信提出需求、在手机审核时，直接准备服务器“回复所有人”草稿：
 
