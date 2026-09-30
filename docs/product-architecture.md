@@ -25,8 +25,14 @@ repository or Persona desktop product.
 | Public content, approved local website changes and publication | `gflab_web` |
 | Runtime, Package discovery, carrier delegation and App projection | Framework |
 | App product contracts and acceptance | `one-person-lab-app` |
-| Stable desktop rendering | `opl-aion-shell` |
-| DSH application host, native Codex and delivery composition | `opl-studio` |
+| Desktop, WebUI and Docker rendering | `opl-studio` |
+| DSH/Cordis Application Host, native Codex and delivery composition | `opl-studio` |
+
+App selects the current implementation through its
+[Shell adapter](https://github.com/gaofeng21cn/one-person-lab-app/blob/main/contracts/app-shell-adapter.json).
+The retired Aion Shell remains a historical migration and fixture source.
+[OPL DSH](https://github.com/gaofeng21cn/opl-dsh) is the independent enhancement
+suite for the official DeepSeek Harness desktop.
 
 The target relationship is described in
 [Persona Architecture Guidance](https://github.com/gaofeng21cn/opl-persona/blob/main/docs/architecture-guidance.md).
