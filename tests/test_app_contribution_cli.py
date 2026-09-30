@@ -1,6 +1,8 @@
 import json
+import hashlib
 import io
 import os
+import sqlite3
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -11,8 +13,9 @@ import pytest
 from codex_mail_workbench import cli
 from codex_mail_workbench.cli import APP_CONTRIBUTION_DATA_CONTRACTS, APP_CONTRIBUTION_ACTION_CONTRACTS
 from codex_mail_workbench.memory import MemoryStore
-from codex_mail_workbench.store import connect_email_store, upsert_email_message
+from codex_mail_workbench.store import connect_email_store, record_reviews, upsert_email_message
 from test_drafts import registered_service
+from test_triage import seed_message
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "plugins" / "opl-relay"
@@ -158,6 +161,7 @@ def test_every_read_view_supplies_only_descriptor_declared_command_schemas(tmp_p
         assert result["kind"] == "data"
         assert result["state"] in {"ready", "input_required"}
         assert result["data"]["items"] == []
+        assert set(result["input_schema"]) == set(APP_CONTRIBUTION_DATA_CONTRACTS[view["data_ref"]]["input"])
         allowed_refs = {commands[identifier]["action_ref"] for identifier in view["command_ids"]}
         metadata = result["data"]["command_inputs"]
         assert set(metadata) == allowed_refs
@@ -196,6 +200,8 @@ def test_recent_collection_preserves_messages_and_binds_actual_account(tmp_path:
     item = result["data"]["items"][0]
     assert item["id"] == item["storage_ref"] == reference
     assert item["actions"] == [{"action_ref": "communications.mail.v1#sync.incremental", "input": {"account": "work"}}]
+    assert item["body_text"] == "Synthetic evidence."
+    assert item["review_target"]["source_ref"] == reference
     assert db.read_bytes() == before
 
 
@@ -208,9 +214,19 @@ def call_in_process(args, ref, *, operation="read", payload=None, monkeypatch, c
     return code, json.loads(capsys.readouterr().out)
 
 
+def checkpoint_draft_fixture(path: Path):
+    # Settle fixture WAL bytes before comparing the read-only subprocess snapshot.
+    conn = sqlite3.connect(path)
+    try:
+        assert conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_draft_collection_is_readonly_and_actions_do_not_auto_approve_send(tmp_path: Path, monkeypatch, capsys):
     profile = tmp_path / "profile"
     service, provider, draft_ref = registered_service(profile / "data" / "relay")
+    checkpoint_draft_fixture(service.ledger.path)
     before = service.ledger.path.read_bytes()
     code, response = invoke(profile, "communications.mail.v1#draft.inspect")
     assert code == 0
@@ -238,6 +254,11 @@ def test_draft_collection_is_readonly_and_actions_do_not_auto_approve_send(tmp_p
     )
     assert code == 0
     fingerprint = inspected["result"]["draft"]["approval_fingerprint"]
+    inspected_item = inspected["result"]["data"]["items"][0]
+    assert inspected_item["body_text"] == provider.current.body_text
+    assert inspected_item["review_target"]["to"] == [{"address": "reviewer@example.test", "name": "Reviewer"}]
+    assert inspected_item["review_target"]["attachments"][0]["name"] == "paper.pdf"
+    assert all("approval" not in action["input"] for action in inspected_item["actions"])
     send_input = next(action["input"] for action in item["actions"] if action["action_ref"].endswith("#draft.send"))
     code, failure = call_in_process(args, "communications.mail.v1#draft.send", operation="execute",
                                    payload=send_input, monkeypatch=monkeypatch, capsys=capsys)
@@ -299,3 +320,198 @@ def test_declared_reply_all_abi_uses_only_supplied_native_mail_identity(monkeypa
                                      payload={"storage_ref": "email-store://work/INBOX/1/abcdef"},
                                      monkeypatch=monkeypatch, capsys=capsys)
     assert code == 2 and response["ok"] is False
+
+
+def seed_mail_batch(profile: Path, count: int):
+    db = profile / "data" / "relay" / "mail.sqlite"
+    conn = connect_email_store(db)
+    refs = []
+    try:
+        for uid in range(1, count + 1):
+            body = "indexed needle" if uid % 2 == 0 else "ordinary body"
+            raw = f"Subject: Message {uid}\r\n\r\n{body}".encode()
+            refs.append(upsert_email_message(
+                conn, account_id="work", folder="INBOX", folder_slug="INBOX", uid=uid,
+                uidvalidity=1, message_id=f"<batch-{uid}@example.test>", subject=f"Message {uid}",
+                sender="author@example.test", recipient="work@example.test",
+                date_iso="2026-09-30T00:00:00Z", raw_sha256=hashlib.sha256(raw).hexdigest(),
+                raw_eml=raw, attachments=[], ingest_ts="2026-09-30T00:00:00Z",
+            ))
+        record_reviews(conn, records=[
+            {"storage_ref": refs[1], "action": "needs_user_reply", "status": "open", "note": "Review this exact source"},
+            {"storage_ref": refs[3], "action": "remind", "status": "waiting"},
+        ])
+    finally:
+        conn.close()
+    return db, refs
+
+
+def test_recent_paginates_and_filters_entire_store_before_limiting(tmp_path: Path):
+    profile = tmp_path / "profile"
+    db, refs = seed_mail_batch(profile, 530)
+    before = db.read_bytes()
+    code, response = invoke(profile, "communications.mail.v1#recent", payload={"offset": 520, "limit": 3})
+    assert code == 0
+    data = response["result"]["data"]
+    assert data["pagination"] == {"offset": 520, "limit": 3, "total": 530, "has_more": True}
+    assert [item["storage_ref"] for item in data["items"]] == refs[7:10][::-1]
+
+    code, response = invoke(profile, "communications.mail.v1#recent", payload={"query": "indexed needle", "offset": 260, "limit": 3})
+    assert code == 0
+    data = response["result"]["data"]
+    assert data["pagination"] == {"offset": 260, "limit": 3, "total": 265, "has_more": True}
+    assert [item["uid"] for item in data["items"]] == [10, 8, 6]
+    code, response = invoke(profile, "communications.mail.v1#recent", payload={"query": " indexed needle ", "account": " work ", "status": "open", "limit": 1})
+    assert code == 0
+    data = response["result"]["data"]
+    assert data["pagination"]["total"] == 1
+    assert data["items"][0]["storage_ref"] == refs[1]
+    assert data["items"][0]["review_target"]["note"] == "Review this exact source"
+
+    for payload, total in (({"offset": 530}, 530), ({"query": "no match"}, 0), ({"status": "waiting"}, 1),
+                           ({"status": "unreviewed", "account": "work"}, 528), ({"account": "other"}, 0),
+                           ({"until": "2026-09-29T00:00:00Z"}, 0)):
+        code, response = invoke(profile, "communications.mail.v1#recent", payload=payload)
+        assert code == 0
+        assert response["result"]["data"]["pagination"]["total"] == total
+        if "offset" in payload or total == 0:
+            assert response["result"]["data"]["items"] == []
+            assert response["result"]["data"]["pagination"]["has_more"] is False
+    assert db.read_bytes() == before
+
+
+def test_draft_query_and_state_filter_page_existing_ledger_without_inspection(tmp_path: Path):
+    profile = tmp_path / "profile"
+    service, provider, draft_ref = registered_service(profile / "data" / "relay")
+    with sqlite3.connect(service.ledger.path) as conn:
+        for number in range(30):
+            conn.execute("""INSERT INTO mail_drafts
+                (draft_ref, account_id, provider_account, provider_uuid, state, created_at, updated_at)
+                VALUES (?, 'work', 'Work', ?, ?, '2026-09-30', '2026-09-30')""",
+                (f"mail-draft://apple-mail/work/batch-{number:02}", f"batch-{number:02}", "sent" if number < 3 else "draft"))
+    checkpoint_draft_fixture(service.ledger.path)
+    before = service.ledger.path.read_bytes()
+    code, response = invoke(profile, "communications.mail.v1#draft.inspect", payload={"query": "batch-", "status": "all", "offset": 25, "limit": 3})
+    assert code == 0
+    data = response["result"]["data"]
+    assert data["pagination"] == {"offset": 25, "limit": 3, "total": 30, "has_more": True}
+    assert [item["provider_uuid"] for item in data["items"]] == ["batch-25", "batch-26", "batch-27"]
+    code, response = invoke(profile, "communications.mail.v1#draft.inspect", payload={"query": "batch-", "status": "sent", "offset": 1, "limit": 2})
+    assert code == 0
+    data = response["result"]["data"]
+    assert data["pagination"] == {"offset": 1, "limit": 2, "total": 3, "has_more": False}
+    assert all(item["state"] == "sent" and len(item["actions"]) == 1 for item in data["items"])
+    assert all("body_text" not in item and "approval_fingerprint" not in item for item in data["items"])
+    code, response = invoke(profile, "communications.mail.v1#draft.inspect", payload={"query": "batch-", "offset": 27})
+    assert code == 0
+    assert response["result"]["data"]["pagination"]["total"] == 27
+    assert response["result"]["data"]["items"] == []
+    assert service.ledger.path.read_bytes() == before
+    assert provider.send_calls == 0
+
+
+def test_recent_body_projection_is_bounded_and_incomplete_index_is_not_silently_searched(tmp_path: Path):
+    profile = tmp_path / "profile"
+    db = profile / "data" / "relay" / "mail.sqlite"
+    conn = connect_email_store(db)
+    try:
+        raw = b"Subject: Long body\r\n\r\n" + b"x" * 20001
+        upsert_email_message(
+            conn, account_id="work", folder="INBOX", folder_slug="INBOX", uid=1,
+            uidvalidity=1, message_id="<long@example.test>", subject="Long body",
+            sender="author@example.test", recipient="work@example.test", date_iso="2026-09-30T00:00:00Z",
+            raw_sha256=hashlib.sha256(raw).hexdigest(), raw_eml=raw, attachments=[], ingest_ts="2026-09-30T00:00:00Z",
+        )
+        conn.execute("DELETE FROM email_search")
+        conn.commit()
+    finally:
+        conn.close()
+    before = db.read_bytes()
+    code, response = invoke(profile, "communications.mail.v1#recent")
+    assert code == 0
+    item = response["result"]["data"]["items"][0]
+    assert len(item["body_text"]) == 20000 and item["body_truncated"] is True
+    code, response = invoke(profile, "communications.mail.v1#recent", payload={"query": "Long body"})
+    assert code == 2
+    assert "index incomplete" in response["error"]["message"]
+    assert db.read_bytes() == before
+
+
+@pytest.mark.parametrize("ref", ["communications.mail.v1#recent", "communications.mail.v1#draft.inspect"])
+@pytest.mark.parametrize("payload", [{"offset": -1}, {"offset": True}, {"offset": "1"}, {"status": "invalid"},
+                                     {"limit": 0}, {"query": 1}, {"query": " "}, {"apply": True}])
+def test_collection_read_rejects_invalid_filters_without_initializing_profile(tmp_path: Path, ref, payload):
+    code, response = invoke(tmp_path / "missing", ref, payload=payload)
+    assert code == 2
+    assert response["error"]["code"] == "invalid_request"
+    assert not (tmp_path / "missing").exists()
+
+
+def test_triage_input_required_has_usable_read_form_and_only_existing_options(tmp_path: Path):
+    missing = tmp_path / "missing"
+    code, response = invoke(missing, "communications.mail.v1#triage.evidence")
+    assert code == 0
+    result = response["result"]
+    assert result["state"] == "input_required" and result["data"]["items"] == []
+    assert result["input_schema"]["source_ref"]["required"] is True
+    assert result["input_schema"]["policy_refs"]["type"] == "string_list"
+    assert result["input_schema"]["policy_refs"]["required"] is True
+    assert all(field["options"] == [] for field in result["input_schema"].values())
+    assert not missing.exists()
+
+    profile = tmp_path / "profile"
+    db = profile / "data" / "relay" / "mail.sqlite"
+    source_ref = seed_message(db)
+    policies = profile / "policies"
+    policies.mkdir()
+    policy = policies / "review.md"
+    policy.write_text("# Review\nPrivate policy content must not be projected.\n")
+    before = db.read_bytes()
+    code, response = invoke(profile, "communications.mail.v1#triage.evidence", payload={"source_ref": source_ref})
+    assert code == 0
+    result = response["result"]
+    assert result["state"] == "input_required"
+    assert result["input_schema"]["source_ref"]["options"] == [
+        {"value": source_ref, "label_i18n": {"en-US": "Evidence thread", "zh-CN": "Evidence thread"}},
+    ]
+    assert result["input_schema"]["policy_refs"]["options"] == [
+        {"value": policy.as_uri(), "label_i18n": {"en-US": "review.md", "zh-CN": "review.md"}},
+    ]
+    assert "Private policy content" not in json.dumps(result)
+    code, response = invoke(profile, "communications.mail.v1#triage.evidence",
+                            payload={"source_ref": source_ref, "policy_refs": [policy.as_uri()]})
+    assert code == 0
+    result = response["result"]
+    assert result["state"] == "ready"
+    item = result["data"]["items"][0]
+    assert item["body_text"] == result["evidence"]["mail"]["raw_readback"]["body_text"]
+    assert item["review_target"]["source_ref"] == source_ref
+    assert item["review_target"]["policy_refs"] == [policy.as_uri()]
+    assert item["risk"]["external_write_allowed"] is False
+    assert db.read_bytes() == before
+
+
+def test_collection_commands_are_explicit_even_without_rows(tmp_path: Path):
+    expected = {
+        "communications.mail.v1#recent": {"communications.mail.v1#sync.incremental"},
+        "communications.mail.v1#draft.inspect": {"communications.mail.v1#draft.create", "communications.mail.v1#draft.reply_all",
+                                                "communications.mail.v1#draft.create_from_persona"},
+        "communications.mail.v1#triage.evidence": set(),
+        "personal.memory.v1#people": {"personal.context.v1#build"},
+        "personal.memory.v1#search": set(),
+    }
+    for ref, action_refs in expected.items():
+        code, response = invoke(tmp_path / "missing", ref)
+        assert code == 0
+        data = response["result"]["data"]
+        assert data["items"] == []
+        actions = data["collection_actions"]
+        assert {action["action_ref"] for action in actions} == action_refs
+        for action in actions:
+            assert action["input"] == {}
+            assert set(action["label_i18n"]) == {"en-US", "zh-CN"}
+            assert action["action_ref"] in data["command_inputs"]
+    code, response = invoke(tmp_path / "missing", "communications.mail.v1#recent", payload={"account": "work"})
+    assert code == 0
+    assert response["result"]["data"]["collection_actions"][0]["input"] == {"account": "work"}
+    assert not (tmp_path / "missing").exists()

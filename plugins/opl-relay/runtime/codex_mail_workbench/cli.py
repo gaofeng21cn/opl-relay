@@ -57,6 +57,7 @@ from .store import (
     get_message_by_storage_ref,
     list_messages,
     search_messages,
+    scope_filter,
     SCOPES,
     folder_status,
     index_messages,
@@ -86,7 +87,12 @@ APP_CONTRIBUTION_DATA_CONTRACTS = {
             "folder": {"type": "string", "required": False},
             "since": {"type": "string", "required": False},
             "until": {"type": "string", "required": False},
-            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 2000},
+            "query": {"type": "string", "required": False},
+            "scope": {"type": "string", "required": False, "enum": list(SCOPES), "default": "active"},
+            "status": {"type": "string", "required": False,
+                       "enum": ["all", "unreviewed", "open", "waiting", "closed", "none"], "default": "all"},
+            "offset": {"type": "integer", "required": False, "minimum": 0, "maximum": sys.maxsize, "default": 0},
+            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 2000, "default": 20},
         },
         "result": "communications.mail.v1#recent.result",
     },
@@ -94,7 +100,11 @@ APP_CONTRIBUTION_DATA_CONTRACTS = {
         "operation": "read",
         "input": {
             "draft_ref": {"type": "string", "required": False},
-            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
+            "query": {"type": "string", "required": False},
+            "status": {"type": "string", "required": False,
+                       "enum": ["active", "all", "draft", "sending", "unknown", "sent"], "default": "active"},
+            "offset": {"type": "integer", "required": False, "minimum": 0, "maximum": sys.maxsize, "default": 0},
+            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500, "default": 50},
         },
         "result": "communications.mail.v1#draft.inspect.result",
     },
@@ -241,23 +251,61 @@ APP_CONTRIBUTION_DATA_ACTIONS = {
 }
 
 
+APP_CONTRIBUTION_COLLECTION_ACTIONS = {
+    "communications.mail.v1#recent": [
+        ("communications.mail.v1#sync.incremental", {"en-US": "Sync mail", "zh-CN": "同步邮件"}),
+    ],
+    "communications.mail.v1#draft.inspect": [
+        ("communications.mail.v1#draft.create", {"en-US": "New draft", "zh-CN": "新建草稿"}),
+        ("communications.mail.v1#draft.reply_all", {"en-US": "Reply all draft", "zh-CN": "回复全部草稿"}),
+        ("communications.mail.v1#draft.create_from_persona", {"en-US": "Draft from proposal", "zh-CN": "从提案创建草稿"}),
+    ],
+    "communications.mail.v1#triage.evidence": [],
+    "personal.memory.v1#people": [
+        ("personal.context.v1#build", {"en-US": "Build context", "zh-CN": "构建上下文"}),
+    ],
+    "personal.memory.v1#search": [],
+}
+
+
+def _app_contribution_form_schema(fields: dict[str, dict[str, object]]) -> dict[str, object]:
+    schema = copy.deepcopy(fields)
+    labels = {
+        "all": ("All", "全部"), "active": ("Active", "当前"), "history": ("History", "历史"),
+        "unreviewed": ("Unreviewed", "未审阅"), "open": ("Open", "待处理"),
+        "waiting": ("Waiting", "等待"), "closed": ("Closed", "已结束"), "none": ("No open task", "无待办"),
+        "draft": ("Draft", "草稿"), "sending": ("Sending", "正在发送"),
+        "unknown": ("Unknown", "待核实"), "sent": ("Sent", "已发送"),
+    }
+    for field in schema.values():
+        if field["type"] == "string[]":
+            field["type"] = "string_list"
+        if "enum" in field:
+            field["options"] = [
+                {"value": value, "label_i18n": {"en-US": labels[value][0], "zh-CN": labels[value][1]}}
+                for value in field["enum"]
+            ]
+    return schema
+
+
+def _app_contribution_pagination(offset: int, limit: int, total: int) -> dict[str, object]:
+    return {"offset": offset, "limit": limit, "total": total, "has_more": offset + limit < total}
+
+
 def _app_contribution_collection(
     ref: str,
     data: dict[str, object],
     *,
     state: str = "ready",
     reason: str = "",
+    input_schema: dict[str, object] | None = None,
     **legacy: object,
 ) -> dict[str, object]:
     command_inputs = {}
     for action_ref in APP_CONTRIBUTION_DATA_ACTIONS[ref]:
         contract = APP_CONTRIBUTION_ACTION_CONTRACTS[action_ref]
-        schema = copy.deepcopy(contract["input"])
-        for field in schema.values():
-            if field["type"] == "string[]":
-                field["type"] = "string_list"
         command_inputs[action_ref] = {
-            "input_schema": schema,
+            "input_schema": _app_contribution_form_schema(contract["input"]),
             "defaults": {},
             "confirmation_required": contract["confirmation_required"],
         }
@@ -265,7 +313,13 @@ def _app_contribution_collection(
         **legacy,
         "kind": "data",
         "state": state,
-        "data": {**data, "command_inputs": command_inputs},
+        "input_schema": input_schema if input_schema is not None else _app_contribution_form_schema(
+            APP_CONTRIBUTION_DATA_CONTRACTS[ref]["input"]
+        ),
+        "data": {"collection_actions": [
+            {"action_ref": action_ref, "input": {}, "label_i18n": label}
+            for action_ref, label in APP_CONTRIBUTION_COLLECTION_ACTIONS[ref]
+        ], **data, "command_inputs": command_inputs},
         **({"reason": reason} if reason else {}),
     }
 
@@ -283,31 +337,51 @@ def _app_contribution_draft_item(draft: dict[str, object], *, inspection_require
         "id": draft_ref,
         "title": draft.get("subject") or draft_ref,
         "inspection_required": inspection_required,
+        "review_target": {key: draft[key] for key in (
+            "draft_ref", "account_id", "state", "sender", "to", "cc", "bcc", "subject", "attachments"
+        ) if key in draft},
         "actions": actions,
     }
 
 
-def _app_contribution_drafts(args: argparse.Namespace, *, limit: int) -> dict[str, object]:
+def _app_contribution_drafts(
+    args: argparse.Namespace, *, query: str, status: str, offset: int, limit: int,
+) -> dict[str, object]:
     path = Path(args.draft_db).expanduser()
+    empty = {"items": [], "count": 0, "pagination": _app_contribution_pagination(offset, limit, 0), "has_more": False}
     if not path.exists():
-        return {"items": [], "count": 0, "store_state": "missing"}
+        return {**empty, "store_state": "missing"}
     conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("BEGIN")
+        where, params = [], []
+        if status == "active":
+            where.append("state IN ('draft', 'sending', 'unknown')")
+        elif status != "all":
+            where.append("state=?")
+            params.append(status)
+        if query:
+            where.append("(instr(lower(draft_ref),?) OR instr(lower(account_id),?) OR instr(lower(provider_account),?) OR instr(lower(provider_uuid),?))")
+            params.extend([query.lower()] * 4)
+        predicate = " AND ".join(where) or "1=1"
+        total = conn.execute(f"SELECT count(*) FROM mail_drafts WHERE {predicate}", params).fetchone()[0]
         rows = conn.execute(
-            """
+            f"""
             SELECT draft_ref, account_id, provider_account, provider_uuid, state, created_at, updated_at
-            FROM mail_drafts WHERE state IN ('draft', 'sending', 'unknown')
-            ORDER BY updated_at DESC, draft_ref LIMIT ?
+            FROM mail_drafts WHERE {predicate}
+            ORDER BY updated_at DESC, draft_ref LIMIT ? OFFSET ?
             """,
-            (limit + 1,),
+            [*params, limit, offset],
         ).fetchall()
-        items = [_app_contribution_draft_item(dict(row), inspection_required=True) for row in rows[:limit]]
-        return {"items": items, "count": len(items), "store_state": "present", "has_more": len(rows) > limit}
+        items = [_app_contribution_draft_item(dict(row), inspection_required=True) for row in rows]
+        pagination = _app_contribution_pagination(offset, limit, total)
+        return {"items": items, "count": len(items), "store_state": "present", "pagination": pagination,
+                "has_more": pagination["has_more"]}
     except sqlite3.OperationalError as exc:
         if "no such table" not in str(exc):
             raise
-        return {"items": [], "count": 0, "store_state": "schema_missing"}
+        return {**empty, "store_state": "schema_missing"}
     finally:
         conn.close()
 
@@ -424,6 +498,8 @@ def _app_contribution_input_keys(
         if value_type == "string":
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"input.{name} must be a non-empty string")
+            if "enum" in schema and value not in schema["enum"]:
+                raise ValueError(f"input.{name} must be one of: " + ", ".join(schema["enum"]))
         elif value_type == "boolean":
             if not isinstance(value, bool):
                 raise ValueError(f"input.{name} must be a boolean")
@@ -453,44 +529,113 @@ def _app_contribution_input_keys(
             raise ValueError(f"unsupported input type for {name}")
 
 
+def _app_contribution_recent(args: argparse.Namespace, payload: dict[str, object]) -> dict[str, object]:
+    payload = {field: value.strip() if isinstance(value, str) else value for field, value in payload.items()}
+    offset = payload.get("offset", 0)
+    limit = payload.get("limit", 20)
+    conn = connect_email_store_readonly(Path(args.db).expanduser())
+    messages, items, total = [], [], 0
+    try:
+        if conn is not None:
+            conn.execute("BEGIN")
+            where, params = scope_filter(payload.get("scope", "active"), payload.get("folder"))
+            if "account" in payload:
+                where.append("email_messages.account_id=?")
+                params.append(payload["account"])
+            for field, operator in (("since", ">="), ("until", "<")):
+                if field in payload:
+                    where.append(f"datetime(date_iso){operator}datetime(?)")
+                    params.append(payload[field])
+            # Reuse the owner's scope and body index; page references before resolving mail facts.
+            query = payload.get("query")
+            if query:
+                if conn.execute(
+                    f"SELECT 1 FROM email_messages WHERE {' AND '.join(where)} "
+                    "AND raw_sha256 NOT IN (SELECT raw_sha256 FROM email_search) LIMIT 1", params,
+                ).fetchone():
+                    raise ValueError("mail body index incomplete; run opl-relay index before searching")
+                term = query.casefold()
+                where.append("(instr(lower(subject),?) OR instr(lower(sender),?) OR instr(lower(recipient),?) "
+                             "OR instr(lower(message_id),?) OR email_messages.raw_sha256 IN "
+                             "(SELECT raw_sha256 FROM email_search WHERE instr(body_text,?)))")
+                params.extend([term] * 5)
+            status = payload.get("status", "all")
+            if status != "all":
+                where.append("coalesce(r.status,'unreviewed')=?")
+                params.append(status)
+            source = ("FROM email_messages LEFT JOIN mail_reviews r ON r.account_id=email_messages.account_id "
+                      "AND r.raw_sha256=email_messages.raw_sha256 " + f"WHERE {' AND '.join(where)}")
+            total = conn.execute("SELECT count(*) " + source, params).fetchone()[0]
+            rows = conn.execute(
+                "SELECT email_messages.storage_ref, coalesce(r.status,'unreviewed'), r.action, r.note " + source +
+                " ORDER BY date_iso DESC, ingest_ts DESC, uid DESC, email_messages.storage_ref LIMIT ? OFFSET ?",
+                [*params, limit, offset],
+            ).fetchall()
+            for storage_ref, review_state, action, note in rows:
+                message = get_message_by_storage_ref(conn, storage_ref)
+                raw = fetch_raw_email_by_storage_ref(conn, storage_ref)
+                body = extract_text_body(raw) if raw is not None else ""
+                messages.append(message)
+                items.append({
+                    **message, "id": storage_ref, "title": message["subject"],
+                    "body_text": body[:20000], "body_truncated": len(body) > 20000,
+                    "status": review_state,
+                    "review_target": {"source_ref": storage_ref, "status": review_state,
+                                      "action": action, "note": note or ""},
+                    "actions": [{"action_ref": "communications.mail.v1#sync.incremental",
+                                 "input": {"account": message["account_id"]}}],
+                })
+        pagination = _app_contribution_pagination(offset, limit, total)
+        return _app_contribution_collection(
+            "communications.mail.v1#recent",
+            {"items": items, "count": len(items), "pagination": pagination, "has_more": pagination["has_more"],
+             "store_state": "present" if conn is not None else "missing",
+             "collection_actions": [{"action_ref": action_ref, "input": {"account": payload["account"]} if "account" in payload else {},
+                                     "label_i18n": label}
+                                    for action_ref, label in APP_CONTRIBUTION_COLLECTION_ACTIONS["communications.mail.v1#recent"]],
+             "source_policy": {"owner": "EmailStore", "read_only": True, "local_snapshot_only": True}},
+            messages=messages,
+        )
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _app_contribution_triage_schema(args: argparse.Namespace) -> dict[str, object]:
+    schema = _app_contribution_form_schema(APP_CONTRIBUTION_DATA_CONTRACTS["communications.mail.v1#triage.evidence"]["input"])
+    schema["source_ref"].update(required=True, label_i18n={"en-US": "Source mail", "zh-CN": "来源邮件"}, options=[])
+    schema["policy_refs"].update(required=True, label_i18n={"en-US": "Policy references", "zh-CN": "策略引用"}, options=[])
+    conn = connect_email_store_readonly(Path(args.db).expanduser())
+    try:
+        if conn is not None:
+            schema["source_ref"]["options"] = [
+                {"value": message["storage_ref"], "label_i18n": {"en-US": message["subject"] or message["storage_ref"],
+                                                               "zh-CN": message["subject"] or message["storage_ref"]}}
+                for message in list_messages(conn, limit=20)
+            ]
+    finally:
+        if conn is not None:
+            conn.close()
+    policies = (default_profile_workspace() / "policies").resolve()
+    if policies.is_dir():
+        schema["policy_refs"]["options"] = [
+            {"value": path.as_uri(), "label_i18n": {"en-US": path.relative_to(policies).as_posix(),
+                                                   "zh-CN": path.relative_to(policies).as_posix()}}
+            for path in sorted(policies.rglob("*.md"))[:100] if path.is_file()
+        ]
+    return schema
+
+
 def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str, object]) -> object:
     if ref == "communications.mail.v1#recent":
-        conn = connect_email_store_readonly(Path(args.db).expanduser())
-        try:
-            messages = (
-                list_messages(
-                    conn,
-                    account_ids=[_app_contribution_string(payload.get("account"), "account")]
-                    if payload.get("account") is not None
-                    else None,
-                    folder_slug=_app_contribution_string(payload.get("folder"), "folder") or None,
-                    since=_app_contribution_string(payload.get("since"), "since") or None,
-                    until=_app_contribution_string(payload.get("until"), "until") or None,
-                    limit=_app_contribution_integer(
-                        payload.get("limit"), "limit", default=20, minimum=1, maximum=2000
-                    ),
-                ) if conn is not None else []
-            )
-            items = [
-                {**message, "id": message["storage_ref"], "title": message["subject"], "actions": [
-                    {"action_ref": "communications.mail.v1#sync.incremental", "input": {"account": message["account_id"]}},
-                ]}
-                for message in messages
-            ]
-            return _app_contribution_collection(
-                ref, {"items": items, "count": len(items), "store_state": "present" if conn is not None else "missing",
-                      "source_policy": {"owner": "EmailStore", "read_only": True, "local_snapshot_only": True}},
-                messages=messages,
-            )
-        finally:
-            if conn is not None:
-                conn.close()
+        return _app_contribution_recent(args, payload)
     if ref == "communications.mail.v1#draft.inspect":
         draft_ref = _app_contribution_string(payload.get("draft_ref"), "draft_ref")
         if not draft_ref:
             data = _app_contribution_drafts(args, limit=_app_contribution_integer(
                 payload.get("limit"), "limit", default=50, minimum=1, maximum=500,
-            ))
+            ), offset=payload.get("offset", 0), status=payload.get("status", "active"),
+                query=_app_contribution_string(payload.get("query"), "query"))
             data["source_policy"] = {"owner": "DraftLedger", "read_only": True, "metadata_only": True,
                                      "fresh_inspection_required_before_approval": True}
             return _app_contribution_collection(ref, data, drafts=data["items"])
@@ -499,12 +644,15 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
         if draft.get("draft_ref") != draft_ref:
             raise ValueError("draft inspection identity mismatch")
         item = _app_contribution_draft_item(draft, inspection_required=False)
-        return _app_contribution_collection(ref, {"items": [item], "count": 1}, draft=draft)
+        return _app_contribution_collection(ref, {"items": [item], "count": 1,
+                                                 "pagination": _app_contribution_pagination(0, 1, 1)}, draft=draft)
     if ref == "communications.mail.v1#triage.evidence":
+        schema = _app_contribution_triage_schema(args)
         if not payload.get("source_ref") or not payload.get("policy_refs"):
             return _app_contribution_collection(
                 ref, {"items": [], "count": 0}, state="input_required",
                 reason="source_ref and policy_refs are required for mail triage evidence",
+                input_schema=schema,
             )
         evidence = build_triage_evidence(
             mail_db_path=Path(args.db).expanduser(),
@@ -516,8 +664,14 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
             ),
         )
         return _app_contribution_collection(
-            ref, {"items": [{"id": payload["source_ref"], **evidence, "actions": []}], "count": 1},
-            evidence=evidence,
+            ref, {"items": [{"id": evidence["mail"]["source_ref"], **evidence,
+                             "title": evidence["mail"]["headers"]["subject"],
+                             "body_text": evidence["mail"]["raw_readback"]["body_text"],
+                             "review_target": {"source_ref": evidence["mail"]["source_ref"],
+                                               "headers": evidence["mail"]["headers"],
+                                               "policy_refs": evidence["policy"]["policy_refs"]},
+                             "actions": []}], "count": 1},
+            evidence=evidence, input_schema=schema,
         )
     if ref == "personal.memory.v1#people":
         return _app_contribution_collection(

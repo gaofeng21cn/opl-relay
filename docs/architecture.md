@@ -184,38 +184,76 @@ consume these entries through Framework's dynamic UI projection without a
 Relay-specific package switch. Collection `command_inputs[action_ref]` supplies
 `input_schema` derived from the existing action contract and empty `defaults`;
 the UI projection maps `string[]` to the generic form's `string_list` without
-changing the execution contract. Item `actions` binds declared action references
+changing the execution contract. Every collection explicitly returns
+`data.collection_actions = [{action_ref, input, label_i18n}]`, including an empty
+array when there is no collection command. Hosts render only these entries as
+top-level commands, never infer them from row action references. Draft creation
+and native Reply All are collection commands; inspect/open/send remain bound to
+individual draft rows. People exposes context building at collection level;
+memory evidence and triage expose no collection commands. This metadata does not
+grant authorization. Item `actions` binds declared action references
 to exact owner inputs, including memory references and person/project selectors.
-Neither metadata field declares a command or grants authorization. Framework aggregation and
+Neither collection nor row metadata declares a command or grants authorization. Framework aggregation and
 actual Studio mounting remain separate host-owned acceptance surfaces.
 
 ### Inbox And Draft Collection ABI
 
-All displayed Relay read models expose `data.items`, `data.count` and command
-input metadata. Inbox keeps the legacy `messages` result field and assigns each
+All displayed Relay read models expose `data.items`, `data.count`,
+`result.input_schema` describing every read input, explicit collection actions
+and command input metadata. Read forms use the same `read` operation, not an
+execute action. Inbox keeps the legacy `messages` result field and assigns each
 row its original `storage_ref` identity. A row's sync action uses only its actual
 account ID; a mail storage reference is not an Apple Mail Reply All identity.
 The read route opens only an existing EmailStore and never initializes one.
+`recent` accepts `account`, `folder`, `since`, `until`, `query`, `scope` (default
+`active`), review `status` (default `all`), `offset` (default 0) and `limit`
+(default 20, range 1..2000). Review states are `unreviewed`, `open`, `waiting`,
+`closed` and `none`, derived from existing account/hash-bound review receipts.
+Query matches headers and the existing decoded-body index across the entire
+selected scope before pagination, not only the newest batch. An incomplete body
+index requires the existing `index` command; a read never rebuilds it.
+`data.pagination = {offset, limit, total, has_more}` describes the filtered
+collection, with count and page read from one read-only SQLite snapshot and a
+stable storage-reference tie-breaker. Empty, missing and past-end pages retain
+this shape. Inbox rows expose `body_text` capped at 20,000 characters with
+`body_truncated`, plus the exact source reference and review receipt in
+`review_target`. Full evidence remains available through the owner read route.
 
 Without `draft_ref`, `communications.mail.v1#draft.inspect` lists up to 50
-existing non-sent DraftLedger identities (optional `limit`, range 1..500). It
-opens the ledger read-only, emits no cached body or approval, and marks rows
+existing non-sent DraftLedger identities (`limit`, range 1..500). Optional
+`query` searches ledger reference, account and provider identity fields, not
+uncached subjects or bodies. `status` defaults to `active` (draft/sending/unknown)
+and also accepts `all`, `draft`, `sending`, `unknown` and `sent`; optional
+`offset` defaults to 0. Filtering precedes pagination and returns the same
+`data.pagination` shape as Inbox. It opens the ledger read-only, emits no cached
+body or approval, and marks rows
 `inspection_required=true`. Missing storage is an empty collection, not a new
 ledger. With `draft_ref`, the existing owner inspect path returns its full
-snapshot and retains the legacy `draft` field; that explicit inspection may
+snapshot, including its body, recipients and attachments in `data.items`, and
+retains the legacy `draft` field; that explicit inspection may
 record its existing owner receipt. Draft rows bind inspect/open/send to their
 exact `draft_ref`; only `draft` state offers open/send. The send input never
 auto-fills `approval`: user review, fresh fingerprint matching, provider domain
 guards, send claiming and unknown-result handling remain in the original owner
 implementation. Confirmation policy stays aligned with the descriptor and
-action contracts.
+action contracts. Each row's `review_target` contains only owner-backed identity,
+state and, after explicit inspection, current recipients, subject and attachments.
+The native Apple Mail editor remains the editing authority.
 
 The already-declared Reply All action now reaches the same existing
 `DraftService.reply_all` through the ABI, requiring the complete account,
 `apple_mail_account`, positive `apple_mail_id`, `mailbox_path` and new body.
 It never infers that native tuple from Inbox evidence or sends mail. Triage
 without an explicit source and policy references returns `input_required`
-instead of pretending that its evidence view is ready.
+with empty `data.items` and a usable `result.input_schema`. `source_ref` is a
+required string; `policy_refs` is a required `string_list` (submitted as a JSON
+string array). Their `options = [{value, label_i18n}]` offer up to 20 recent
+EmailStore references and up to 100 existing Markdown policy file URIs under
+the selected Profile Workspace. Missing policies produce no fabricated options;
+explicit domain-owned policy references remain accepted and are not interpreted
+or approved by Relay. No policy contents are projected. A completed read keeps
+the full legacy evidence envelope and exposes title, body and exact source,
+recipient headers and policy references in the evidence item's `review_target`.
 
 ## Mail Membership, Search, And Review Progress
 
