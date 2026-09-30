@@ -231,8 +231,10 @@ body or approval, and marks rows
 ledger. With `draft_ref`, the existing owner inspect path returns its full
 snapshot, including its body, recipients and attachments in `data.items`, and
 retains the legacy `draft` field; that explicit inspection may
-record its existing owner receipt. Draft rows bind inspect/open/send to their
-exact `draft_ref`; only `draft` state offers open/send. The send input never
+record its existing owner receipt. Draft rows expose `read_input={draft_ref}`
+so hosts can issue `read` on the same data reference and render the returned
+snapshot from `data.items`. Draft actions bind inspect/open/send to their exact
+`draft_ref`; only `draft` state offers open/send. The send input never
 auto-fills `approval`: user review, fresh fingerprint matching, provider domain
 guards, send claiming and unknown-result handling remain in the original owner
 implementation. Confirmation policy stays aligned with the descriptor and

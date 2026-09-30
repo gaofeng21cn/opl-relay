@@ -337,6 +337,7 @@ def _app_contribution_draft_item(draft: dict[str, object], *, inspection_require
         "id": draft_ref,
         "title": draft.get("subject") or draft_ref,
         "inspection_required": inspection_required,
+        "read_input": {"draft_ref": draft_ref},
         "review_target": {key: draft[key] for key in (
             "draft_ref", "account_id", "state", "sender", "to", "cc", "bcc", "subject", "attachments"
         ) if key in draft},

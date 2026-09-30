@@ -225,14 +225,17 @@ def checkpoint_draft_fixture(path: Path):
 
 def test_draft_collection_is_readonly_and_actions_do_not_auto_approve_send(tmp_path: Path, monkeypatch, capsys):
     profile = tmp_path / "profile"
+    ref = "communications.mail.v1#draft.inspect"
     service, provider, draft_ref = registered_service(profile / "data" / "relay")
     checkpoint_draft_fixture(service.ledger.path)
     before = service.ledger.path.read_bytes()
-    code, response = invoke(profile, "communications.mail.v1#draft.inspect")
+    code, response = invoke(profile, ref)
     assert code == 0
     item = response["result"]["data"]["items"][0]
     assert item["id"] == item["draft_ref"] == draft_ref
     assert item["inspection_required"] is True
+    assert item["read_input"] == {"draft_ref": draft_ref}
+    assert "body_text" not in item
     assert {action["action_ref"] for action in item["actions"]} == {
         "communications.mail.v1#draft.inspect", "communications.mail.v1#draft.open", "communications.mail.v1#draft.send",
     }
@@ -249,12 +252,17 @@ def test_draft_collection_is_readonly_and_actions_do_not_auto_approve_send(tmp_p
     monkeypatch.setattr(cli, "draft_service", lambda args: (service, provider))
     args = ["--draft-db", str(service.ledger.path)]
     code, inspected = call_in_process(
-        args, "communications.mail.v1#draft.inspect", payload={"draft_ref": draft_ref},
+        args, ref, payload=item["read_input"],
         monkeypatch=monkeypatch, capsys=capsys,
     )
     assert code == 0
+    assert inspected["ref"] == ref and inspected["operation"] == "read"
+    assert inspected["result"]["kind"] == "data" and inspected["result"]["state"] == "ready"
     fingerprint = inspected["result"]["draft"]["approval_fingerprint"]
     inspected_item = inspected["result"]["data"]["items"][0]
+    assert inspected_item["id"] == item["id"]
+    assert inspected_item["read_input"] == item["read_input"]
+    assert inspected_item["inspection_required"] is False
     assert inspected_item["body_text"] == provider.current.body_text
     assert inspected_item["review_target"]["to"] == [{"address": "reviewer@example.test", "name": "Reviewer"}]
     assert inspected_item["review_target"]["attachments"][0]["name"] == "paper.pdf"
@@ -280,6 +288,7 @@ def test_unknown_draft_state_cannot_offer_open_or_send(tmp_path: Path):
     assert code == 0
     item = response["result"]["data"]["items"][0]
     assert item["state"] == "unknown"
+    assert item["read_input"] == {"draft_ref": draft_ref}
     assert item["actions"] == [{"action_ref": "communications.mail.v1#draft.inspect", "input": {"draft_ref": draft_ref}}]
     assert provider.send_calls == 0
 
@@ -401,6 +410,7 @@ def test_draft_query_and_state_filter_page_existing_ledger_without_inspection(tm
     data = response["result"]["data"]
     assert data["pagination"] == {"offset": 1, "limit": 2, "total": 3, "has_more": False}
     assert all(item["state"] == "sent" and len(item["actions"]) == 1 for item in data["items"])
+    assert all(item["read_input"] == {"draft_ref": item["draft_ref"]} for item in data["items"])
     assert all("body_text" not in item and "approval_fingerprint" not in item for item in data["items"])
     code, response = invoke(profile, "communications.mail.v1#draft.inspect", payload={"query": "batch-", "offset": 27})
     assert code == 0
