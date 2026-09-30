@@ -193,7 +193,10 @@ def test_app_contribution_abi_describes_declared_refs_and_reads_package_owned_da
         "result": "communications.mail.v1#draft.send.result",
     }]
     assert recent_payload["result"]["messages"][0]["storage_ref"].startswith("email-store://")
-    assert memory_payload["result"] == {"memories": []}
+    assert memory_payload["result"]["kind"] == "data"
+    assert memory_payload["result"]["state"] == "ready"
+    assert memory_payload["result"]["data"]["items"] == []
+    assert memory_payload["result"]["data"]["count"] == 0
 
 
 def test_app_contribution_reads_facts_only_triage_evidence(tmp_path: Path) -> None:

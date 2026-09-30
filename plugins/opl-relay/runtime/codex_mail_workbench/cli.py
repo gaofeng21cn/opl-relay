@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import getpass
 import json
 import shutil
+import sqlite3
 import sys
 from email.utils import getaddresses
 from pathlib import Path
@@ -36,6 +38,7 @@ from .persona import (
     load_persona_mail_context,
     validate_approved_persona_draft_context,
 )
+from .people import read_memory_evidence, read_people
 from .paths import (
     default_config_path,
     default_db_path,
@@ -49,6 +52,7 @@ from .paths import (
 )
 from .store import (
     connect_email_store,
+    connect_email_store_readonly,
     fetch_raw_email_by_storage_ref,
     get_message_by_storage_ref,
     list_messages,
@@ -89,15 +93,16 @@ APP_CONTRIBUTION_DATA_CONTRACTS = {
     "communications.mail.v1#draft.inspect": {
         "operation": "read",
         "input": {
-            "draft_ref": {"type": "string", "required": True},
+            "draft_ref": {"type": "string", "required": False},
+            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
         },
         "result": "communications.mail.v1#draft.inspect.result",
     },
     "communications.mail.v1#triage.evidence": {
         "operation": "read",
         "input": {
-            "source_ref": {"type": "string", "required": True},
-            "policy_refs": {"type": "string[]", "required": True, "min_items": 1},
+            "source_ref": {"type": "string", "required": False},
+            "policy_refs": {"type": "string[]", "required": False, "min_items": 1},
         },
         "result": "communications.mail.v1#triage.evidence.result",
     },
@@ -109,6 +114,14 @@ APP_CONTRIBUTION_DATA_CONTRACTS = {
             "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
         },
         "result": "personal.memory.v1#search.result",
+    },
+    "personal.memory.v1#people": {
+        "operation": "read",
+        "input": {
+            "query": {"type": "string", "required": False},
+            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
+        },
+        "result": "personal.memory.v1#people.result",
     },
 }
 
@@ -149,6 +162,19 @@ APP_CONTRIBUTION_ACTION_CONTRACTS = {
             "open": {"type": "boolean", "required": False},
         },
         "result": "communications.mail.v1#draft.create_from_persona.result",
+    },
+    "communications.mail.v1#draft.reply_all": {
+        "operation": "execute",
+        "confirmation_required": False,
+        "input": {
+            "account": {"type": "string", "required": True},
+            "apple_mail_account": {"type": "string", "required": True},
+            "apple_mail_id": {"type": "integer", "required": True, "minimum": 1},
+            "mailbox_path": {"type": "string", "required": True},
+            "body": {"type": "string", "required": True},
+            "open": {"type": "boolean", "required": False},
+        },
+        "result": "communications.mail.v1#draft.reply_all.result",
     },
     "communications.mail.v1#draft.inspect": {
         "operation": "execute",
@@ -197,6 +223,93 @@ APP_CONTRIBUTION_ACTION_CONTRACTS = {
         "result": "personal.memory.v1#inspect.result",
     },
 }
+
+
+APP_CONTRIBUTION_DATA_ACTIONS = {
+    "communications.mail.v1#recent": ["communications.mail.v1#sync.incremental"],
+    "communications.mail.v1#draft.inspect": [
+        "communications.mail.v1#draft.create",
+        "communications.mail.v1#draft.reply_all",
+        "communications.mail.v1#draft.create_from_persona",
+        "communications.mail.v1#draft.inspect",
+        "communications.mail.v1#draft.open",
+        "communications.mail.v1#draft.send",
+    ],
+    "communications.mail.v1#triage.evidence": [],
+    "personal.memory.v1#people": ["personal.context.v1#build", "personal.memory.v1#inspect"],
+    "personal.memory.v1#search": ["personal.memory.v1#inspect"],
+}
+
+
+def _app_contribution_collection(
+    ref: str,
+    data: dict[str, object],
+    *,
+    state: str = "ready",
+    reason: str = "",
+    **legacy: object,
+) -> dict[str, object]:
+    command_inputs = {}
+    for action_ref in APP_CONTRIBUTION_DATA_ACTIONS[ref]:
+        contract = APP_CONTRIBUTION_ACTION_CONTRACTS[action_ref]
+        schema = copy.deepcopy(contract["input"])
+        for field in schema.values():
+            if field["type"] == "string[]":
+                field["type"] = "string_list"
+        command_inputs[action_ref] = {
+            "input_schema": schema,
+            "defaults": {},
+            "confirmation_required": contract["confirmation_required"],
+        }
+    return {
+        **legacy,
+        "kind": "data",
+        "state": state,
+        "data": {**data, "command_inputs": command_inputs},
+        **({"reason": reason} if reason else {}),
+    }
+
+
+def _app_contribution_draft_item(draft: dict[str, object], *, inspection_required: bool) -> dict[str, object]:
+    draft_ref = draft["draft_ref"]
+    actions = [{"action_ref": "communications.mail.v1#draft.inspect", "input": {"draft_ref": draft_ref}}]
+    if draft.get("state") == "draft":
+        actions.extend(
+            {"action_ref": action_ref, "input": {"draft_ref": draft_ref}}
+            for action_ref in ("communications.mail.v1#draft.open", "communications.mail.v1#draft.send")
+        )
+    return {
+        **draft,
+        "id": draft_ref,
+        "title": draft.get("subject") or draft_ref,
+        "inspection_required": inspection_required,
+        "actions": actions,
+    }
+
+
+def _app_contribution_drafts(args: argparse.Namespace, *, limit: int) -> dict[str, object]:
+    path = Path(args.draft_db).expanduser()
+    if not path.exists():
+        return {"items": [], "count": 0, "store_state": "missing"}
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT draft_ref, account_id, provider_account, provider_uuid, state, created_at, updated_at
+            FROM mail_drafts WHERE state IN ('draft', 'sending', 'unknown')
+            ORDER BY updated_at DESC, draft_ref LIMIT ?
+            """,
+            (limit + 1,),
+        ).fetchall()
+        items = [_app_contribution_draft_item(dict(row), inspection_required=True) for row in rows[:limit]]
+        return {"items": items, "count": len(items), "store_state": "present", "has_more": len(rows) > limit}
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        return {"items": [], "count": 0, "store_state": "schema_missing"}
+    finally:
+        conn.close()
 
 
 def emit(payload: object, *, as_json: bool) -> None:
@@ -342,10 +455,10 @@ def _app_contribution_input_keys(
 
 def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str, object]) -> object:
     if ref == "communications.mail.v1#recent":
-        conn = connect_email_store(Path(args.db).expanduser())
+        conn = connect_email_store_readonly(Path(args.db).expanduser())
         try:
-            return {
-                "messages": list_messages(
+            messages = (
+                list_messages(
                     conn,
                     account_ids=[_app_contribution_string(payload.get("account"), "account")]
                     if payload.get("account") is not None
@@ -356,36 +469,77 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
                     limit=_app_contribution_integer(
                         payload.get("limit"), "limit", default=20, minimum=1, maximum=2000
                     ),
-                )
-            }
-        finally:
-            conn.close()
-    if ref == "communications.mail.v1#draft.inspect":
-        draft_ref = _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True)
-        service, _ = draft_service(args)
-        return {"draft": service.inspect(draft_ref)}
-    if ref == "communications.mail.v1#triage.evidence":
-        return {
-            "evidence": build_triage_evidence(
-                mail_db_path=Path(args.db).expanduser(),
-                source_ref=_app_contribution_string(
-                    payload.get("source_ref"), "source_ref", required=True
-                ),
-                policy_refs=_app_contribution_strings(
-                    payload.get("policy_refs"), "policy_refs", required=True
-                ),
+                ) if conn is not None else []
             )
-        }
+            items = [
+                {**message, "id": message["storage_ref"], "title": message["subject"], "actions": [
+                    {"action_ref": "communications.mail.v1#sync.incremental", "input": {"account": message["account_id"]}},
+                ]}
+                for message in messages
+            ]
+            return _app_contribution_collection(
+                ref, {"items": items, "count": len(items), "store_state": "present" if conn is not None else "missing",
+                      "source_policy": {"owner": "EmailStore", "read_only": True, "local_snapshot_only": True}},
+                messages=messages,
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+    if ref == "communications.mail.v1#draft.inspect":
+        draft_ref = _app_contribution_string(payload.get("draft_ref"), "draft_ref")
+        if not draft_ref:
+            data = _app_contribution_drafts(args, limit=_app_contribution_integer(
+                payload.get("limit"), "limit", default=50, minimum=1, maximum=500,
+            ))
+            data["source_policy"] = {"owner": "DraftLedger", "read_only": True, "metadata_only": True,
+                                     "fresh_inspection_required_before_approval": True}
+            return _app_contribution_collection(ref, data, drafts=data["items"])
+        service, _ = draft_service(args)
+        draft = service.inspect(draft_ref)
+        if draft.get("draft_ref") != draft_ref:
+            raise ValueError("draft inspection identity mismatch")
+        item = _app_contribution_draft_item(draft, inspection_required=False)
+        return _app_contribution_collection(ref, {"items": [item], "count": 1}, draft=draft)
+    if ref == "communications.mail.v1#triage.evidence":
+        if not payload.get("source_ref") or not payload.get("policy_refs"):
+            return _app_contribution_collection(
+                ref, {"items": [], "count": 0}, state="input_required",
+                reason="source_ref and policy_refs are required for mail triage evidence",
+            )
+        evidence = build_triage_evidence(
+            mail_db_path=Path(args.db).expanduser(),
+            source_ref=_app_contribution_string(
+                payload.get("source_ref"), "source_ref", required=True
+            ),
+            policy_refs=_app_contribution_strings(
+                payload.get("policy_refs"), "policy_refs", required=True
+            ),
+        )
+        return _app_contribution_collection(
+            ref, {"items": [{"id": payload["source_ref"], **evidence, "actions": []}], "count": 1},
+            evidence=evidence,
+        )
+    if ref == "personal.memory.v1#people":
+        return _app_contribution_collection(
+            ref, read_people(
+                memory_store(args),
+                query=_app_contribution_string(payload.get("query"), "query"),
+                limit=_app_contribution_integer(
+                    payload.get("limit"), "limit", default=50, minimum=1, maximum=500
+                ),
+            ),
+        )
     if ref == "personal.memory.v1#search":
-        return {
-            "memories": memory_store(args).list_memories(
+        return _app_contribution_collection(
+            ref, read_memory_evidence(
+                memory_store(args),
                 entity=_app_contribution_string(payload.get("entity"), "entity"),
                 query=_app_contribution_string(payload.get("query"), "query"),
                 limit=_app_contribution_integer(
                     payload.get("limit"), "limit", default=50, minimum=1, maximum=500
                 ),
-            )
-        }
+            ),
+        )
     raise ValueError("unsupported data ref")
 
 
@@ -444,6 +598,24 @@ def _app_contribution_action(args: argparse.Namespace, ref: str, payload: dict[s
             bcc=_app_contribution_strings(payload.get("bcc"), "bcc"),
             visible=_app_contribution_bool(payload.get("open"), "open", default=True),
         )
+    if ref == "communications.mail.v1#draft.reply_all":
+        account = load_account(
+            Path(args.config).expanduser(),
+            _app_contribution_string(payload.get("account"), "account", required=True),
+        )
+        service, _ = draft_service(args)
+        return {"draft": service.reply_all(
+            account_id=account.account_id,
+            sender=account.email,
+            provider_account=_app_contribution_string(payload.get("apple_mail_account"), "apple_mail_account", required=True),
+            source_message_id=_app_contribution_integer(
+                payload.get("apple_mail_id"), "apple_mail_id", default=1, minimum=1, maximum=sys.maxsize,
+            ),
+            mailbox_path=_app_contribution_string(payload.get("mailbox_path"), "mailbox_path", required=True),
+            body_text=_app_contribution_string(payload.get("body"), "body", required=True),
+            attachments=[],
+            visible=_app_contribution_bool(payload.get("open"), "open", default=True),
+        )}
     if ref == "communications.mail.v1#draft.inspect":
         service, _ = draft_service(args)
         return {

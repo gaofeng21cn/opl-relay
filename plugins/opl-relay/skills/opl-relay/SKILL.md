@@ -64,6 +64,36 @@ into the plugin or authorize a mailbox write by themselves.
 
 ## Mail And Context
 
+For a read-only People or memory-evidence view, use the Package's
+`app-contribution` ABI with operation `read` and ref
+`personal.memory.v1#people` or the existing `personal.memory.v1#search`.
+People accepts optional `query` and `limit` (1..500, default 50); memory search
+also accepts `entity`. Both return a ready data envelope with bounded `items`,
+`count` and `source_policy`. People reuses MemoryStore entity identities,
+names, aliases and kinds with approved-memory counts, summaries and stable
+source references. It does not create a contact database or copy mail. Missing
+storage returns an empty result without creating a Profile or database; do not
+run `setup init` just to read these views.
+
+Default projections include only approved memory. Candidates are for explicit
+review through `memory candidates` and `memory inspect`, never default context
+injection. Inspect a selected memory for full evidence rather than treating a
+truncated summary as the source. Collection `command_inputs[action_ref]`
+supplies action-derived `input_schema` and empty `defaults`; item `actions`
+binds declared actions to exact owner inputs, never approval. The descriptor's explicit
+`app_contributions.ui[]` entries let Framework mount People (`list_detail`)
+and memory evidence (`timeline`) in `settings.section`; hosts must not infer
+placements from navigation or hardcode Relay-specific UI.
+
+Inbox and Drafts also expose `data.items` for generic collection rendering while
+preserving legacy mail/snapshot fields. Default Drafts reads only existing ledger
+metadata; inspect a selected `draft_ref` through the owner before reviewing its
+current content. Never copy a cached fingerprint into send approval automatically.
+Unknown or already claimed drafts must not be reopened or resent. The ABI Reply
+All action requires the complete native Apple Mail account/id/mailbox tuple, not
+a converted `email-store://` identity. A triage view without explicit source and
+policy references returns `input_required` rather than ready evidence.
+
 Use `accounts` as account truth. Sync explicitly when freshness matters, then
 use `recent`, `search`, and `read` through stable `email-store://` references.
 Before drafting for a known person or project, run `context build`. Use only

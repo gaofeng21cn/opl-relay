@@ -42,6 +42,7 @@ DATA_REFS = {
     "communications.mail.v1#triage.evidence",
     "communications.mail.v1#draft.inspect",
     "personal.memory.v1#search",
+    "personal.memory.v1#people",
 }
 
 
@@ -98,6 +99,7 @@ def test_package_content_lock_matches_plugin_bytes() -> None:
     assert content_lock["algorithm"] == "sha256"
     assert content_lock["canonicalization"] == "ordered_path_length_file_length_bytes"
     assert "opl-package.json" not in content_lock["paths"]
+    assert "runtime/codex_mail_workbench/people.py" in content_lock["paths"]
     for relative_path in content_lock["paths"]:
         path_bytes = relative_path.encode("utf-8")
         file_bytes = (PLUGIN_ROOT / relative_path).read_bytes()
@@ -143,6 +145,7 @@ def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions()
         "views",
         "commands",
         "badges",
+        "ui",
     }
 
     navigation_ids = [item["navigation_id"] for item in contributions["navigation"]]
@@ -161,6 +164,22 @@ def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions()
     } <= set(command_ids)
     assert {item["action_ref"] for item in contributions["commands"]} == ACTION_REFS
     assert {item["data_ref"] for item in contributions["views"]} == DATA_REFS
+    assert {item["view_id"] for item in contributions["ui"]} == set(view_ids)
+    assert len({item["contribution_id"] for item in contributions["ui"]}) == len(view_ids)
+    for entry in contributions["ui"]:
+        assert set(entry) == {
+            "contribution_id", "slot", "contribution_kind", "trust_tier",
+            "scope", "view_id", "sort_order",
+        }
+        assert entry["slot"] == "settings.section"
+        assert entry["contribution_kind"] == "view"
+        assert entry["trust_tier"] == "declarative"
+        assert entry["scope"] == "root"
+    views_by_id = {item["view_id"]: item for item in contributions["views"]}
+    assert views_by_id["relay.people"]["view_type"] == "list_detail"
+    assert views_by_id["relay.people"]["data_ref"] == "personal.memory.v1#people"
+    assert views_by_id["relay.memory"]["view_type"] == "timeline"
+    assert views_by_id["relay.memory"]["data_ref"] == "personal.memory.v1#search"
     assert abi == {
         "schema_version": "opl-package-app-contribution-cli.v1",
         "transport": "stdin_json_stdout_json",
@@ -214,13 +233,15 @@ def test_app_contribution_abi_executes_from_the_plugin_carrier(tmp_path: Path) -
     )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {
-        "schema_version": "opl-package-app-contribution-response.v1",
-        "ok": True,
-        "ref": "communications.mail.v1#recent",
-        "operation": "read",
-        "result": {"messages": []},
-    }
+    response = json.loads(result.stdout)
+    assert response["schema_version"] == "opl-package-app-contribution-response.v1"
+    assert response["ok"] is True
+    assert response["ref"] == "communications.mail.v1#recent"
+    assert response["operation"] == "read"
+    assert response["result"]["messages"] == []
+    assert response["result"]["kind"] == "data"
+    assert response["result"]["state"] == "ready"
+    assert response["result"]["data"]["items"] == []
 
 
 def test_repo_marketplace_exposes_the_plugin_without_owning_user_data() -> None:

@@ -52,6 +52,7 @@
       "runtime/codex_mail_workbench/memory.py",
       "runtime/codex_mail_workbench/message.py",
       "runtime/codex_mail_workbench/paths.py",
+      "runtime/codex_mail_workbench/people.py",
       "runtime/codex_mail_workbench/persona.py",
       "runtime/codex_mail_workbench/server_drafts.py",
       "runtime/codex_mail_workbench/store.py",
@@ -61,7 +62,7 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:12e93e86ac74c243a7d6effb19187509ac5c0f2a8bb7c30a2530a098128cb8a8"
+    "digest": "sha256:c7d395b436b68705532f8f17ad65ff263eea2d9dcf89710e2b163ff5cc97d349"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
@@ -125,6 +126,15 @@
         },
         "view_id": "relay.people",
         "sort_order": 120
+      },
+      {
+        "navigation_id": "relay.memory",
+        "label_i18n": {
+          "zh-CN": "记忆证据",
+          "en-US": "Memory evidence"
+        },
+        "view_id": "relay.memory",
+        "sort_order": 125
       }
     ],
     "views": [
@@ -181,20 +191,83 @@
       },
       {
         "view_id": "relay.people",
-        "view_type": "timeline",
+        "view_type": "list_detail",
         "title_i18n": {
           "zh-CN": "联系人",
           "en-US": "People"
         },
-        "data_ref": "personal.memory.v1#search",
+        "data_ref": "personal.memory.v1#people",
         "command_ids": [
           "relay.context.build",
           "relay.memory.inspect"
         ],
         "empty_state_i18n": {
-          "zh-CN": "没有已批准的关系记忆",
-          "en-US": "No approved relationship memory"
+          "zh-CN": "没有已登记的联系人、组织或项目",
+          "en-US": "No registered people, organizations, or projects"
         }
+      },
+      {
+        "view_id": "relay.memory",
+        "view_type": "timeline",
+        "title_i18n": {
+          "zh-CN": "记忆证据",
+          "en-US": "Memory evidence"
+        },
+        "data_ref": "personal.memory.v1#search",
+        "command_ids": [
+          "relay.memory.inspect"
+        ],
+        "empty_state_i18n": {
+          "zh-CN": "没有已批准的记忆证据",
+          "en-US": "No approved memory evidence"
+        }
+      }
+    ],
+    "ui": [
+      {
+        "contribution_id": "relay.inbox",
+        "slot": "settings.section",
+        "contribution_kind": "view",
+        "trust_tier": "declarative",
+        "scope": "root",
+        "view_id": "relay.inbox",
+        "sort_order": 100
+      },
+      {
+        "contribution_id": "relay.triage",
+        "slot": "settings.section",
+        "contribution_kind": "view",
+        "trust_tier": "declarative",
+        "scope": "root",
+        "view_id": "relay.triage",
+        "sort_order": 105
+      },
+      {
+        "contribution_id": "relay.drafts",
+        "slot": "settings.section",
+        "contribution_kind": "view",
+        "trust_tier": "declarative",
+        "scope": "root",
+        "view_id": "relay.drafts",
+        "sort_order": 110
+      },
+      {
+        "contribution_id": "relay.people",
+        "slot": "settings.section",
+        "contribution_kind": "view",
+        "trust_tier": "declarative",
+        "scope": "root",
+        "view_id": "relay.people",
+        "sort_order": 120
+      },
+      {
+        "contribution_id": "relay.memory",
+        "slot": "settings.section",
+        "contribution_kind": "view",
+        "trust_tier": "declarative",
+        "scope": "root",
+        "view_id": "relay.memory",
+        "sort_order": 125
       }
     ],
     "commands": [

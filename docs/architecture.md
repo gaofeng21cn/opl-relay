@@ -33,6 +33,8 @@ OPL Persona or OPL App.
 - Protocol: explicit IMAP synchronization with per-folder cursors.
 - Store: local SQLite raw EML store with stable `email-store://` identities.
 - Memory: evidence-backed candidate and approved relationship memory.
+- People: a bounded, read-only projection of that same MemoryStore's entities
+  and approved evidence; it owns no contact database or mailbox copy.
 - Knowledge: read-only Obsidian indexing into a rebuildable local index.
 - Context: bounded packages combining approved memory, selected mail evidence,
   and relevant knowledge excerpts.
@@ -141,6 +143,79 @@ mail-memory://entity/<uuid>
 mail-memory://fact/<uuid>
 mail-draft://apple-mail/<account_id>/<apple-mail-uuid>
 ```
+
+## People And Memory App Projection
+
+The carrier's `app-contribution` JSON ABI exposes
+`personal.memory.v1#people` (`query`, `limit`, default 50, range 1..500) and keeps
+`personal.memory.v1#search` (`entity`, `query`, `limit`) for approved memory
+evidence. Both return `result = {kind: "data", state: "ready", data: {...}}`;
+`data.items` is the returned batch, `data.count` is its length, and
+`data.source_policy` states the read-only, derived-evidence and approved-only
+boundary. Missing storage returns an empty ready result with
+`store_state="missing"`; neither route initializes a Profile, creates a database,
+ensures a schema, synchronizes mail, or writes a projection cache.
+
+People uses the existing `mail-memory://entity/<uuid>` as both `id` and
+`entity_ref`, with `name`, up to 20 aliases and the existing person, organization,
+or project `kind`. Search matches names, aliases, email selectors and approved
+memory content before applying the entity limit. Email selectors are never
+returned as a copied address book. `has_more` marks a bounded entity batch.
+Each entity includes the complete `approved_memory_count`, up to five newest
+approved memory summaries, and up to ten stable `source_refs`. Each memory has
+its original `mail-memory://fact/<uuid>`, a summary capped at 280 characters,
+up to ten source references, their count, and explicit truncation flags. Raw
+MIME bodies, evidence excerpts and source hashes are not included in these
+default projections. The existing inspect action resolves full evidence only
+when explicitly requested.
+
+Candidate memories remain available only for explicit review through the
+existing memory lifecycle commands and inspect route. They do not appear in
+People summaries or the evidence timeline, cannot match People content search,
+and are never injected into the default drafting context. This projection adds
+no approval or mailbox mutation command.
+
+The descriptor binds `relay.people` to a `list_detail` view and `relay.memory`
+to a `timeline` view. Framework mounts only explicit `app_contributions.ui[]`
+placements, not `navigation` or `views` alone. Every displayed Relay view has a
+`settings.section` entry with `contribution_kind="view"`,
+`trust_tier="declarative"`, `scope="root"` and a declared `view_id`. Studio can
+consume these entries through Framework's dynamic UI projection without a
+Relay-specific package switch. Collection `command_inputs[action_ref]` supplies
+`input_schema` derived from the existing action contract and empty `defaults`;
+the UI projection maps `string[]` to the generic form's `string_list` without
+changing the execution contract. Item `actions` binds declared action references
+to exact owner inputs, including memory references and person/project selectors.
+Neither metadata field declares a command or grants authorization. Framework aggregation and
+actual Studio mounting remain separate host-owned acceptance surfaces.
+
+### Inbox And Draft Collection ABI
+
+All displayed Relay read models expose `data.items`, `data.count` and command
+input metadata. Inbox keeps the legacy `messages` result field and assigns each
+row its original `storage_ref` identity. A row's sync action uses only its actual
+account ID; a mail storage reference is not an Apple Mail Reply All identity.
+The read route opens only an existing EmailStore and never initializes one.
+
+Without `draft_ref`, `communications.mail.v1#draft.inspect` lists up to 50
+existing non-sent DraftLedger identities (optional `limit`, range 1..500). It
+opens the ledger read-only, emits no cached body or approval, and marks rows
+`inspection_required=true`. Missing storage is an empty collection, not a new
+ledger. With `draft_ref`, the existing owner inspect path returns its full
+snapshot and retains the legacy `draft` field; that explicit inspection may
+record its existing owner receipt. Draft rows bind inspect/open/send to their
+exact `draft_ref`; only `draft` state offers open/send. The send input never
+auto-fills `approval`: user review, fresh fingerprint matching, provider domain
+guards, send claiming and unknown-result handling remain in the original owner
+implementation. Confirmation policy stays aligned with the descriptor and
+action contracts.
+
+The already-declared Reply All action now reaches the same existing
+`DraftService.reply_all` through the ABI, requiring the complete account,
+`apple_mail_account`, positive `apple_mail_id`, `mailbox_path` and new body.
+It never infers that native tuple from Inbox evidence or sends mail. Triage
+without an explicit source and policy references returns `input_required`
+instead of pretending that its evidence view is ready.
 
 ## Mail Membership, Search, And Review Progress
 
