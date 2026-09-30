@@ -53,6 +53,7 @@ def load_json(path: Path) -> dict:
 def test_package_identity_capabilities_and_plugin_version_are_aligned() -> None:
     package = load_json(PACKAGE_PATH)
     plugin = load_json(PLUGIN_PATH)
+    standard_plugin = load_json(PLUGIN_ROOT / "plugin.json")
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert package["surface_kind"] == "opl_capability_package_manifest.v2"
@@ -61,6 +62,7 @@ def test_package_identity_capabilities_and_plugin_version_are_aligned() -> None:
     assert (
         package["version"]
         == plugin["version"]
+        == standard_plugin["version"]
         == project["project"]["version"]
         == __version__
     )
