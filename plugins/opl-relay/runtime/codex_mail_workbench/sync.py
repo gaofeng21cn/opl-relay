@@ -6,6 +6,7 @@ import json
 import re
 import socket
 import fcntl
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -14,6 +15,42 @@ from .config import MailAccount, keychain_read_secret, load_account
 from .message import extract_attachments, parse_headers
 from .paths import default_config_path, default_db_path, default_sync_state_dir
 from .store import ACTIVE_FOLDERS, HISTORY_FOLDERS, connect_email_store, reconcile_folder, upsert_email_message
+
+
+DEFAULT_SYNC_MAX_SECONDS = 120.0
+
+
+class SyncBudgetExceeded(Exception):
+    """The bounded sync window elapsed before the requested scope completed."""
+
+
+class SyncBudget:
+    def __init__(self, max_duration_sec: float | None) -> None:
+        seconds = DEFAULT_SYNC_MAX_SECONDS if max_duration_sec is None else float(max_duration_sec)
+        if seconds <= 0:
+            raise ValueError("max_duration_sec must be greater than zero")
+        self.seconds = seconds
+        self.deadline = time.monotonic() + seconds
+
+    def remaining(self) -> float:
+        return self.deadline - time.monotonic()
+
+    def before_io(self, client: imaplib.IMAP4 | None, stage: str) -> None:
+        remaining = self.remaining()
+        if remaining <= 0:
+            raise SyncBudgetExceeded(f"sync time budget exceeded before {stage}")
+        if client is not None:
+            sock = getattr(client, "sock", None)
+            if sock is not None:
+                # Keep every blocking IMAP operation inside the same overall
+                # budget. The previous implementation only bounded each
+                # socket read, so a multi-folder dry-run could wait forever.
+                sock.settimeout(max(0.01, min(60.0, remaining)))
+
+    def close_timeout(self, client: imaplib.IMAP4 | None) -> None:
+        sock = getattr(client, "sock", None) if client is not None else None
+        if sock is not None:
+            sock.settimeout(max(0.01, min(2.0, max(0.0, self.remaining()))))
 
 
 def now_iso() -> str:
@@ -91,8 +128,15 @@ def parse_fetch_uid_rfc822_map(data: list[object]) -> dict[int, bytes]:
     return out
 
 
-def fetch_message_batch(client: imaplib.IMAP4, uids: list[int]):
+def fetch_message_batch(
+    client: imaplib.IMAP4,
+    uids: list[int],
+    *,
+    budget: SyncBudget | None = None,
+):
     """Bound IMAP responses by bytes; large attachments use partial PEEK reads."""
+    before_io = budget.before_io if budget is not None else lambda _client, _stage: None
+    before_io(client, "FETCH sizes")
     typ, data = client.uid("fetch", ",".join(map(str, uids)), "(UID RFC822.SIZE)")
     if typ != "OK":
         raise ValueError("FETCH sizes rejected")
@@ -116,6 +160,7 @@ def fetch_message_batch(client: imaplib.IMAP4, uids: list[int]):
         than by trusting the declared size.
         """
         try:
+            before_io(client, f"FETCH retry UID {uid}")
             typ, fetched = client.uid("fetch", str(uid), "(UID BODY.PEEK[])")
         except (OSError, imaplib.IMAP4.error):
             return False
@@ -124,6 +169,7 @@ def fetch_message_batch(client: imaplib.IMAP4, uids: list[int]):
         return parse_fetch_uid_rfc822_map(fetched).get(uid) == expected
 
     def fetch_small(group):
+        before_io(client, "FETCH bodies")
         typ, fetched = client.uid("fetch", ",".join(map(str, group)), "(UID BODY.PEEK[])")
         if typ != "OK":
             raise ValueError("FETCH body rejected")
@@ -152,6 +198,7 @@ def fetch_message_batch(client: imaplib.IMAP4, uids: list[int]):
         for offset in range(0, size, 1024 * 1024):
             length = min(1024 * 1024, size - offset)
             try:
+                before_io(client, f"FETCH partial UID {uid}")
                 typ, fetched = client.uid("fetch", str(uid), f"(UID BODY.PEEK[]<{offset}.{length}>)")
             except (OSError, imaplib.IMAP4.error) as exc:
                 raise ValueError(f"partial FETCH failed for UID {uid} at byte {offset}: {type(exc).__name__}") from exc
@@ -187,11 +234,14 @@ def _sync_account(
     dry_run: bool = False,
     scope: str = "all",
     folder: str = "",
+    max_duration_sec: float | None = DEFAULT_SYNC_MAX_SECONDS,
 ) -> dict[str, object]:
     account = load_account(config_path, account_id)
     credential = keychain_read_secret(account.imap.credential_ref,
                                       fallback_keychain=account.imap.fallback_keychain)
-    client = connect_imap(account)
+    budget = SyncBudget(max_duration_sec)
+    client = connect_imap(account, min(60.0, budget.remaining()))
+    budget.before_io(client, "mailbox login")
     client.login(account.imap.username, credential.value)
     state_path = state_dir / f"{account_id}.json"
     state = load_json(state_path, {"account_id": account_id, "folders": {}})
@@ -207,9 +257,23 @@ def _sync_account(
         "folders": [],
         "new_messages": 0,
         "dry_run": dry_run,
+        "max_duration_sec": budget.seconds,
+        "timed_out": False,
+        "next_folders": [],
     }
     try:
-        typ, box_lines = client.list()
+        try:
+            budget.before_io(client, "folder list")
+            typ, box_lines = client.list()
+        except SyncBudgetExceeded as exc:
+            summary["ok"] = False
+            summary["timed_out"] = True
+            summary["error"] = str(exc)
+            return summary
+        except (OSError, imaplib.IMAP4.error) as exc:
+            summary["ok"] = False
+            summary["error"] = f"{type(exc).__name__}: {exc}"
+            return summary
         if typ != "OK" or not box_lines:
             raise RuntimeError("无法读取 IMAP 文件夹列表")
         sync_folders = [
@@ -231,18 +295,21 @@ def _sync_account(
             sync_folders = [name for name in sync_folders if name.lower() in names or (
                 scope == "history" and (name.lower() == "bill" or
                 name.lower().startswith(("archive/", "archives/", "bill/", "bill "))))]
-        for folder_name in sync_folders:
+        for folder_index, folder_name in enumerate(sync_folders):
+            summary["next_folders"] = sync_folders[folder_index:]
             folder_slug = sanitize_folder_name(folder_name)
             if not dry_run:
                 with conn:
                     conn.execute("UPDATE folder_snapshots SET complete=0 WHERE account_id=? AND folder_slug=?", (account_id, folder_slug))
             select_name = folder_name.replace("\\", "\\\\").replace('"', '\\"')
             try:
+                budget.before_io(client, f"SELECT {folder_name}")
                 typ_sel, exists_data = client.select(f'"{select_name}"', readonly=True)
                 if typ_sel != "OK":
                     raise ValueError("SELECT failed")
                 uidvalidity = int(client.response("UIDVALIDITY")[1][0])
                 expected_count = int(exists_data[0])
+                budget.before_io(client, f"SEARCH {folder_name}")
                 typ_search, uid_data = client.uid("search", "ALL")
                 if typ_search != "OK" or len(uid_data) != 1 or not isinstance(uid_data[0], bytes):
                     raise ValueError("incomplete SEARCH ALL response")
@@ -250,6 +317,12 @@ def _sync_account(
                 if uidvalidity <= 0 or any(u <= 0 for u in remote_uids) or len(set(remote_uids)) != expected_count or len(remote_uids) != expected_count:
                     raise ValueError("SELECT/SEARCH snapshot mismatch; retry sync")
                 checked_at = now_iso()
+            except SyncBudgetExceeded as exc:
+                summary["ok"] = False
+                summary["timed_out"] = True
+                summary["error"] = str(exc)
+                summary["folders"].append({"folder": folder_name, "complete": False, "error": str(exc)})
+                break
             except (TypeError, ValueError, IndexError, OSError, imaplib.IMAP4.error) as exc:
                 summary["ok"] = False
                 summary["folders"].append({"folder": folder_name, "complete": False, "error": str(exc)})
@@ -266,14 +339,21 @@ def _sync_account(
             folder_new = 0
             fetched_uids: list[int] = []
             fetch_errors: list[str] = []
-            for offset in range(0, len(scan_uids), 10):
-                batch = scan_uids[offset:offset + 10]
-                try:
-                    for uid, raw_msg in fetch_message_batch(client, batch):
-                        fetched_uids.append(uid)
-                        headers = parse_headers(raw_msg)
-                        raw_hash = hashlib.sha256(raw_msg).hexdigest()
-                        if not dry_run:
+            if dry_run:
+                # A dry-run is an enumeration preview. It must never download
+                # message bodies: the old behavior turned a harmless planning
+                # command into a full historical fetch and kept the Weixin
+                # foreground turn polling until its 900-second limit.
+                if scan_uids:
+                    fetch_errors.append("dry-run: message bodies not fetched")
+            else:
+                for offset in range(0, len(scan_uids), 10):
+                    batch = scan_uids[offset:offset + 10]
+                    try:
+                        for uid, raw_msg in fetch_message_batch(client, batch, budget=budget):
+                            fetched_uids.append(uid)
+                            headers = parse_headers(raw_msg)
+                            raw_hash = hashlib.sha256(raw_msg).hexdigest()
                             upsert_email_message(
                                 conn, account_id=account_id, folder=folder_name,
                                 folder_slug=folder_slug, uid=uid, uidvalidity=uidvalidity,
@@ -282,14 +362,18 @@ def _sync_account(
                                 raw_sha256=raw_hash, raw_eml=raw_msg,
                                 attachments=extract_attachments(raw_msg), ingest_ts=now_iso(),
                             )
-                        folder_new += 1
-                except (socket.timeout, TimeoutError, OSError, ValueError, imaplib.IMAP4.error) as exc:
-                    fetch_errors.append(f"{type(exc).__name__}: {exc}")
-                    break  # The socket may be unusable; retry missing UIDs next run.
+                            folder_new += 1
+                    except SyncBudgetExceeded as exc:
+                        fetch_errors.append(str(exc))
+                        summary["timed_out"] = True
+                        break
+                    except (socket.timeout, TimeoutError, OSError, ValueError, imaplib.IMAP4.error) as exc:
+                        fetch_errors.append(f"{type(exc).__name__}: {exc}")
+                        break  # The socket may be unusable; retry missing UIDs next run.
             available = known | set(fetched_uids)
             remaining = set(remote_uids) - available
             failed = set(scan_uids) - set(fetched_uids)
-            complete = not remaining and not failed
+            complete = not remaining and (dry_run or not failed)
             if not dry_run:
                 reconcile_folder(conn, account=account_id, folder=folder_name,
                                  folder_slug=folder_slug, uidvalidity=uidvalidity,
@@ -315,26 +399,32 @@ def _sync_account(
                 summary["ok"] = False
             summary["new_messages"] = int(summary["new_messages"]) + folder_new
             assert isinstance(summary["folders"], list)
-            summary["folders"].append(
-                {
-                    "folder": folder_name,
-                    "folder_slug": folder_slug,
-                    "remote_count": len(remote_uids),
-                    "scanned": len(scan_uids),
-                    "new_messages": folder_new,
-                    "complete": complete,
-                    "remaining": len(remaining),
-                    "failed": len(failed),
-                    "uidvalidity": uidvalidity,
-                    "errors": fetch_errors,
-                }
-            )
+            folder_result = {
+                "folder": folder_name,
+                "folder_slug": folder_slug,
+                "remote_count": len(remote_uids),
+                "scanned": len(scan_uids),
+                "new_messages": folder_new,
+                "complete": complete,
+                "remaining": len(remaining),
+                "failed": len(failed),
+                "uidvalidity": uidvalidity,
+                "errors": fetch_errors,
+            }
+            if dry_run:
+                folder_result["would_fetch"] = len(scan_uids)
+                folder_result["fetch_skipped"] = True
+            summary["folders"].append(folder_result)
+            summary["next_folders"] = sync_folders[folder_index + 1:]
+            if summary["timed_out"]:
+                break
         if not dry_run:
             dump_json(state_path, state)
         return summary
     finally:
         conn.close()
         try:
+            budget.close_timeout(client)
             client.logout()
         except Exception:
             pass

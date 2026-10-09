@@ -170,6 +170,26 @@ def test_invalid_empty_snapshot_does_not_invalidate_mail(environment):
     conn.close()
 
 
+def test_sync_budget_returns_partial_scope_instead_of_waiting_forever(environment, monkeypatch):
+    client, kwargs = environment
+    account = sync.load_account()
+    account.include_folders[:] = ["*"]
+    folders = ["INBOX", "Archive", "Sent"]
+
+    def slow_list():
+        import time
+        time.sleep(0.06)
+        return "OK", [f'(\\HasNoChildren) "/" "{name}"'.encode() for name in folders]
+
+    monkeypatch.setattr(client, "list", slow_list)
+    result = sync.sync_account(**kwargs, max_duration_sec=0.05)
+
+    assert result["ok"] is False
+    assert result["timed_out"] is True
+    assert result["next_folders"] == folders
+    assert result["folders"][0]["folder"] == "INBOX"
+
+
 def test_uidvalidity_reset_retains_old_bytes_and_fetches_reused_uid(environment):
     client, kwargs = environment
     sync.sync_account(**kwargs)

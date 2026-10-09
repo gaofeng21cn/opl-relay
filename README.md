@@ -159,6 +159,11 @@ opl-relay --json read 'email-store://...'
 opl-relay --json context build --person "Professor Example" --query "invitation"
 ```
 
+Each sync run has a 120-second total IMAP budget by default. A partial run
+returns `timed_out` and `next_folders` so a later run can continue; use
+`--max-seconds` to choose a different positive budget for a deliberately
+larger batch.
+
 Routine `recent` and `search` queries default to current Inbox/Sent mail. Add
 `--scope history` for a named historical correspondence search; Trash/Junk stay
 excluded. An explicit `--folder` selects that current folder. After upgrading

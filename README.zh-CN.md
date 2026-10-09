@@ -147,6 +147,10 @@ opl-relay --json read 'email-store://...'
 opl-relay --json context build --person "示例教授" --query "年度邀请"
 ```
 
+每轮同步默认有 120 秒的 IMAP 总预算。超过预算时会返回 `timed_out` 和
+`next_folders`，下一轮可以从未完成的文件夹继续；确需更大批次时，再用
+`--max-seconds` 指定一个正数预算。
+
 日常 `recent`、`search` 默认只查当前收件箱和已发送邮件。追溯历史往来时加
 `--scope history`，垃圾箱和废纸篓仍被排除；`--folder` 则明确选择一个当前文件夹。
 已有邮件库升级前应备份，升级后运行一次 `opl-relay --json index` 补齐正文索引。

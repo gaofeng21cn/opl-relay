@@ -1239,6 +1239,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         scope=args.scope,
         folder=args.folder,
+        max_duration_sec=args.max_seconds,
     )
     emit(payload, as_json=args.json)
     return 0 if payload.get("ok") else 1
@@ -1772,6 +1773,8 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--dry-run", action="store_true")
     sync.add_argument("--scope", choices=SCOPES, default="all")
     sync.add_argument("--folder", default="", help="sync one configured folder")
+    sync.add_argument("--max-seconds", type=float, default=120.0,
+                      help="每轮 IMAP 同步的总预算（默认 120 秒，超时返回可续跑的部分结果）")
     sync.set_defaults(func=cmd_sync)
 
     index = sub.add_parser("index", help="建立或补齐本地正文索引（按原文哈希去重）")

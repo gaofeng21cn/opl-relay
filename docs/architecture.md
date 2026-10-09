@@ -316,7 +316,10 @@ consume the same review table rather than maintaining competing date ledgers.
 
 `review prepare` combines active sync, pending messages, and open items across
 configured accounts in one CLI call. Its default per-folder sync limit is 200;
-remaining holes are explicit, not silently skipped. `available_for_review`
+each sync run also has a 120-second total IMAP budget by default. A budget
+expiry returns `timed_out` with `next_folders`, so remaining coverage is
+resumable rather than leaving a foreground caller polling indefinitely.
+Remaining holes are explicit, not silently skipped. `available_for_review`
 distinguishes a freshly validated Inbox snapshot with some missing bodies from
 an account whose connection or UID enumeration failed. Only the former provides
 a current queue; both keep their completeness gap visible. The caller controls
