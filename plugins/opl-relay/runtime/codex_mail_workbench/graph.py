@@ -20,8 +20,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .config import MailAccount, keychain_get_secret
-from .keychain import set_oauth_secret
+from .config import MailAccount
+from .keychain import get_oauth_secret, set_oauth_secret
 from .message import extract_attachments, parse_headers
 from .store import (connect_email_store, fetch_raw_email_by_storage_ref,
                     get_message_by_storage_ref, reconcile_folder,
@@ -81,7 +81,7 @@ def _save_token(account, token):
              "client_id": account.graph.client_id, "email": account.email.lower()}
     serialized = json.dumps(token, separators=(",", ":"))
     set_oauth_secret(account.graph.credential_ref, serialized)
-    if keychain_get_secret(account.graph.credential_ref) != serialized:
+    if get_oauth_secret(account.graph.credential_ref) != serialized:
         raise RuntimeError("OAuth Keychain readback mismatch")
 
 
@@ -167,7 +167,7 @@ class GraphClient:
                     if remaining <= 0:
                         raise GraphError(0, "oauth_refresh_busy") from None
                     time.sleep(min(0.1, remaining))
-            token = json.loads(keychain_get_secret(self.account.graph.credential_ref))
+            token = json.loads(get_oauth_secret(self.account.graph.credential_ref))
             if (token.get("client_id") != self.account.graph.client_id or
                     token.get("email") != self.account.email.lower()):
                 raise ValueError("OAuth credentials belong to a different Relay account/application")

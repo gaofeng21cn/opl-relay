@@ -1079,14 +1079,19 @@ def cmd_account_check(args: argparse.Namespace) -> int:
     account = load_account(Path(args.config).expanduser(), args.account)
     if account.graph:
         from .graph import GraphClient
-        configured = keychain_has_secret(account.graph.credential_ref)
+        from .keychain import get_oauth_secret
+        credential_error = ""
+        try:
+            configured = bool(get_oauth_secret(account.graph.credential_ref))
+        except RuntimeError as exc:
+            configured, credential_error = False, str(exc)
         payload = {"ok": True, "account": account.account_id, "email": account.email,
                    "provider": account.provider, "backend": account.backend, "credential_configured": configured,
                    "connection": {"status": "not_checked"}}
         if args.connect:
             try:
                 if not configured:
-                    raise ValueError("oauth_login_required")
+                    raise ValueError(credential_error or "oauth_login_required")
                 client = GraphClient(account)
                 client.identity()
                 from .native import Himalaya

@@ -68,7 +68,7 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:825a7e4cb089a03242819f8b222bb9eb0cc3cb74a264e155efc353db6c629930"
+    "digest": "sha256:c61409c48817d86abe238a2b14ce2fb28a657713ccf8c5fe151decc1a35f3798"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

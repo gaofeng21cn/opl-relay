@@ -1,4 +1,4 @@
-"""Store long OAuth credentials with macOS Security, without argv or TTY limits."""
+"""Read and store OAuth credentials through the authorized macOS Security API."""
 from __future__ import annotations
 
 import ctypes as C
@@ -7,7 +7,7 @@ import sys
 from .config import KEYCHAIN_SERVICE, LOGIN_KEYCHAIN
 
 
-def set_oauth_secret(reference: str, secret: str) -> None:
+def _frameworks():
     if sys.platform != "darwin":
         raise RuntimeError("OAuth credential storage requires macOS Keychain")
     security = C.CDLL("/System/Library/Frameworks/Security.framework/Security")
@@ -20,6 +20,7 @@ def set_oauth_secret(reference: str, secret: str) -> None:
         "SecKeychainAddGenericPassword": ([pointer, C.c_uint32, C.c_char_p, C.c_uint32, C.c_char_p,
                                            C.c_uint32, C.c_void_p, C.POINTER(pointer)], C.c_int32),
         "SecKeychainItemModifyAttributesAndData": ([pointer, pointer, C.c_uint32, C.c_void_p], C.c_int32),
+        "SecKeychainItemFreeContent": ([pointer, pointer], C.c_int32),
         "SecTrustedApplicationCreateFromPath": ([C.c_char_p, C.POINTER(pointer)], C.c_int32),
         "SecAccessCreate": ([pointer, pointer, C.POINTER(pointer)], C.c_int32),
         "SecKeychainItemSetAccess": ([pointer, pointer], C.c_int32),
@@ -32,6 +33,35 @@ def set_oauth_secret(reference: str, secret: str) -> None:
     core.CFStringCreateWithCString.restype = pointer
     core.CFArrayCreate.argtypes = [pointer, C.POINTER(pointer), C.c_long, pointer]
     core.CFArrayCreate.restype = pointer
+    return security, core
+
+
+def get_oauth_secret(reference: str) -> str:
+    security, core = _frameworks()
+    pointer = C.c_void_p
+    keychain, data, item = pointer(), pointer(), pointer()
+    length = C.c_uint32()
+    service, account = KEYCHAIN_SERVICE.encode(), reference.encode()
+    try:
+        status = security.SecKeychainOpen(LOGIN_KEYCHAIN.encode(), C.byref(keychain))
+        if status == 0:
+            status = security.SecKeychainFindGenericPassword(
+                keychain, len(service), service, len(account), account,
+                C.byref(length), C.byref(data), C.byref(item))
+        if status:
+            raise RuntimeError(f"macOS Keychain OAuth read failed (OSStatus {status}); unlock/authorize the login Keychain")
+        return C.string_at(data, length.value).decode("utf-8")
+    finally:
+        if data:
+            security.SecKeychainItemFreeContent(None, data)
+        for obj in (item, keychain):
+            if obj:
+                core.CFRelease(obj)
+
+
+def set_oauth_secret(reference: str, secret: str) -> None:
+    security, core = _frameworks()
+    pointer = C.c_void_p
 
     def check(status):
         if status:

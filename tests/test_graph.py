@@ -243,7 +243,7 @@ def test_token_refresh_keeps_rotated_credentials_in_keychain_only(monkeypatch, t
     token = {"client_id": "app-test", "email": ACCOUNT.email, "expires_at": 0,
              "access_token": "old-access", "refresh_token": "old-refresh", "scope": "Mail.Read User.Read"}
     saved = []
-    monkeypatch.setattr(graph, "keychain_get_secret", lambda ref: json.dumps(token))
+    monkeypatch.setattr(graph, "get_oauth_secret", lambda ref: json.dumps(token))
     monkeypatch.setattr(graph, "_token_request", lambda account, parameters:
                         {"access_token": "fresh-access", "refresh_token": "rotated-refresh"})
     monkeypatch.setattr(graph, "_save_token", lambda account, value: saved.append(value))
