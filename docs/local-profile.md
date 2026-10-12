@@ -112,6 +112,14 @@ For unattended use, the stable launcher must select the same supported Python
 interpreter used for initial Keychain authorization. Do not rely on a terminal's
 `PATH`: launchd may otherwise choose an older system interpreter. Validate the
 actual background entry point, as well as the interactive CLI.
+The versioned [stable host launcher](../scripts/opl-relay-launcher.sh) resolves
+an already-installed Codex Plugin carrier and explicitly invokes
+`$HOME/.local/bin/python3`. Set `OPL_RELAY_PYTHON` to an absolute executable path
+when the authorized interpreter lives elsewhere; Python 3.11 or newer is required.
+`OPL_RELAY_CARRIER_ROOT` can select another installed carrier directory; otherwise
+the launcher uses `${CODEX_HOME:-$HOME/.codex}/plugins/cache/opl-relay/opl-relay`.
+Provision this host entry point once at the stable path used by the mail jobs.
+It is not a package installer or updater, and contains no Profile or credentials.
 Configured native operations fail explicitly rather than silently falling back.
 `account check --connect` validates the native backend as well as the provider.
 
