@@ -5,6 +5,41 @@ from email.header import decode_header, make_header
 from email.message import EmailMessage, Message
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
+from html.parser import HTMLParser
+
+
+class QuoteText(HTMLParser):
+    """Readable HTML projection; never execute markup or retain CSS/scripts."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.suppressed = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style"}:
+            self.suppressed += 1
+        elif not self.suppressed and tag in {"br", "p", "div", "li", "tr", "blockquote"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in {"script", "style"}:
+            self.suppressed = max(0, self.suppressed - 1)
+        elif not self.suppressed and tag in {"p", "div", "li", "tr", "blockquote"}:
+            self.parts.append("\n")
+        elif not self.suppressed and tag in {"td", "th"}:
+            self.parts.append("\t")
+
+    def handle_data(self, data):
+        if not self.suppressed:
+            self.parts.append(data)
+
+
+def html_to_text(content):
+    parser = QuoteText()
+    parser.feed(content)
+    # Formatting whitespace is not mail prose. Keep each paragraph/table row
+    # and all visible words; the unchanged MIME remains the original evidence.
+    return "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
 
 
 def decode_header_text(raw: str | None) -> str:
@@ -64,7 +99,8 @@ def extract_text_body(raw: bytes) -> str:
                 content = body.get_content()
             except Exception:
                 content = ""
-            return str(content or "")
+            text = str(content or "")
+            return html_to_text(text) if body.get_content_type() == "text/html" else text
     if msg.is_multipart():
         for part in msg.walk():
             if part.is_multipart():

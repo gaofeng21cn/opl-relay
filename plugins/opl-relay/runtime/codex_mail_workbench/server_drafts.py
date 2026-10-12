@@ -11,41 +11,15 @@ from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import formatdate, make_msgid, parsedate_to_datetime
-from html.parser import HTMLParser
 from pathlib import Path
 from datetime import timedelta
 
-from .config import keychain_get_secret, load_accounts_config
+from .config import load_accounts_config
 from .drafts import normalize_body
-from .mailbox import _list_mailboxes, _quoted_mailbox
+from .mailbox import _list_mailboxes
+from .message import QuoteText
 from .store import connect_email_store, fetch_raw_email_by_storage_ref, get_message_by_storage_ref
-from .sync import connect_imap, parse_fetch_uid_rfc822_map
-
-
-class QuoteText(HTMLParser):
-    """Retain readable quoted content, never execute or copy active HTML."""
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.parts = []
-        self.suppressed = 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in {"script", "style"}:
-            self.suppressed += 1
-        elif not self.suppressed and tag in {"br", "p", "div", "li", "tr", "blockquote"}:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in {"script", "style"}:
-            self.suppressed = max(0, self.suppressed - 1)
-        elif not self.suppressed and tag in {"p", "div", "li", "tr", "blockquote"}:
-            self.parts.append("\n")
-        elif not self.suppressed and tag in {"td", "th"}:
-            self.parts.append("\t")
-
-    def handle_data(self, data):
-        if not self.suppressed:
-            self.parts.append(data)
+from .native import Himalaya
 
 
 def addresses(message, field):
@@ -264,52 +238,47 @@ def _is_superseded(draft, sent):
     return sent_date >= draft_date - timedelta(minutes=5)
 
 
-def _search_message(client, folder, message_id, *, readonly):
-    typ, _ = client.select(_quoted_mailbox(folder), readonly=readonly)
-    if typ != "OK":
-        raise ValueError("Cannot open the server folder for reconciliation")
-    typ, data = client.uid("search", None, "HEADER", "Message-ID", '"' + message_id + '"')
-    if typ != "OK":
-        raise ValueError("Cannot search the server folder")
+def _search_message(client, folder, message_id, *, readonly=True):
+    epoch = client.status(folder)["uidvalidity"]
+    uids = client.find_message(folder, message_id)
+    metadata = client.metadata(folder, uids)
     found = []
-    for uid in b" ".join(x for x in data if isinstance(x, bytes)).split():
-        typ, fetched = client.uid("fetch", uid.decode(), "(UID FLAGS BODY.PEEK[])")
-        if typ != "OK":
-            raise ValueError("Cannot reread a server message")
-        raw = parse_fetch_uid_rfc822_map(fetched).get(int(uid))
-        if not raw:
-            raise ValueError("Message fetch returned no content")
+    for uid in uids:
+        if uid not in metadata:
+            raise ValueError("Message disappeared during draft readback")
+        raw = client.mime(uid, folder=folder)
         actual = BytesParser(policy=policy.default).parsebytes(raw)
         if str(actual.get("Message-ID", "")) != message_id:
             continue
-        flags = b" ".join(x[0] if isinstance(x, tuple) else x for x in fetched if isinstance(x, (tuple, bytes)))
-        match = re.search(rb"FLAGS\s+\(([^)]*)\)", flags, re.I)
-        tokens = set(match[1].lower().split()) if match else set()
-        found.append({"uid": int(uid), "message": actual, "deleted": b"\\deleted" in tokens,
-                      "draft": b"\\draft" in tokens, "raw": raw})
+        flags = {f.casefold() for f in metadata[uid]["flags"]}
+        found.append({"uid": uid, "uidvalidity": epoch, "message": actual, "raw": raw,
+                      "draft": "\\draft" in flags, "deleted": "\\deleted" in flags})
+    if client.status(folder)["uidvalidity"] != epoch:
+        raise ValueError("Folder identity changed during draft readback")
     if len(found) > 1:
         raise ValueError("Multiple messages share one Message-ID; reconcile manually")
     return found[0] if found else None
 
 
 def _recent_sent_messages(client, folder, since):
-    typ, _ = client.select(_quoted_mailbox(folder), readonly=True)
-    if typ != "OK":
-        raise ValueError("Cannot read the Sent folder")
-    criteria = ["SINCE", since.strftime("%d-%b-%Y")] if since is not None else ["ALL"]
-    typ, data = client.uid("search", None, *criteria)
-    if typ != "OK":
-        raise ValueError("Cannot search the Sent folder")
-    messages = []
-    for uid in b" ".join(x for x in data if isinstance(x, bytes)).split():
-        typ, fetched = client.uid("fetch", uid.decode(), "(UID BODY.PEEK[HEADER])")
-        if typ != "OK":
-            raise ValueError("Cannot reread the Sent folder")
-        raw = parse_fetch_uid_rfc822_map(fetched).get(int(uid))
-        if not raw:
-            raise ValueError("Sent fetch returned no content")
-        messages.append(BytesParser(policy=policy.default).parsebytes(raw))
-    return messages
+    return [BytesParser(policy=policy.default).parsebytes(client.mime(uid, folder=folder))
+            for uid in client.ids(folder, since=since)]
+
+
+def inspect_message(client, folder, expected):
+    message_id = str(BytesParser(policy=policy.default).parsebytes(expected)["Message-ID"])
+    found = _search_message(client, folder, message_id)
+    if not found:
+        return None
+    if not found["draft"] or found["deleted"]:
+        raise ValueError("Message is not a live server draft")
+    if content_snapshot(found["raw"]) != content_snapshot(expected):
+        raise ValueError("Server draft changed; preserve mobile edits and do not overwrite")
+    actual = found["message"]
+    return {"uid": found["uid"], "folder": folder, "message_id": message_id,
+            "to": str(actual["To"]), "cc": str(actual.get("Cc", "")),
+            "subject": str(actual["Subject"]), "server_verified": True,
+            "state": "draft", "send_allowed": False}
 
 
 def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False):
@@ -322,6 +291,9 @@ def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False
     """
     accounts = load_accounts_config(config_path)
     account = accounts[account_id]
+    if account.graph:
+        from .graph_drafts import reconcile_graph_drafts
+        return reconcile_graph_drafts(account=account, ledger_path=ledger_path, apply=apply)
     conn = _ledger(ledger_path)
     client = None
     entries = []
@@ -331,9 +303,7 @@ def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False
             " WHERE account_id=? AND state='verified' ORDER BY request_id", (account_id,)).fetchall()
         if not rows:
             return {"account_id": account_id, "checked": 0, "candidates": 0, "cleaned": 0, "drafts": []}
-        client = connect_imap(account, timeout_sec=20)
-        client.login(account.imap.username, keychain_get_secret(
-            account.imap.credential_ref, fallback_keychain=account.imap.fallback_keychain))
+        client = Himalaya(account)
         drafts_folder = resolve_drafts(client)
         sent_folder = resolve_sent(client)
         sent_cache = {}
@@ -372,7 +342,10 @@ def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False
             entry.update(action="candidate", reason="a sent reply already covers this draft",
                          sent_message_id=str(match.get("Message-ID", "")))
             if apply:
-                _expunge_draft(client, drafts_folder, found["uid"])
+                fresh = _search_message(client, drafts_folder, message_id)
+                if not fresh or fresh["uid"] != found["uid"] or fresh["uidvalidity"] != found["uidvalidity"] or fresh["raw"] != found["raw"]:
+                    raise ValueError("Draft changed before cleanup; preserve user edits")
+                client.remove_exact(drafts_folder, found["uid"])
                 if _search_message(client, drafts_folder, message_id, readonly=True):
                     raise ValueError("Draft removal could not be confirmed on the server")
                 conn.execute("UPDATE server_draft_requests SET state='cleaned' WHERE request_id=?",
@@ -385,62 +358,6 @@ def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False
                 "cleaned": sum(1 for e in entries if e["action"] == "cleaned"), "drafts": entries}
     finally:
         conn.close()
-        if client is not None:
-            try:
-                client.logout()
-            except Exception:
-                pass
-
-
-def _expunge_draft(client, folder, uid):
-    typ, data = client.capability()
-    capabilities = b" ".join(x for x in (data or []) if isinstance(x, bytes)).upper()
-    if typ != "OK" or b"UIDPLUS" not in capabilities:
-        raise ValueError("Server lacks UIDPLUS; refusing an unscoped expunge")
-    typ, _ = client.select(_quoted_mailbox(folder), readonly=False)
-    if typ != "OK":
-        raise ValueError("Cannot open Drafts for cleanup")
-    typ, _ = client.uid("store", str(uid), "+FLAGS.SILENT", "(\\Deleted)")
-    if typ != "OK":
-        raise ValueError("Cannot flag the leftover draft for deletion")
-    typ, _ = client.uid("expunge", str(uid))
-    if typ != "OK":
-        raise ValueError("Cannot expunge the leftover draft")
-
-
-def inspect_message(client, folder, expected):
-    typ, _ = client.select(_quoted_mailbox(folder), readonly=True)
-    if typ != "OK":
-        raise ValueError("Cannot inspect server Drafts")
-    message_id = str(BytesParser(policy=policy.default).parsebytes(expected)["Message-ID"])
-    typ, data = client.uid("search", None, "HEADER", "Message-ID", '"' + message_id + '"')
-    if typ != "OK":
-        raise ValueError("Cannot search server draft identity")
-    matches = []
-    for uid in b" ".join(x for x in data if isinstance(x, bytes)).split():
-        typ, fetched = client.uid("fetch", uid.decode(), "(UID FLAGS BODY.PEEK[])")
-        if typ != "OK":
-            raise ValueError("Cannot reread server draft")
-        raw = parse_fetch_uid_rfc822_map(fetched).get(int(uid))
-        if not raw:
-            raise ValueError("Draft fetch returned no message")
-        actual = BytesParser(policy=policy.default).parsebytes(raw)
-        if str(actual.get("Message-ID", "")) != message_id:
-            continue
-        flags = b" ".join(x[0] if isinstance(x, tuple) else x for x in fetched if isinstance(x, (tuple, bytes)))
-        match = re.search(rb"FLAGS\s+\(([^)]*)\)", flags, re.I)
-        tokens = set(match[1].lower().split()) if match else set()
-        if b"\\draft" not in tokens or b"\\deleted" in tokens:
-            raise ValueError("Message is not a live server draft")
-        if content_snapshot(raw) != content_snapshot(expected):
-            raise ValueError("Server draft changed; preserve mobile edits and do not overwrite")
-        matches.append({"uid": int(uid), "folder": folder, "message_id": message_id,
-                        "to": str(actual["To"]), "cc": str(actual.get("Cc", "")),
-                        "subject": str(actual["Subject"]), "server_verified": True,
-                        "state": "draft", "send_allowed": False})
-    if len(matches) > 1:
-        raise ValueError("Multiple drafts match this request; reconcile manually")
-    return matches[0] if matches else None
 
 
 def _ledger(path):
@@ -509,9 +426,11 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
                     "send_allowed": False, "headers": content_snapshot(raw)["headers"],
                     "body_text": msg.get_body(preferencelist=("plain",)).get_content(),
                     "body_html": msg.get_body(preferencelist=("html",)).get_content()}
-        client = connect_imap(account, timeout_sec=20)
-        client.login(account.imap.username, keychain_get_secret(
-            account.imap.credential_ref, fallback_keychain=account.imap.fallback_keychain))
+        if account.graph:
+            from .graph_drafts import save_graph_draft
+            return save_graph_draft(account=account, conn=conn, row=row, raw=raw,
+                                    request_id=request_id, inspect=inspect)
+        client = Himalaya(account)
         folder = row["folder"] or resolve_drafts(client)
         found = inspect_message(client, folder, raw)
         if found:
@@ -524,9 +443,7 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
         conn.commit()  # durable BEFORE network mutation; interruption can never trigger another APPEND
         conn.execute("BEGIN IMMEDIATE")
         # A concurrent caller can inspect while waiting; only this prepared owner appends.
-        typ, _ = client.append(_quoted_mailbox(folder), "(\\Draft)", None, raw)
-        if typ != "OK":
-            raise ValueError("Server rejected APPEND; inspect this request before creating another")
+        client.create_draft(raw, folder=folder)
         found = inspect_message(client, folder, raw)
         if not found:
             raise ValueError("APPEND returned OK but draft readback is absent; result unconfirmed")
@@ -535,8 +452,3 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
         return {**found, "request_id": request_id}
     finally:
         conn.close()
-        if client is not None:
-            try:
-                client.logout()
-            except Exception:
-                pass

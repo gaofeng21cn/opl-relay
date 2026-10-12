@@ -50,6 +50,24 @@ operation. When it succeeds, use `sync` and inspect the local evidence.
 
 ## Capability Contract
 
+For Hotmail/Outlook.com, use `account add --provider microsoft_graph --client-id
+<public-application-id>`, then `account login --account <id>` and the browser's
+Microsoft consent. Never request or reuse an IMAP password for a Graph account.
+`account folders` inventories the remote tree. `account login --write` enables
+the existing exact-reference move contract; it requests no mail-send permission.
+Tokens remain in Keychain; Graph uses the same Relay store, review queue and
+active/history scopes. Background OAuth renewal is automatic. Server-draft
+commands support Graph and IMAP; users may review on their synchronized phone.
+See [Microsoft setup](../../../../docs/local-profile.md#hotmail-and-outlookcom).
+
+Relay owns shared mail-management records and execution checks, not a parallel
+mail client. Himalaya is the sole backend for IMAP transport, MIME reads, draft
+creation and mail writes. There is no built-in transport fallback. Keep its credentials and account config behind Relay's adapter; do
+not bypass exact references, approval or readback by issuing native tool writes.
+See [backend setup](../../../../docs/local-profile.md#mature-mail-backend).
+
+## Stable Capabilities
+
 The OPL Package exports four stable capability contracts:
 
 - `communications.mail.v1`: local mailbox evidence, sync, retrieval, controlled
@@ -96,6 +114,10 @@ policy references returns `input_required` rather than ready evidence.
 
 Use `accounts` as account truth. Sync explicitly when freshness matters, then
 use `recent`, `search`, and `read` through stable `email-store://` references.
+`sync` defaults to active scope. For requested history missing from the cache,
+use `search --remote --account <id> --scope history <query>` instead of fetching
+an entire archive. Remote results retain the same references, report bounded
+coverage, and do not assert a complete folder snapshot or mark mail reviewed.
 Before drafting for a known person or project, run `context build`. Use only
 approved memories as active relationship memory and re-read raw mail for
 high-risk dates, roles, commitments, or invitations.
@@ -226,7 +248,7 @@ external-site content into public skill files.
 For messaging-channel requests reviewed on a phone, use server Drafts instead
 of requiring a desktop editor. `draft server-reply-all --account ...
 --storage-ref ... --request-id ... --body-file ... --signature-file ...` prepares
-a preview; the same command with `--apply` writes only an IMAP draft and verifies
+a preview; the same command with `--apply` writes only a server draft and verifies
 it by fresh server readback. Use `server-create` with explicit To/Cc/subject for
 new correspondence, and `server-inspect` with the account and stable request ID
 after an interruption. These commands never send. The user reviews and sends
@@ -250,7 +272,8 @@ a client that does not consume the stored draft. A `keep` result means the
 evidence was weaker than an exact reply target, recipients, and subject, so the
 draft may still be pending; never widen the match by hand. An `absent` result
 means the server copy is already gone. This route never sends, never edits the
-Sent copy, and refuses to act without UIDPLUS. If the user's desktop mail client
+Sent copy. IMAP cleanup requires UIDPLUS and removes only an exact UID through
+Himalaya; Graph cleanup moves the draft to Deleted Items. If the user's desktop mail client
 still lists a reconciled draft, that is a local client cache: remove it through
 the Mail.app route instead of writing IMAP again.
 

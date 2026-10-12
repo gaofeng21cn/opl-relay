@@ -101,48 +101,37 @@ def test_duplicate_signature_and_header_injection_rejected():
 
 class FakeImap:
     def __init__(self):
-        self.raw = None
-        self.appends = 0
-        self.timeout_after_append = False
+        self.raw, self.appends, self.timeout_after_append = None, 0, False
         self.flags = b"\\Draft"
 
-    def login(self, *args):
-        return "OK", []
+    def folders(self):
+        return [{"name": "Drafts", "flags": frozenset({"\\drafts"})}]
 
-    def list(self):
-        return "OK", [b'(\\Drafts) "/" "Drafts"']
+    def status(self, folder):
+        return {"uidvalidity": 1, "count": int(bool(self.raw))}
 
-    def select(self, folder, readonly):
-        assert folder == '"Drafts"' and readonly is True
-        return "OK", []
+    def find_message(self, folder, message_id):
+        return [3] if self.raw else []
 
-    def uid(self, command, *args):
-        if command == "search":
-            return "OK", [b"3" if self.raw else b""]
-        if command == "fetch":
-            return "OK", [(b"1 (UID 3 FLAGS (" + self.flags + b") BODY[])", self.raw)]
-        raise AssertionError("Unexpected mutation: " + command)
+    def metadata(self, folder, uids):
+        return {3: {"flags": self.flags.decode().split()}} if self.raw else {}
 
-    def append(self, folder, flags, date, raw):
-        assert folder == '"Drafts"' and flags == "(\\Draft)"
-        self.raw = raw
-        self.appends += 1
+    def mime(self, uid, *, folder):
+        return self.raw
+
+    def create_draft(self, raw, *, folder):
+        self.raw, self.appends = raw, self.appends + 1
         if self.timeout_after_append:
             raise TimeoutError("connection lost")
-        return "OK", []
-
-    def logout(self):
-        pass
 
 
 @pytest.fixture
 def service(tmp_path, monkeypatch):
     client = FakeImap()
     monkeypatch.setattr(sd, "load_accounts_config", lambda p: {"work": SimpleNamespace(
-        email="owner@example.test", imap=SimpleNamespace(username="owner", credential_ref="secret-ref",
+        graph=None, email="owner@example.test", imap=SimpleNamespace(username="owner", credential_ref="secret-ref",
                                                             fallback_keychain=None))})
-    monkeypatch.setattr(sd, "connect_imap", lambda *a, **k: client)
-    monkeypatch.setattr(sd, "keychain_get_secret", lambda ref, **kwargs: "secret")
+    monkeypatch.setattr(sd, "Himalaya", lambda *a, **k: client)
     kwargs = dict(config_path=tmp_path / "accounts.toml", db_path=tmp_path / "mail.sqlite",
                   ledger_path=tmp_path / "drafts.sqlite", account_id="work", request_id="one",
                   to=["member@example.test"], subject="Test", body="Hello\n\nApproved content", signature=SIGNATURE)
@@ -198,7 +187,7 @@ def test_non_draft_or_deleted_message_not_reported_ready(service):
 
 def test_ambiguous_drafts_folder_not_guessed(service):
     client, kwargs = service
-    client.list = lambda: ("OK", [b'(\\Drafts) "/" "Drafts"', b'(\\Drafts) "/" "Other"'])
+    client.folders = lambda: [{"name": n, "flags": frozenset({"\\drafts"})} for n in ("Drafts", "Other")]
     with pytest.raises(ValueError, match="ambiguous"):
         sd.server_draft(**kwargs, apply=True)
     assert client.appends == 0
@@ -226,56 +215,37 @@ def sent_message(*, to="Coordinator <coord@example.test>, Person <person@example
 
 
 class ReconcilerImap:
-    """Drafts plus a Sent folder, with UIDPLUS deletion for the leftover drafts."""
-
     def __init__(self, drafts=(), sent=(), uidplus=True):
-        self.drafts = list(drafts)
-        self.sent = list(sent)
-        self.mutations = []
-        self.uidplus = uidplus
-        self.selected = None
+        self.drafts, self.sent = list(drafts), list(sent)
+        self.mutations, self.uidplus = [], uidplus
 
-    def login(self, *args):
-        return "OK", []
+    def folders(self):
+        return [{"name": "Drafts", "flags": frozenset({"\\drafts"})},
+                {"name": "Sent Items", "flags": frozenset({"\\sent"})}]
 
-    def logout(self):
-        pass
+    def status(self, folder):
+        return {"uidvalidity": 1, "count": len(self.drafts if folder == "Drafts" else self.sent)}
 
-    def capability(self):
-        return "OK", [b"IMAP4rev1 UIDPLUS" if self.uidplus else b"IMAP4rev1"]
+    def find_message(self, folder, message_id):
+        items = self.drafts if folder == "Drafts" else self.sent
+        return [i for i, item in enumerate(items, 1)
+                if BytesParser(policy=policy.default).parsebytes(item)["Message-ID"] == message_id]
 
-    def list(self):
-        return "OK", [b'(\\Drafts) "/" "Drafts"', b'(\\Sent) "/" "Sent Items"']
+    def ids(self, folder, *, since=None):
+        return list(range(1, len(self.sent) + 1))
 
-    def select(self, folder, readonly):
-        self.selected = folder
-        return "OK", []
+    def metadata(self, folder, uids):
+        return {uid: {"flags": ["\\Draft" if folder == "Drafts" else "\\Seen"]} for uid in uids}
 
-    def uid(self, command, *args):
-        if command == "search":
-            folder = self.drafts if self.selected == '"Drafts"' else self.sent
-            if args[0] == "HEADER":
-                wanted = args[2].strip('"')
-                hits = [str(i) for i, item in enumerate(folder, 1)
-                        if BytesParser(policy=policy.default).parsebytes(item)["Message-ID"] == wanted]
-            else:
-                hits = [str(i) for i in range(1, len(folder) + 1)]
-            return "OK", [" ".join(hits).encode()]
-        if command == "fetch":
-            folder = self.drafts if self.selected == '"Drafts"' else self.sent
-            index = int(args[0]) - 1
-            item = folder[index]
-            flags = b"\\Draft" if self.selected == '"Drafts"' else b"\\Seen"
-            return "OK", [(b"1 (UID " + str(index + 1).encode() + b" FLAGS (" + flags + b") BODY[])", item)]
-        if command == "store":
-            self.mutations.append(("store", args[0]))
-            return "OK", []
-        if command == "expunge":
-            assert self.selected == '"Drafts"', "expunge must be scoped to Drafts"
-            self.mutations.append(("expunge", args[0]))
-            del self.drafts[int(args[0]) - 1]
-            return "OK", []
-        raise AssertionError("Unexpected command: " + command)
+    def mime(self, uid, *, folder):
+        return (self.drafts if folder == "Drafts" else self.sent)[uid - 1]
+
+    def remove_exact(self, folder, uid):
+        assert folder == "Drafts"
+        if not self.uidplus:
+            raise ValueError("UIDPLUS required")
+        self.mutations.append(("expunge", str(uid)))
+        del self.drafts[uid - 1]
 
 
 @pytest.fixture
@@ -283,9 +253,8 @@ def reconciler(tmp_path, monkeypatch):
     def install(client):
         monkeypatch.setattr(sd, "load_accounts_config", lambda p: {"work": SimpleNamespace(
             email="owner@example.test",
-            imap=SimpleNamespace(username="owner", credential_ref="secret-ref", fallback_keychain=None))})
-        monkeypatch.setattr(sd, "connect_imap", lambda *a, **k: client)
-        monkeypatch.setattr(sd, "keychain_get_secret", lambda ref, **kwargs: "secret")
+            graph=None, imap=SimpleNamespace(username="owner", credential_ref="secret-ref", fallback_keychain=None))})
+        monkeypatch.setattr(sd, "Himalaya", lambda *a, **k: client)
         kwargs = dict(config_path=tmp_path / "accounts.toml",
                       ledger_path=tmp_path / "drafts.sqlite", account_id="work")
         return kwargs
@@ -381,10 +350,10 @@ def test_reconcile_refuses_unscoped_expunge_without_uidplus(tmp_path, monkeypatc
 
 def test_reconcile_with_no_verified_drafts_does_not_connect(tmp_path, monkeypatch, reconciler):
     client = ReconcilerImap(drafts=[], sent=[])
-    monkeypatch.setattr(sd, "connect_imap", lambda *a, **k: pytest.fail("unexpected connection"))
+    monkeypatch.setattr(sd, "Himalaya", lambda *a, **k: pytest.fail("unexpected connection"))
     monkeypatch.setattr(sd, "load_accounts_config", lambda p: {"work": SimpleNamespace(
         email="owner@example.test",
-        imap=SimpleNamespace(username="owner", credential_ref="secret-ref", fallback_keychain=None))})
+        graph=None, imap=SimpleNamespace(username="owner", credential_ref="secret-ref", fallback_keychain=None))})
     result = sd.reconcile_server_drafts(config_path=tmp_path / "accounts.toml",
                                         ledger_path=tmp_path / "drafts.sqlite", account_id="work", apply=True)
     assert result["checked"] == 0

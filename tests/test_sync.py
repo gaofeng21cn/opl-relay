@@ -13,38 +13,24 @@ from codex_mail_workbench.store import (
 class FakeImap:
     def __init__(self):
         self.messages = {i: f"Subject: message {i}\r\nMessage-ID: <{i}@test>\r\n\r\nbody {i}".encode() for i in range(1, 4)}
-        self.epoch = 10
-        self.fail = set()
-        self.bad_search = False
-        self.requested = []
+        self.epoch, self.bad_search = 10, False
+        self.fail, self.requested = set(), []
 
-    def login(self, *args):
-        pass
+    def folders(self):
+        return [{"name": "INBOX", "flags": frozenset()}]
 
-    def list(self):
-        return "OK", [b'(\\HasNoChildren) "/" "INBOX"']
+    def status(self, folder):
+        return {"uidvalidity": self.epoch, "count": len(self.messages)}
 
-    def select(self, folder, readonly=True):
-        assert readonly is True
-        return "OK", [str(len(self.messages)).encode()]
+    def ids(self, folder):
+        return [] if self.bad_search else list(self.messages)
 
-    def response(self, name):
-        assert name == "UIDVALIDITY"
-        return name, [str(self.epoch).encode()]
+    def metadata(self, folder, uids):
+        return {uid: {"size": len(self.messages[uid])} for uid in uids if uid not in self.fail}
 
-    def uid(self, command, *args):
-        if command == "search":
-            return "OK", [b"" if self.bad_search else b" ".join(str(u).encode() for u in self.messages)]
-        assert command == "fetch"
-        uids = list(map(int, args[0].split(",")))
-        if args[1] == "(UID RFC822.SIZE)":
-            return "OK", [f"1 (UID {u} RFC822.SIZE {len(self.messages[u])})".encode() for u in uids]
-        assert args[1] == "(UID BODY.PEEK[])"
-        self.requested.extend(uids)
-        return "OK", [(f"1 (UID {u} BODY[]".encode(), self.messages[u]) for u in uids if u not in self.fail]
-
-    def logout(self):
-        pass
+    def mime(self, uid, *, folder):
+        self.requested.append(uid)
+        return self.messages[uid]
 
 
 @pytest.fixture
@@ -55,8 +41,7 @@ def environment(monkeypatch, tmp_path):
         include_folders=["INBOX"], exclude_folders=[])
     client = FakeImap()
     monkeypatch.setattr(sync, "load_account", lambda *a: account)
-    monkeypatch.setattr(sync, "keychain_read_secret", lambda *a, **k: CredentialSecret("fake", "login"))
-    monkeypatch.setattr(sync, "connect_imap", lambda *a: client)
+    monkeypatch.setattr(sync, "Himalaya", lambda *a, **k: client)
     kwargs = dict(config_path=tmp_path / "accounts.toml", db_path=tmp_path / "mail.sqlite",
                   state_dir=tmp_path / "sync-state", account_id="work")
     return client, kwargs
@@ -73,8 +58,8 @@ def test_history_sync_includes_configured_archive_and_bill_children(environment,
     account = sync.load_account()
     account.include_folders[:] = ['*']
     folders = ['INBOX', 'Archive/Academic-History', 'Bill/Travel', 'Bill Travel', 'Trash']
-    monkeypatch.setattr(client, 'list', lambda: ('OK', [
-        f'(\\HasNoChildren) "/" "{name}"'.encode() for name in folders]))
+    monkeypatch.setattr(client, 'folders', lambda: [
+        {"name": name, "flags": frozenset()} for name in folders])
     active = sync.sync_account(**kwargs, scope='active')
     assert [f['folder'] for f in active['folders']] == ['INBOX']
     history = sync.sync_account(**kwargs, scope='history')
@@ -122,43 +107,6 @@ def test_external_move_and_genuine_empty_preserve_references(environment):
     conn.close()
 
 
-def test_large_message_uses_verified_partial_fetches():
-    import re
-    raw = b"Subject: large\r\n\r\n" + b"a" * (5 * 1024 * 1024)
-    class Chunked:
-        def uid(self, command, uid, fields):
-            if fields == "(UID RFC822.SIZE)":
-                return "OK", [f"1 (UID 1 RFC822.SIZE {len(raw)})".encode()]
-            match = re.search(r"<(\d+)\.(\d+)>", fields)
-            assert match, "large bodies must not be requested as one literal"
-            offset, length = map(int, match.groups())
-            return "OK", [(b"1 (UID 1 BODY[]", raw[offset:offset+length])]
-    assert list(sync.fetch_message_batch(Chunked(), [1])) == [(1, raw)]
-
-
-def test_declared_size_disagreement_requires_identical_reread():
-    raw = b"Subject: odd server\r\nMessage-ID: <odd@test>\r\n\r\nbody"
-
-    class Server:
-        def __init__(self, second_read: bytes) -> None:
-            self.second_read = second_read
-            self.reads = 0
-
-        def uid(self, command, uid, fields):
-            if fields == "(UID RFC822.SIZE)":
-                return "OK", [f"1 (UID 1 RFC822.SIZE {len(raw) + 2})".encode()]
-            self.reads += 1
-            return "OK", [(b"1 (UID 1 BODY[]", raw if self.reads == 1 else self.second_read)]
-
-    agreed = Server(raw)
-    assert list(sync.fetch_message_batch(agreed, [1])) == [(1, raw)]
-    assert agreed.reads == 2
-
-    truncated = Server(raw[:4])
-    with pytest.raises(ValueError, match="byte count mismatch"):
-        list(sync.fetch_message_batch(truncated, [1]))
-
-
 def test_invalid_empty_snapshot_does_not_invalidate_mail(environment):
     client, kwargs = environment
     sync.sync_account(**kwargs)
@@ -179,10 +127,10 @@ def test_sync_budget_returns_partial_scope_instead_of_waiting_forever(environmen
     def slow_list():
         import time
         time.sleep(0.06)
-        return "OK", [f'(\\HasNoChildren) "/" "{name}"'.encode() for name in folders]
+        return [{"name": name, "flags": frozenset()} for name in folders]
 
-    monkeypatch.setattr(client, "list", slow_list)
-    result = sync.sync_account(**kwargs, max_duration_sec=0.05)
+    monkeypatch.setattr(client, "folders", slow_list)
+    result = sync.sync_account(**kwargs, max_duration_sec=0.05, scope="all")
 
     assert result["ok"] is False
     assert result["timed_out"] is True
@@ -203,3 +151,20 @@ def test_uidvalidity_reset_retains_old_bytes_and_fetches_reused_uid(environment)
     for ref, raw in refs.items():
         assert fetch_raw_email_by_storage_ref(conn, ref) == raw
     conn.close()
+
+
+def test_native_declared_size_disagreement_requires_identical_reread():
+    raw = b"Subject: odd server\r\n\r\nbody"
+    class Tool:
+        def __init__(self, second):
+            self.second, self.reads = second, 0
+        def metadata(self, folder, uids):
+            return {1: {"size": len(raw) + 2}}
+        def mime(self, uid, *, folder):
+            self.reads += 1
+            return raw if self.reads == 1 else self.second
+    tool = Tool(raw)
+    assert list(sync.fetch_message_batch(tool, [1], folder="INBOX")) == [(1, raw)]
+    assert tool.reads == 2
+    with pytest.raises(ValueError, match="byte count mismatch"):
+        list(sync.fetch_message_batch(Tool(raw[:4]), [1], folder="INBOX"))

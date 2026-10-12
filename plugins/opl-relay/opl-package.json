@@ -47,13 +47,18 @@
       "runtime/codex_mail_workbench/config.py",
       "runtime/codex_mail_workbench/context.py",
       "runtime/codex_mail_workbench/drafts.py",
+      "runtime/codex_mail_workbench/graph.py",
+      "runtime/codex_mail_workbench/graph_drafts.py",
+      "runtime/codex_mail_workbench/keychain.py",
       "runtime/codex_mail_workbench/knowledge.py",
       "runtime/codex_mail_workbench/mailbox.py",
       "runtime/codex_mail_workbench/memory.py",
       "runtime/codex_mail_workbench/message.py",
+      "runtime/codex_mail_workbench/native.py",
       "runtime/codex_mail_workbench/paths.py",
       "runtime/codex_mail_workbench/people.py",
       "runtime/codex_mail_workbench/persona.py",
+      "runtime/codex_mail_workbench/remote_search.py",
       "runtime/codex_mail_workbench/server_drafts.py",
       "runtime/codex_mail_workbench/store.py",
       "runtime/codex_mail_workbench/sync.py",
@@ -62,7 +67,7 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:d8c18fa7b967e9fc85c55251a51fdf2896c8531870fcae7ef32dcf4afd3fc3d3"
+    "digest": "sha256:82f4096bfdef1d17ce6373cc1d7b51fd7574ef95fe09b7f7beea0e6557e48ffc"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

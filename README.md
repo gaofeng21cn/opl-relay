@@ -11,6 +11,11 @@
 <p align="center"><strong>A private, evidence-backed communication layer for Codex and One Person Lab</strong></p>
 <p align="center">Mail evidence · Relationship context · Approved memory · Obsidian context · Apple Mail review</p>
 
+OPL Relay is a shared mail-management layer for OpenClaw, Codex and OPL:
+continuous review, correspondence follow-up and verified operations. Mature
+mail tools perform supported retrieval and writes; Relay preserves the account,
+evidence, approval and work-record boundaries.
+
 OPL Relay helps Codex work with your academic and professional email without
 turning a source checkout or plugin cache into a personal-data folder. It keeps
 the original messages as evidence, builds reusable relationship context, and
@@ -37,9 +42,14 @@ entry point.
 
 **Evidence-first mail**
 
-Relay synchronizes configured IMAP folders into a private local SQLite store.
+Relay synchronizes configured IMAP folders and Microsoft Graph mailboxes into a private local SQLite store.
+Daily sync defaults to active mail. Server search caches only matching messages
+when historical correspondence is requested; see [backend setup](docs/local-profile.md#mature-mail-backend).
 Search results and context use stable `email-store://` references so a draft can
 be traced back to the source message.
+
+Hotmail/Outlook.com uses OAuth with Keychain token renewal; see
+[Microsoft account setup](docs/local-profile.md#hotmail-and-outlookcom).
 
 **Relationship context with approval**
 
@@ -124,7 +134,10 @@ for normal mail work.
 
 ## Start With A New Profile
 
-Requirements: macOS, Apple Mail for draft review, and an IMAP account.
+Requirements: macOS, a configured Himalaya 2.2.x backend, and an IMAP or
+Microsoft Graph account. Apple Mail supports the desktop draft-review route.
+Configure the [backend executable](docs/local-profile.md#mature-mail-backend)
+before the first connected account check.
 
 ```bash
 export OPL_PROFILE_WORKSPACE="$HOME/OPL/profiles/my-profile"

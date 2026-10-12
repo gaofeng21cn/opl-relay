@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-import imaplib
 from dataclasses import dataclass
 from typing import Any
 
-from .config import MailAccount, keychain_get_secret, load_account
+from .config import MailAccount, load_account
+from .native import Himalaya, NativeError
 from .message import parse_headers
 from .store import (
     connect_email_store,
@@ -13,7 +13,7 @@ from .store import (
     get_message_by_storage_ref,
     record_mailbox_move,
 )
-from .sync import connect_imap, now_iso, parse_fetch_uid_rfc822_map
+from .sync import now_iso
 
 
 class MailboxMoveFailure(RuntimeError):
@@ -29,71 +29,37 @@ class ImapMailbox:
     flags: frozenset[str]
 
 
-def _consume_quoted(value: str) -> tuple[str, str]:
-    if not value.startswith('"'):
-        raise ValueError("expected quoted IMAP string")
-    out: list[str] = []
-    escaped = False
-    for index, character in enumerate(value[1:], start=1):
-        if escaped:
-            out.append(character)
-            escaped = False
-            continue
-        if character == "\\":
-            escaped = True
-            continue
-        if character == '"':
-            return "".join(out), value[index + 1 :]
-        out.append(character)
-    raise ValueError("unterminated quoted IMAP string")
+def _list_mailboxes(client):
+    return [ImapMailbox(**box) for box in client.folders()]
 
 
-def _consume_imap_value(value: str) -> tuple[str, str]:
-    value = value.lstrip()
-    if value.startswith('"'):
-        return _consume_quoted(value)
-    if not value:
-        return "", ""
-    token, _, rest = value.partition(" ")
-    return token, rest
+def _capabilities(client):
+    return client.capabilities()
 
 
-def parse_imap_list_entry(raw_line: bytes) -> ImapMailbox | None:
-    line = raw_line.decode("utf-8", errors="replace").strip()
-    if not line.startswith("("):
-        return None
-    close_index = line.find(")")
-    if close_index < 0:
-        return None
-    flags = frozenset(flag.casefold() for flag in line[1:close_index].split())
+def _move_with_uid_move(client, *, message, destination_folder):
     try:
-        _, rest = _consume_imap_value(line[close_index + 1 :])
-        name, _ = _consume_imap_value(rest)
-    except ValueError:
-        return None
-    if not name or name.upper() == "NIL":
-        return None
-    return ImapMailbox(name=name, flags=flags)
+        client.move(message["uid"], source=message["folder"], destination=destination_folder)
+    except Exception as exc:
+        raise MailboxMoveFailure("move_result_unknown", "Native MOVE result unknown", state="unknown") from exc
+    _verify_moved_message(client, message=message, destination_folder=destination_folder)
+    return "himalaya_uid_move"
 
 
-def _quoted_mailbox(name: str) -> str:
-    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _list_mailboxes(client: imaplib.IMAP4) -> list[ImapMailbox]:
-    typ, lines = client.list()
-    if typ != "OK" or not lines:
-        raise MailboxMoveFailure("mailbox_list_unavailable", "无法读取 IMAP 文件夹列表")
-    mailboxes = [
-        entry
-        for raw_line in lines
-        if isinstance(raw_line, bytes)
-        for entry in [parse_imap_list_entry(raw_line)]
-        if entry is not None
-    ]
-    if not mailboxes:
-        raise MailboxMoveFailure("mailbox_list_invalid", "IMAP 文件夹列表无法解析")
-    return mailboxes
+def _move_with_uidplus_fallback(client, *, message, destination_folder):
+    # SYSU has UIDPLUS but no MOVE. The backend executes every protocol command;
+    # Relay retains copy verification before permitting exact source removal.
+    try:
+        client.copy(message["uid"], source=message["folder"], destination=destination_folder)
+        if _destination_uid_with_hash(client, destination_folder=destination_folder,
+                message_id=message["message_id"], raw_sha256=message["raw_sha256"]) is None:
+            raise ValueError("copied target not verified")
+        _remote_source_matches(client, message)
+        client.remove_exact(message["folder"], message["uid"])
+    except Exception as exc:
+        raise MailboxMoveFailure("copy_move_result_unknown", "Native copy/remove result unknown", state="unknown") from exc
+    _verify_moved_message(client, message=message, destination_folder=destination_folder)
+    return "himalaya_uid_copy_uid_expunge"
 
 
 def _resolve_destination(destination: str, mailboxes: list[ImapMailbox]) -> str:
@@ -189,48 +155,12 @@ def _resolve_move_target(
     return resolved_folder, False
 
 
-def _capabilities(client: imaplib.IMAP4) -> set[str]:
-    typ, values = client.capability()
-    if typ != "OK":
-        raise MailboxMoveFailure("capability_unavailable", "无法读取 IMAP 能力集")
-    capabilities: set[str] = set()
-    for value in values or []:
-        text = value.decode("ascii", errors="ignore") if isinstance(value, bytes) else str(value)
-        capabilities.update(token.upper() for token in text.split())
-    return capabilities
-
-
-def _select(client: imaplib.IMAP4, folder: str, *, readonly: bool) -> None:
-    typ, _ = client.select(_quoted_mailbox(folder), readonly=readonly)
-    if typ != "OK":
-        raise MailboxMoveFailure("source_unavailable", f"无法打开 IMAP 文件夹：{folder}")
-
-
-def _fetch_raw(client: imaplib.IMAP4, uid: int) -> bytes:
-    typ, data = client.uid("fetch", str(uid), "(UID BODY.PEEK[])")
-    if typ != "OK":
-        raise MailboxMoveFailure("source_unavailable", f"无法读取 IMAP UID {uid}")
-    raw = parse_fetch_uid_rfc822_map(data).get(uid)
-    if not raw:
-        raise MailboxMoveFailure("source_missing", f"IMAP UID {uid} 不存在")
-    return raw
-
-
-def _search_uids(client: imaplib.IMAP4, *criteria: str) -> list[int]:
-    typ, values = client.uid("search", *criteria)
-    if typ != "OK":
-        raise MailboxMoveFailure("search_unavailable", "IMAP 搜索失败")
-    payload = values[0] if values else b""
-    if isinstance(payload, bytes):
-        tokens = payload.split()
-    else:
-        tokens = str(payload).encode("ascii", errors="ignore").split()
-    return [int(token) for token in tokens if token.isdigit()]
-
-
-def _remote_source_matches(client: imaplib.IMAP4, message: dict[str, Any]) -> None:
-    _select(client, str(message["folder"]), readonly=True)
-    raw = _fetch_raw(client, int(message["uid"]))
+def _remote_source_matches(client: Himalaya, message: dict[str, Any]) -> None:
+    if client.status(message["folder"])["uidvalidity"] != int(message["uidvalidity"]):
+        raise MailboxMoveFailure("source_epoch_changed", "邮件文件夹身份已变化，拒绝使用旧 UID")
+    raw = client.mime(message["uid"], folder=message["folder"])
+    if client.status(message["folder"])["uidvalidity"] != int(message["uidvalidity"]):
+        raise MailboxMoveFailure("source_epoch_changed", "读取期间邮件文件夹身份已变化")
     expected_hash = str(message["raw_sha256"])
     if hashlib.sha256(raw).hexdigest() != expected_hash:
         raise MailboxMoveFailure(
@@ -246,28 +176,26 @@ def _remote_source_matches(client: imaplib.IMAP4, message: dict[str, Any]) -> No
 
 
 def _destination_uid_with_hash(
-    client: imaplib.IMAP4,
+    client: Himalaya,
     *,
     destination_folder: str,
     message_id: str,
     raw_sha256: str,
 ) -> int | None:
-    _select(client, destination_folder, readonly=True)
-    uids = _search_uids(client, "HEADER", "Message-ID", _quoted_mailbox(message_id))
+    uids = client.find_message(destination_folder, message_id)
     for uid in uids:
-        raw = _fetch_raw(client, uid)
+        raw = client.mime(uid, folder=destination_folder)
         if hashlib.sha256(raw).hexdigest() == raw_sha256:
             return uid
     return None
 
 
-def _source_uid_exists(client: imaplib.IMAP4, *, source_folder: str, uid: int) -> bool:
-    _select(client, source_folder, readonly=True)
-    return uid in _search_uids(client, "UID", str(uid))
+def _source_uid_exists(client: Himalaya, *, source_folder: str, uid: int) -> bool:
+    return uid in client.metadata(source_folder, [uid])
 
 
 def _preflight_message(
-    client: imaplib.IMAP4,
+    client: Himalaya,
     *,
     message: dict[str, Any],
     destination_folder: str,
@@ -297,7 +225,7 @@ def _preflight_message(
 
 
 def _preflight_gmail_archive(
-    client: imaplib.IMAP4,
+    client: Himalaya,
     *,
     message: dict[str, Any],
     all_mail_folder: str,
@@ -323,7 +251,7 @@ def _preflight_gmail_archive(
 
 
 def _verify_moved_message(
-    client: imaplib.IMAP4,
+    client: Himalaya,
     *,
     message: dict[str, Any],
     destination_folder: str,
@@ -350,93 +278,6 @@ def _verify_moved_message(
             "目标副本已出现，但源邮件仍存在",
             state="unknown",
         )
-
-
-def _move_with_uid_move(
-    client: imaplib.IMAP4,
-    *,
-    message: dict[str, Any],
-    destination_folder: str,
-) -> str:
-    _select(client, str(message["folder"]), readonly=False)
-    try:
-        typ, _ = client.uid("move", str(message["uid"]), _quoted_mailbox(destination_folder))
-    except Exception as exc:
-        raise MailboxMoveFailure(
-            "move_result_unknown",
-            f"UID MOVE 未返回可验证结果：{type(exc).__name__}",
-            state="unknown",
-        ) from exc
-    if typ != "OK":
-        raise MailboxMoveFailure("move_rejected", "IMAP 拒绝 UID MOVE")
-    _verify_moved_message(client, message=message, destination_folder=destination_folder)
-    return "uid_move"
-
-
-def _move_with_uidplus_fallback(
-    client: imaplib.IMAP4,
-    *,
-    message: dict[str, Any],
-    destination_folder: str,
-) -> str:
-    _select(client, str(message["folder"]), readonly=False)
-    try:
-        typ, _ = client.uid("copy", str(message["uid"]), _quoted_mailbox(destination_folder))
-    except Exception as exc:
-        raise MailboxMoveFailure(
-            "copy_result_unknown",
-            f"UID COPY 未返回可验证结果：{type(exc).__name__}",
-            state="unknown",
-        ) from exc
-    if typ != "OK":
-        raise MailboxMoveFailure("copy_rejected", "IMAP 拒绝 UID COPY")
-    target_uid = _destination_uid_with_hash(
-        client,
-        destination_folder=destination_folder,
-        message_id=str(message["message_id"]),
-        raw_sha256=str(message["raw_sha256"]),
-    )
-    if target_uid is None:
-        raise MailboxMoveFailure(
-            "copied_target_not_verified",
-            "UID COPY 后未能在目标文件夹验证相同原文",
-            state="unknown",
-        )
-    _select(client, str(message["folder"]), readonly=False)
-    try:
-        typ, _ = client.uid("store", str(message["uid"]), "+FLAGS.SILENT", r"(\Deleted)")
-    except Exception as exc:
-        raise MailboxMoveFailure(
-            "store_result_unknown",
-            f"UID STORE 未返回可验证结果：{type(exc).__name__}",
-            state="unknown",
-        ) from exc
-    if typ != "OK":
-        raise MailboxMoveFailure("store_rejected", "IMAP 拒绝为源邮件设置删除标记")
-    try:
-        typ, _ = client.uid("expunge", str(message["uid"]))
-    except Exception as exc:
-        try:
-            client.uid("store", str(message["uid"]), "-FLAGS.SILENT", r"(\Deleted)")
-        except Exception:
-            pass
-        raise MailboxMoveFailure(
-            "expunge_result_unknown",
-            f"UID EXPUNGE 未返回可验证结果：{type(exc).__name__}",
-            state="unknown",
-        ) from exc
-    if typ != "OK":
-        try:
-            client.uid("store", str(message["uid"]), "-FLAGS.SILENT", r"(\Deleted)")
-        except Exception:
-            pass
-        raise MailboxMoveFailure(
-            "expunge_rejected",
-            "IMAP 拒绝 UID EXPUNGE；已尝试撤销删除标记",
-            state="unknown",
-        )
-    _verify_moved_message(client, message=message, destination_folder=destination_folder)
-    return "uid_copy_uid_expunge"
 
 
 def _message_from_local_store(conn: Any, storage_ref: str, account_id: str) -> dict[str, Any]:
@@ -500,15 +341,14 @@ def move_messages(
         raise ValueError("at least one storage_ref is required")
 
     account: MailAccount = load_account(config_path, account_id)
+    if account.graph:
+        from .graph import move_graph_messages
+        return move_graph_messages(account=account, db_path=db_path, destination=destination,
+                                   storage_refs=unique_refs, apply=apply, exact_folder=exact_folder)
     conn = connect_email_store(db_path)
-    client: imaplib.IMAP4 | None = None
+    client: Himalaya | None = None
     try:
-        secret = keychain_get_secret(account.imap.credential_ref,
-                                     fallback_keychain=account.imap.fallback_keychain)
-        client = connect_imap(account)
-        login_type, _ = client.login(account.imap.username, secret)
-        if login_type != "OK":
-            raise MailboxMoveFailure("login_rejected", "IMAP 登录被拒绝")
+        client = Himalaya(account)
         capabilities = _capabilities(client)
         mailboxes = _list_mailboxes(client)
         destination_folder, gmail_archive = _resolve_move_target(
@@ -717,8 +557,3 @@ def move_messages(
         }
     finally:
         conn.close()
-        if client is not None:
-            try:
-                client.logout()
-            except Exception:
-                pass

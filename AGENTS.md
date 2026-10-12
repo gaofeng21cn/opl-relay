@@ -1,6 +1,9 @@
 # OPL Relay
 
-本仓持有 OPL Relay 的 local-first 邮件引擎、Codex Plugin、SQLite raw EML store、read-first CLI 和受审核约束的 Apple Mail 草稿实现。
+本仓持有数字分身的共享邮件管理层：统一引用、审阅与跟进记录、可替换邮件后端和执行核对。
+邮箱服务器决定原文及真实位置；成熟工具承担所支持的读取、草稿和移动。
+Relay 核对工具返回的身份与结果，保留 Graph OAuth/delta/ImmutableId 适配、Codex Plugin、选定原文缓存和审核合同。
+Himalaya 是唯一邮件传输与写入后端；不恢复内置 Python IMAP 或直接 Graph 邮件写入回退。
 
 - 真实账户、邮件、同步游标、私有 profile 和凭据不得进入 Git；运行态唯一属于
   `OPL_PROFILE_WORKSPACE`，Relay 使用其中的 `data/relay`，不得使用旧目录、

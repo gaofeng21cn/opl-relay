@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import imaplib
 import json
 import re
-import socket
 import fcntl
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from .config import MailAccount, keychain_read_secret, load_account
+from .config import load_account
+from .native import Himalaya, NativeError
 from .message import extract_attachments, parse_headers
 from .paths import default_config_path, default_db_path, default_sync_state_dir
 from .store import ACTIVE_FOLDERS, HISTORY_FOLDERS, connect_email_store, reconcile_folder, upsert_email_message
@@ -35,22 +34,10 @@ class SyncBudget:
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
 
-    def before_io(self, client: imaplib.IMAP4 | None, stage: str) -> None:
+    def before_io(self, client: Himalaya | None, stage: str) -> None:
         remaining = self.remaining()
         if remaining <= 0:
             raise SyncBudgetExceeded(f"sync time budget exceeded before {stage}")
-        if client is not None:
-            sock = getattr(client, "sock", None)
-            if sock is not None:
-                # Keep every blocking IMAP operation inside the same overall
-                # budget. The previous implementation only bounded each
-                # socket read, so a multi-folder dry-run could wait forever.
-                sock.settimeout(max(0.01, min(60.0, remaining)))
-
-    def close_timeout(self, client: imaplib.IMAP4 | None) -> None:
-        sock = getattr(client, "sock", None) if client is not None else None
-        if sock is not None:
-            sock.settimeout(max(0.01, min(2.0, max(0.0, self.remaining()))))
 
 
 def now_iso() -> str:
@@ -70,36 +57,11 @@ def sanitize_folder_name(folder: str) -> str:
     return f"folder_{digest}"
 
 
-def parse_imap_list_name(raw_line: bytes) -> str:
-    line = raw_line.decode("utf-8", errors="replace")
-    match = re.match(r'^\(.*\)\s+"[^"]*"\s+(.*)$', line)
-    if not match:
-        return line.strip()
-    name = match.group(1).strip()
-    if name.startswith('"') and name.endswith('"'):
-        name = name[1:-1].replace('\\"', '"').replace("\\\\", "\\")
-    return name
-
-
 def should_sync_folder(name: str, include: Iterable[str], exclude: Iterable[str]) -> bool:
     if name in exclude:
         return False
     include_set = list(include)
     return "*" in include_set or name in include_set
-
-
-def connect_imap(account: MailAccount, timeout_sec: float = 60.0) -> imaplib.IMAP4:
-    security = account.imap.security.lower()
-    if security == "ssl":
-        client = imaplib.IMAP4_SSL(account.imap.host, account.imap.port, timeout=timeout_sec)
-    else:
-        client = imaplib.IMAP4(account.imap.host, account.imap.port, timeout=timeout_sec)
-        if security == "starttls":
-            client.starttls()
-    sock = getattr(client, "sock", None)
-    if sock is not None:
-        sock.settimeout(timeout_sec)
-    return client
 
 
 def load_json(path: Path, default: object) -> object:
@@ -111,104 +73,6 @@ def load_json(path: Path, default: object) -> object:
 def dump_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def parse_fetch_uid_rfc822_map(data: list[object]) -> dict[int, bytes]:
-    out: dict[int, bytes] = {}
-    for item in data:
-        if not (isinstance(item, tuple) and len(item) >= 2):
-            continue
-        meta, raw = item[0], item[1]
-        if not (isinstance(meta, bytes) and isinstance(raw, bytes)):
-            continue
-        match = re.search(rb"UID\s+(\d+)", meta)
-        if not match:
-            continue
-        out[int(match.group(1))] = raw
-    return out
-
-
-def fetch_message_batch(
-    client: imaplib.IMAP4,
-    uids: list[int],
-    *,
-    budget: SyncBudget | None = None,
-):
-    """Bound IMAP responses by bytes; large attachments use partial PEEK reads."""
-    before_io = budget.before_io if budget is not None else lambda _client, _stage: None
-    before_io(client, "FETCH sizes")
-    typ, data = client.uid("fetch", ",".join(map(str, uids)), "(UID RFC822.SIZE)")
-    if typ != "OK":
-        raise ValueError("FETCH sizes rejected")
-    sizes = {}
-    for item in data:
-        if not isinstance(item, bytes):
-            continue
-        uid_match = re.search(rb"UID\s+(\d+)", item)
-        size_match = re.search(rb"RFC822.SIZE\s+(\d+)", item)
-        if uid_match and size_match:
-            sizes[int(uid_match[1])] = int(size_match[1])
-    small = []
-    small_bytes = 0
-
-    def refetch_is_identical(uid: int, expected: bytes) -> bool:
-        """Accept a size discrepancy only when a second full read is byte-identical.
-
-        Some servers advertise an RFC822.SIZE that disagrees with the literal
-        they actually return. A single short read could also be a truncated
-        body, so the anomaly is confirmed by an independent re-retrieval rather
-        than by trusting the declared size.
-        """
-        try:
-            before_io(client, f"FETCH retry UID {uid}")
-            typ, fetched = client.uid("fetch", str(uid), "(UID BODY.PEEK[])")
-        except (OSError, imaplib.IMAP4.error):
-            return False
-        if typ != "OK":
-            return False
-        return parse_fetch_uid_rfc822_map(fetched).get(uid) == expected
-
-    def fetch_small(group):
-        before_io(client, "FETCH bodies")
-        typ, fetched = client.uid("fetch", ",".join(map(str, group)), "(UID BODY.PEEK[])")
-        if typ != "OK":
-            raise ValueError("FETCH body rejected")
-        raw_map = parse_fetch_uid_rfc822_map(fetched)
-        for uid in group:
-            raw = raw_map.get(uid)
-            if raw is None:
-                continue  # A concurrently removed message remains a retryable gap.
-            if len(raw) != sizes[uid]:
-                if not raw or not refetch_is_identical(uid, raw):
-                    raise ValueError(f"FETCH byte count mismatch for UID {uid}")
-            yield uid, raw
-
-    for uid in uids:
-        size = sizes.get(uid)
-        if size is None:
-            continue
-        if small and small_bytes + size > 4 * 1024 * 1024:
-            yield from fetch_small(small)
-            small, small_bytes = [], 0
-        if size <= 4 * 1024 * 1024:
-            small.append(uid)
-            small_bytes += size
-            continue
-        parts = []
-        for offset in range(0, size, 1024 * 1024):
-            length = min(1024 * 1024, size - offset)
-            try:
-                before_io(client, f"FETCH partial UID {uid}")
-                typ, fetched = client.uid("fetch", str(uid), f"(UID BODY.PEEK[]<{offset}.{length}>)")
-            except (OSError, imaplib.IMAP4.error) as exc:
-                raise ValueError(f"partial FETCH failed for UID {uid} at byte {offset}: {type(exc).__name__}") from exc
-            part = parse_fetch_uid_rfc822_map(fetched).get(uid) if typ == "OK" else None
-            if part is None or len(part) != length:
-                raise ValueError(f"partial FETCH byte count mismatch for UID {uid}")
-            parts.append(part)
-        yield uid, b"".join(parts)
-    if small:
-        yield from fetch_small(small)
 
 
 def sync_account(**kwargs: object) -> dict[str, object]:
@@ -223,6 +87,23 @@ def sync_account(**kwargs: object) -> dict[str, object]:
         return _sync_account(**kwargs)
 
 
+def fetch_message_batch(client, uids, *, folder, budget=None):
+    """Delegate MIME transport; retain byte-count and stable-read verification."""
+    from concurrent.futures import ThreadPoolExecutor
+    if budget:
+        budget.before_io(client, "message metadata")
+    metadata = client.metadata(folder, uids)
+    def retrieve(uid):
+        raw = client.mime(uid, folder=folder)
+        if not raw or (len(raw) != metadata[uid]["size"] and client.mime(uid, folder=folder) != raw):
+            raise ValueError(f"Native FETCH byte count mismatch for UID {uid}")
+        return raw
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pending = [(uid, pool.submit(retrieve, uid)) for uid in uids if uid in metadata]
+        for uid, future in pending:
+            yield uid, future.result()
+
+
 def _sync_account(
     *,
     config_path: Path = default_config_path(),
@@ -232,17 +113,19 @@ def _sync_account(
     mode: str = "incremental",
     limit_per_folder: int | None = None,
     dry_run: bool = False,
-    scope: str = "all",
+    scope: str = "active",
     folder: str = "",
     max_duration_sec: float | None = DEFAULT_SYNC_MAX_SECONDS,
 ) -> dict[str, object]:
     account = load_account(config_path, account_id)
-    credential = keychain_read_secret(account.imap.credential_ref,
-                                      fallback_keychain=account.imap.fallback_keychain)
+    if account.provider == "microsoft_graph":
+        from .graph import sync_graph_account
+        return sync_graph_account(account=account, db_path=db_path, state_dir=state_dir,
+                                  mode=mode, limit_per_folder=limit_per_folder,
+                                  dry_run=dry_run, scope=scope, folder=folder,
+                                  max_duration_sec=max_duration_sec)
     budget = SyncBudget(max_duration_sec)
-    client = connect_imap(account, min(60.0, budget.remaining()))
-    budget.before_io(client, "mailbox login")
-    client.login(account.imap.username, credential.value)
+    client = Himalaya(account, deadline=budget.deadline)
     state_path = state_dir / f"{account_id}.json"
     state = load_json(state_path, {"account_id": account_id, "folders": {}})
     assert isinstance(state, dict)
@@ -252,7 +135,8 @@ def _sync_account(
     summary: dict[str, object] = {
         "ok": True,
         "account": account_id,
-        "credential_source": credential.source,
+        "credential_source": "keychain",
+        "backend": "himalaya",
         "mode": mode,
         "folders": [],
         "new_messages": 0,
@@ -264,23 +148,18 @@ def _sync_account(
     try:
         try:
             budget.before_io(client, "folder list")
-            typ, box_lines = client.list()
+            boxes = client.folders()
         except SyncBudgetExceeded as exc:
             summary["ok"] = False
             summary["timed_out"] = True
             summary["error"] = str(exc)
             return summary
-        except (OSError, imaplib.IMAP4.error) as exc:
+        except (OSError, NativeError) as exc:
             summary["ok"] = False
+            summary["timed_out"] = budget.remaining() <= 0 or getattr(exc, "code", "") == "timeout"
             summary["error"] = f"{type(exc).__name__}: {exc}"
             return summary
-        if typ != "OK" or not box_lines:
-            raise RuntimeError("无法读取 IMAP 文件夹列表")
-        sync_folders = [
-            parse_imap_list_name(raw)
-            for raw in box_lines
-            if isinstance(raw, bytes)
-        ]
+        sync_folders = [b["name"] for b in boxes if "\\noselect" not in b["flags"]]
         sync_folders = [
             folder
             for folder in sync_folders
@@ -301,21 +180,15 @@ def _sync_account(
             if not dry_run:
                 with conn:
                     conn.execute("UPDATE folder_snapshots SET complete=0 WHERE account_id=? AND folder_slug=?", (account_id, folder_slug))
-            select_name = folder_name.replace("\\", "\\\\").replace('"', '\\"')
             try:
-                budget.before_io(client, f"SELECT {folder_name}")
-                typ_sel, exists_data = client.select(f'"{select_name}"', readonly=True)
-                if typ_sel != "OK":
-                    raise ValueError("SELECT failed")
-                uidvalidity = int(client.response("UIDVALIDITY")[1][0])
-                expected_count = int(exists_data[0])
+                budget.before_io(client, f"STATUS {folder_name}")
+                identity = client.status(folder_name)
+                uidvalidity = identity["uidvalidity"]
+                expected_count = identity["count"]
                 budget.before_io(client, f"SEARCH {folder_name}")
-                typ_search, uid_data = client.uid("search", "ALL")
-                if typ_search != "OK" or len(uid_data) != 1 or not isinstance(uid_data[0], bytes):
-                    raise ValueError("incomplete SEARCH ALL response")
-                remote_uids = sorted(int(u) for u in uid_data[0].split())
+                remote_uids = sorted(client.ids(folder_name))
                 if uidvalidity <= 0 or any(u <= 0 for u in remote_uids) or len(set(remote_uids)) != expected_count or len(remote_uids) != expected_count:
-                    raise ValueError("SELECT/SEARCH snapshot mismatch; retry sync")
+                    raise ValueError("STATUS/SEARCH snapshot mismatch; retry sync")
                 checked_at = now_iso()
             except SyncBudgetExceeded as exc:
                 summary["ok"] = False
@@ -323,8 +196,9 @@ def _sync_account(
                 summary["error"] = str(exc)
                 summary["folders"].append({"folder": folder_name, "complete": False, "error": str(exc)})
                 break
-            except (TypeError, ValueError, IndexError, OSError, imaplib.IMAP4.error) as exc:
+            except (TypeError, ValueError, IndexError, OSError, NativeError) as exc:
                 summary["ok"] = False
+                summary["timed_out"] = budget.remaining() <= 0 or getattr(exc, "code", "") == "timeout"
                 summary["folders"].append({"folder": folder_name, "complete": False, "error": str(exc)})
                 continue
             known = {row[0] for row in conn.execute(
@@ -350,7 +224,7 @@ def _sync_account(
                 for offset in range(0, len(scan_uids), 10):
                     batch = scan_uids[offset:offset + 10]
                     try:
-                        for uid, raw_msg in fetch_message_batch(client, batch, budget=budget):
+                        for uid, raw_msg in fetch_message_batch(client, batch, folder=folder_name, budget=budget):
                             fetched_uids.append(uid)
                             headers = parse_headers(raw_msg)
                             raw_hash = hashlib.sha256(raw_msg).hexdigest()
@@ -367,13 +241,25 @@ def _sync_account(
                         fetch_errors.append(str(exc))
                         summary["timed_out"] = True
                         break
-                    except (socket.timeout, TimeoutError, OSError, ValueError, imaplib.IMAP4.error) as exc:
+                    except (TimeoutError, OSError, ValueError) as exc:
                         fetch_errors.append(f"{type(exc).__name__}: {exc}")
+                        summary["timed_out"] = budget.remaining() <= 0 or getattr(exc, "code", "") == "timeout"
                         break  # The socket may be unusable; retry missing UIDs next run.
             available = known | set(fetched_uids)
             remaining = set(remote_uids) - available
             failed = set(scan_uids) - set(fetched_uids)
             complete = not remaining and (dry_run or not failed)
+            if not dry_run and not summary["timed_out"]:
+                try:
+                    budget.before_io(client, "folder identity readback")
+                    if client.status(folder_name)["uidvalidity"] != uidvalidity:
+                        raise ValueError("UID epoch changed during sync")
+                except (SyncBudgetExceeded, ValueError, OSError) as exc:
+                    summary["ok"] = False
+                    summary["timed_out"] = budget.remaining() <= 0 or getattr(exc, "code", "") == "timeout"
+                    summary["new_messages"] += folder_new
+                    summary["folders"].append({"folder": folder_name, "complete": False, "new_messages": folder_new, "error": str(exc)})
+                    break
             if not dry_run:
                 reconcile_folder(conn, account=account_id, folder=folder_name,
                                  folder_slug=folder_slug, uidvalidity=uidvalidity,
@@ -423,8 +309,3 @@ def _sync_account(
         return summary
     finally:
         conn.close()
-        try:
-            budget.close_timeout(client)
-            client.logout()
-        except Exception:
-            pass

@@ -65,84 +65,63 @@ def account() -> MailAccount:
 
 
 class FakeImap:
-    def __init__(self, *, capabilities: bytes = b"IMAP4rev1 UIDPLUS MOVE") -> None:
-        self.capability_tokens = capabilities
-        self.selected = ""
-        self.move_called = False
-        self.mailboxes: dict[str, dict[int, bytes]] = {
-            "INBOX": {7: RAW_MESSAGE},
-            "Trash": {},
-        }
+    def __init__(self, *, capabilities=b"IMAP4rev1 UIDPLUS MOVE"):
+        self.capability_tokens, self.move_called = capabilities, False
+        self.mailboxes = {"INBOX": {7: RAW_MESSAGE}, "Trash": {}}
 
-    def login(self, username: str, secret: str) -> tuple[str, list[bytes]]:
-        assert username == "work@example.test"
-        assert secret == "secret"
-        return "OK", [b"logged in"]
+    def folders(self):
+        return [{"name": name, "flags": frozenset({"\\trash"}) if name == "Trash" else frozenset()}
+                for name in self.mailboxes]
 
-    def list(self):
-        return "OK", [
-            b'(\\HasNoChildren) "/" "INBOX"',
-            b'(\\HasNoChildren \\Trash) "/" "Trash"',
-        ]
+    def capabilities(self):
+        return set(self.capability_tokens.decode().upper().split())
 
-    def capability(self):
-        return "OK", [self.capability_tokens]
+    def status(self, folder):
+        return {"uidvalidity": 1, "count": len(self.mailboxes[folder])}
 
-    def select(self, folder: str, readonly: bool = True):
-        assert folder.startswith('"')
-        self.selected = folder[1:-1].replace('\\"', '"').replace('\\\\', '\\')
-        if self.selected not in self.mailboxes:
-            return "NO", []
-        return "OK", [str(len(self.mailboxes[self.selected])).encode()]
+    def mime(self, uid, *, folder):
+        return self.mailboxes[folder][int(uid)]
 
-    def uid(self, command: str, *args: str):
-        if command == "fetch":
-            uid = int(args[0])
-            raw = self.mailboxes[self.selected].get(uid)
-            if raw is None:
-                return "NO", []
-            return "OK", [(f"{uid} (UID {uid} BODY[])".encode(), raw)]
-        if command == "search" and args[0] == "UID":
-            uid = int(args[1])
-            if uid in self.mailboxes[self.selected]:
-                return "OK", [str(uid).encode()]
-            return "OK", [b""]
-        if command == "search" and args[0] == "HEADER":
-            message_id = args[2].strip('"')
-            matches = [
-                str(uid).encode()
-                for uid, raw in self.mailboxes[self.selected].items()
-                if f"Message-ID: {message_id}".encode() in raw
-            ]
-            return "OK", [b" ".join(matches)]
-        if command == "move":
-            self.move_called = True
-            assert self.selected == "INBOX"
-            uid = int(args[0])
-            destination = args[1].strip('"')
-            raw = self.mailboxes[self.selected].pop(uid)
-            self.mailboxes[destination][101] = raw
-            return "OK", [b"[COPYUID 1 7 101]"]
-        raise AssertionError((command, args))
+    def metadata(self, folder, uids):
+        return {uid: {} for uid in uids if uid in self.mailboxes[folder]}
 
-    def logout(self):
-        return "BYE", [b"logged out"]
+    def find_message(self, folder, message_id):
+        return [uid for uid, raw in self.mailboxes[folder].items()
+                if f"Message-ID: {message_id}".encode() in raw]
+
+    def move(self, uid, *, source, destination):
+        self.move_called = True
+        self.mailboxes[destination][101] = self.mailboxes[source].pop(int(uid))
+
+    def copy(self, uid, *, source, destination):
+        self.move_called = True
+        self.mailboxes[destination][101] = self.mailboxes[source][int(uid)]
+
+    def remove_exact(self, folder, uid):
+        assert "UIDPLUS" in self.capabilities()
+        del self.mailboxes[folder][int(uid)]
+
+
+class FakeGmailImap(FakeImap):
+    def __init__(self):
+        super().__init__(capabilities=b"IMAP4rev1 UIDPLUS MOVE X-GM-EXT-1")
+        self.mailboxes = {"INBOX": {7: RAW_MESSAGE}, "[Gmail]/All Mail": {101: RAW_MESSAGE}}
+
+    def folders(self):
+        return [{"name": "INBOX", "flags": frozenset()},
+                {"name": "Archive", "flags": frozenset({"\\noselect"})},
+                {"name": "[Gmail]/All Mail", "flags": frozenset({"\\all"})}]
+
+
+class FakeFolderImap(FakeImap):
+    def __init__(self):
+        super().__init__()
+        self.mailboxes["Bill Finance"] = {}
 
 
 def configure_mailbox(monkeypatch, fake: FakeImap) -> None:
     monkeypatch.setattr(mailbox_module, "load_account", lambda path, account_id: account())
-    monkeypatch.setattr(mailbox_module, "keychain_get_secret", lambda ref, **kwargs: "secret")
-    monkeypatch.setattr(mailbox_module, "connect_imap", lambda loaded: fake)
-
-
-def test_parse_imap_list_entry_resolves_special_use_folder() -> None:
-    entry = mailbox_module.parse_imap_list_entry(
-        b'(\\HasNoChildren \\Trash) "/" "Deleted Items"'
-    )
-
-    assert entry is not None
-    assert entry.name == "Deleted Items"
-    assert "\\trash" in entry.flags
+    monkeypatch.setattr(mailbox_module, "Himalaya", lambda loaded: fake)
 
 
 def test_bill_destination_requires_an_existing_exact_folder() -> None:
@@ -202,7 +181,7 @@ def test_move_apply_verifies_target_and_records_local_receipt(monkeypatch, tmp_p
     assert fake.move_called is True
     message_receipt = result["messages"][0]
     assert message_receipt["status"] == "moved"
-    assert message_receipt["method"] == "uid_move"
+    assert message_receipt["method"] == "himalaya_uid_move"
     assert str(message_receipt["operation_ref"]).startswith("mailbox-operation://")
     assert fake.mailboxes["INBOX"] == {}
     assert fake.mailboxes["Trash"][101] == RAW_MESSAGE
@@ -238,34 +217,6 @@ def test_move_preflight_hash_mismatch_performs_no_remote_write(monkeypatch, tmp_
     assert result["moved"] == 0
     assert fake.move_called is False
     assert result["messages"][0]["error"]["code"] == "source_hash_mismatch"
-
-
-class FakeGmailImap(FakeImap):
-    def __init__(self) -> None:
-        super().__init__(capabilities=b"IMAP4rev1 UIDPLUS MOVE X-GM-EXT-1")
-        self.mailboxes = {
-            "INBOX": {7: RAW_MESSAGE},
-            "[Gmail]/All Mail": {101: RAW_MESSAGE},
-        }
-
-    def list(self):
-        return "OK", [
-            b'(\\HasNoChildren) "/" "INBOX"',
-            b'(\\Noselect \\HasChildren) "/" "Archive"',
-            b'(\\All \\HasNoChildren) "/" "[Gmail]/All Mail"',
-        ]
-
-
-class FakeFolderImap(FakeImap):
-    def __init__(self) -> None:
-        super().__init__()
-        self.mailboxes["Bill Finance"] = {}
-
-    def list(self):
-        return "OK", [
-            b'(\\HasNoChildren) "/" "INBOX"',
-            b'(\\HasNoChildren) "/" "Bill Finance"',
-        ]
 
 
 def test_resolve_move_target_gmail_noselect_archive_uses_all_mail() -> None:
@@ -438,13 +389,45 @@ def test_move_requires_exactly_one_target(monkeypatch, tmp_path: Path) -> None:
             storage_refs=[storage_ref],
             apply=False,
         )
+
     with pytest.raises(ValueError):
         mailbox_module.move_messages(
-            config_path=tmp_path / "accounts.toml",
-            db_path=db_path,
-            account_id="work",
-            destination="",
-            exact_folder="",
-            storage_refs=[storage_ref],
-            apply=False,
-        )
+            config_path=tmp_path / "accounts.toml", db_path=db_path,
+            account_id="work", destination="", exact_folder="",
+            storage_refs=[storage_ref], apply=False)
+
+
+def test_uidplus_only_native_move_verifies_copy_before_exact_removal(monkeypatch, tmp_path):
+    ref = seed_message(tmp_path / "mail.sqlite")
+    fake = FakeImap(capabilities=b"IMAP4rev1 UIDPLUS")
+    configure_mailbox(monkeypatch, fake)
+    result = mailbox_module.move_messages(config_path=tmp_path / "accounts.toml",
+        db_path=tmp_path / "mail.sqlite", account_id="work", destination="trash",
+        storage_refs=[ref], apply=True)
+    assert result["ok"] and result["moved"] == 1
+    assert result["messages"][0]["method"] == "himalaya_uid_copy_uid_expunge"
+    assert fake.mailboxes["Trash"][101] == RAW_MESSAGE and not fake.mailboxes["INBOX"]
+
+
+def test_uidplus_copy_without_verified_target_preserves_source(monkeypatch, tmp_path):
+    ref = seed_message(tmp_path / "mail.sqlite")
+    fake = FakeImap(capabilities=b"IMAP4rev1 UIDPLUS")
+    configure_mailbox(monkeypatch, fake)
+    monkeypatch.setattr(fake, "copy", lambda *a, **kw: None)
+    result = mailbox_module.move_messages(config_path=tmp_path / "accounts.toml",
+        db_path=tmp_path / "mail.sqlite", account_id="work", destination="trash",
+        storage_refs=[ref], apply=True)
+    assert not result["ok"] and result["messages"][0]["remote_state"] == "unknown"
+    assert fake.mailboxes["INBOX"][7] == RAW_MESSAGE
+
+
+def test_folder_epoch_change_refuses_native_move(monkeypatch, tmp_path):
+    ref = seed_message(tmp_path / "mail.sqlite")
+    fake = FakeImap()
+    configure_mailbox(monkeypatch, fake)
+    monkeypatch.setattr(fake, "status", lambda folder: {"uidvalidity": 2, "count": 1})
+    result = mailbox_module.move_messages(config_path=tmp_path / "accounts.toml",
+        db_path=tmp_path / "mail.sqlite", account_id="work", destination="trash",
+        storage_refs=[ref], apply=True)
+    assert not result["ok"] and not fake.move_called
+    assert result["messages"][0]["error"]["code"] == "source_epoch_changed"

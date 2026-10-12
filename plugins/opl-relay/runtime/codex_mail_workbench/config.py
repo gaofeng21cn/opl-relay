@@ -34,12 +34,22 @@ class CredentialSecret:
 
 
 @dataclass(frozen=True)
+class GraphEndpoint:
+    client_id: str
+    credential_ref: str
+    tenant: str = "consumers"
+
+
+@dataclass(frozen=True)
 class MailAccount:
     account_id: str
     email: str
-    imap: MailEndpoint
+    imap: MailEndpoint | None
     include_folders: list[str]
     exclude_folders: list[str]
+    provider: str = "imap"
+    graph: GraphEndpoint | None = None
+    backend: str = "himalaya"
 
 
 def load_toml(path: Path) -> dict[str, Any]:
@@ -102,10 +112,27 @@ def load_accounts_config(path: Path) -> dict[str, MailAccount]:
         raw = _dict(item, f"accounts[{idx}]")
         account_id = _str(raw.get("account_id"), f"accounts[{idx}].account_id")
         folders = _dict(raw.get("folders", {}), f"accounts[{idx}].folders")
+        provider = raw.get("provider", "imap")
+        if provider not in {"imap", "microsoft_graph"}:
+            raise ValueError("unsupported mail provider")
+        graph = None
+        backend = raw.get("backend", "himalaya")
+        if backend not in {"himalaya"}:
+            raise ValueError("unsupported mail backend")
+        if provider == "microsoft_graph":
+            value = _dict(raw.get("graph"), "graph")
+            tenant = value.get("tenant", "consumers")
+            if tenant not in {"consumers", "common", "organizations"}:
+                raise ValueError("unsupported Microsoft tenant authority")
+            graph = GraphEndpoint(_str(value.get("client_id"), "graph.client_id"),
+                                  _str(value.get("credential_ref"), "graph.credential_ref"), tenant)
         account = MailAccount(
             account_id=account_id,
             email=_str(raw.get("email"), f"accounts[{idx}].email"),
-            imap=_endpoint(_dict(raw.get("imap"), f"accounts[{idx}].imap"), f"accounts[{idx}].imap"),
+            imap=_endpoint(_dict(raw.get("imap"), f"accounts[{idx}].imap"), f"accounts[{idx}].imap") if provider == "imap" else None,
+            provider=provider,
+            graph=graph,
+            backend=backend,
             include_folders=_string_list(
                 folders.get("include"), f"accounts[{idx}].folders.include", ["*"]
             ),
@@ -142,12 +169,22 @@ def add_account(
     credential_ref: str,
     include_folders: list[str],
     exclude_folders: list[str],
+    provider: str = "imap",
+    client_id: str = "",
+    tenant: str = "consumers",
+    backend: str = "himalaya",
 ) -> MailAccount:
     """Append one account to the private Profile TOML without exposing secrets."""
 
     accounts = load_accounts_config(path) if path.exists() else {}
     if account_id in accounts:
         raise ValueError(f"account_id already exists: {account_id}")
+    if provider not in {"imap", "microsoft_graph"}:
+        raise ValueError("unsupported mail provider")
+    if tenant not in {"consumers", "common", "organizations"}:
+        raise ValueError("unsupported Microsoft tenant authority")
+    if backend not in {"himalaya"}:
+        raise ValueError("unsupported mail backend")
     account = MailAccount(
         account_id=_str(account_id, "account_id"),
         email=_str(email, "email"),
@@ -157,35 +194,41 @@ def add_account(
             security=_str(security, "imap.security").lower(),
             username=_str(username, "imap.username"),
             credential_ref=_str(credential_ref, "imap.credential_ref"),
-        ),
+        ) if provider == "imap" else None,
+        provider=provider,
+        graph=GraphEndpoint(_str(client_id, "graph.client_id"), credential_ref, tenant) if provider == "microsoft_graph" else None,
+        backend=backend,
         include_folders=_string_list(include_folders, "folders.include", ["*"]),
         exclude_folders=_string_list(exclude_folders, "folders.exclude", []),
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["version = 1", ""]
-    for item in [*accounts.values(), account]:
-        lines.extend(
-            [
+    # Append only the new account. Preserve comments, unknown fields, and every
+    # existing account's configuration byte-for-byte.
+    lines = [
                 "[[accounts]]",
-                f"account_id = {_toml_string(item.account_id)}",
-                f"email = {_toml_string(item.email)}",
+                f"account_id = {_toml_string(account.account_id)}",
+                f"email = {_toml_string(account.email)}",
+                f"provider = {_toml_string(provider)}",
+                f"backend = {_toml_string(backend)}",
                 "",
-                "[accounts.imap]",
-                f"host = {_toml_string(item.imap.host)}",
-                f"port = {item.imap.port}",
-                f"security = {_toml_string(item.imap.security)}",
-                f"username = {_toml_string(item.imap.username)}",
-                f"credential_ref = {_toml_string(item.imap.credential_ref)}",
-                *([f"fallback_keychain = {_toml_string(item.imap.fallback_keychain)}"]
-                  if item.imap.fallback_keychain else []),
-                "",
-                "[accounts.folders]",
-                "include = [" + ", ".join(_toml_string(value) for value in item.include_folders) + "]",
-                "exclude = [" + ", ".join(_toml_string(value) for value in item.exclude_folders) + "]",
-                "",
-            ]
-        )
-    path.write_text("\n".join(lines), encoding="utf-8")
+    ]
+    if account.imap is not None:
+        endpoint = account.imap
+        lines += ["[accounts.imap]", f"host = {_toml_string(endpoint.host)}",
+                  f"port = {endpoint.port}", f"security = {_toml_string(endpoint.security)}",
+                  f"username = {_toml_string(endpoint.username)}",
+                  f"credential_ref = {_toml_string(endpoint.credential_ref)}", ""]
+    else:
+        endpoint = account.graph
+        assert endpoint is not None
+        lines += ["[accounts.graph]", f"client_id = {_toml_string(endpoint.client_id)}",
+                  f"tenant = {_toml_string(endpoint.tenant)}",
+                  f"credential_ref = {_toml_string(endpoint.credential_ref)}", ""]
+    lines += ["[accounts.folders]",
+              "include = [" + ", ".join(_toml_string(v) for v in account.include_folders) + "]",
+              "exclude = [" + ", ".join(_toml_string(v) for v in account.exclude_folders) + "]", ""]
+    original = path.read_text(encoding="utf-8") if path.exists() else "version = 1\n"
+    path.write_text(original.rstrip() + "\n\n" + "\n".join(lines), encoding="utf-8")
     return account
 
 

@@ -316,7 +316,7 @@ def scope_filter(scope: str, folder: str | None = None) -> tuple[list[str], list
             SELECT 1 FROM email_messages rejected
             WHERE rejected.account_id=email_messages.account_id
               AND rejected.raw_sha256=email_messages.raw_sha256 AND rejected.present=1
-              AND lower(rejected.folder) IN ('trash','junk e-mail','junk','spam','[gmail]/trash','[gmail]/spam')
+              AND lower(rejected.folder) IN ('trash','deleted items','junk email','junk e-mail','junk','spam','[gmail]/trash','[gmail]/spam')
         )""")
         where.append("""NOT EXISTS (
             SELECT 1 FROM mailbox_operations op WHERE op.storage_ref=email_messages.storage_ref

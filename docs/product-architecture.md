@@ -12,14 +12,20 @@ actual implementation and operational state.
 
 ## Product And Owners
 
-Relay is independently usable mail software. Persona combines cross-domain
-PI context and produces proposals; it does not own Relay's mail store.
+Relay is the digital delegate's shared mail-management layer: it turns
+communication into continuous, verifiable work records across OpenClaw, Codex
+and OPL. It retains review progress, reasons, thread/task relationships and
+execution receipts. It is not intended to replace a general mail client.
+Persona combines cross-domain PI context and produces proposals; it does not own Relay's mail store.
 OPL App supplies the chat and visual product. There is no separate Relay UI
 repository or Persona desktop product.
 
 | Boundary | Owner |
 | --- | --- |
+| Original messages, actual folder/label membership, server drafts and Sent status | Mailbox provider |
+| Replaceable mail protocol, retrieval and write implementation | Mature mail tools where their actual contracts cover the operation |
 | Stable mail identities, raw evidence, relationship memory, draft fingerprints and send receipts | Relay |
+| Reasoning, drafting and user interaction | OpenClaw, Codex or OPL using the same Profile and Relay records |
 | Cross-domain context, private policy interpretation, provenance and proposals | Persona |
 | User knowledge and personal profile values | User-selected Obsidian vault |
 | Public content, approved local website changes and publication | `gflab_web` |
@@ -84,6 +90,8 @@ completed external write. A host can show unavailable contributions locally
 without blocking unrelated Packages.
 
 Apple Mail remains the review frontend for the implemented draft workflow.
+Server Drafts also allow review in any synchronized mail client, including a
+phone. The selected tool does not change approval or receipt ownership.
 Any future App review surface must preserve the same draft identity,
 fingerprint, explicit send gate and final receipt. Unified review must not
 merge Persona proposal approval with Relay sending authority.

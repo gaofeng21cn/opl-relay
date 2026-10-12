@@ -65,7 +65,7 @@ from .store import (
     review_pending,
     review_status,
 )
-from .sync import connect_imap, sync_account
+from .sync import sync_account
 from .triage import build_triage_evidence, validate_triage_evidence
 from .workspace import (
     initialize_workspace,
@@ -996,7 +996,9 @@ def cmd_accounts(args: argparse.Namespace) -> int:
                 {
                     "account_id": account.account_id,
                     "email": account.email,
-                    "imap_host": account.imap.host,
+                    "provider": account.provider,
+                    "backend": account.backend,
+                    "imap_host": account.imap.host if account.imap else None,
                     "include_folders": account.include_folders,
                     "exclude_folders": account.exclude_folders,
                 }
@@ -1009,6 +1011,8 @@ def cmd_accounts(args: argparse.Namespace) -> int:
 
 
 def cmd_account_add(args: argparse.Namespace) -> int:
+    if args.provider == "imap" and not args.host:
+        raise ValueError("--host is required for IMAP accounts")
     account = add_account(
         Path(args.config).expanduser(),
         account_id=args.account_id,
@@ -1017,9 +1021,13 @@ def cmd_account_add(args: argparse.Namespace) -> int:
         port=args.port,
         security=args.security,
         username=args.username or args.email,
-        credential_ref=args.credential_ref or f"keychain.{args.account_id}.imap",
+        credential_ref=args.credential_ref or f"keychain.{args.account_id}.{'oauth' if args.provider == 'microsoft_graph' else 'imap'}",
         include_folders=args.include or ["*"],
         exclude_folders=args.exclude,
+        provider=args.provider,
+        client_id=args.client_id,
+        tenant=args.tenant,
+        backend=getattr(args, "backend", "himalaya"),
     )
     emit(
         {
@@ -1027,14 +1035,15 @@ def cmd_account_add(args: argparse.Namespace) -> int:
             "account": {
                 "account_id": account.account_id,
                 "email": account.email,
-                "imap_host": account.imap.host,
-                "credential_ref": account.imap.credential_ref,
+                "provider": account.provider,
+                "imap_host": account.imap.host if account.imap else None,
+                "credential_ref": account.imap.credential_ref if account.imap else account.graph.credential_ref,
                 "include_folders": account.include_folders,
                 "exclude_folders": account.exclude_folders,
                 "credential_configured": False,
             },
             "next_actions": [
-                f"opl-relay --json credential set --account {account.account_id}",
+                f"opl-relay --json {'account login' if account.graph else 'credential set'} --account {account.account_id}",
                 f"opl-relay --json account check --account {account.account_id}",
             ],
         },
@@ -1045,6 +1054,8 @@ def cmd_account_add(args: argparse.Namespace) -> int:
 
 def cmd_credential_set(args: argparse.Namespace) -> int:
     account = load_account(Path(args.config).expanduser(), args.account_id)
+    if account.graph:
+        raise ValueError("Microsoft mail uses OAuth; run account login instead of entering a password")
     secret = (
         sys.stdin.read().rstrip("\r\n")
         if args.secret_stdin
@@ -1066,6 +1077,26 @@ def cmd_credential_set(args: argparse.Namespace) -> int:
 
 def cmd_account_check(args: argparse.Namespace) -> int:
     account = load_account(Path(args.config).expanduser(), args.account)
+    if account.graph:
+        from .graph import GraphClient
+        configured = keychain_has_secret(account.graph.credential_ref)
+        payload = {"ok": True, "account": account.account_id, "email": account.email,
+                   "provider": account.provider, "backend": account.backend, "credential_configured": configured,
+                   "connection": {"status": "not_checked"}}
+        if args.connect:
+            try:
+                if not configured:
+                    raise ValueError("oauth_login_required")
+                client = GraphClient(account)
+                client.identity()
+                from .native import Himalaya
+                Himalaya(account, token=client._access_token()).check()
+                payload["connection"] = {"status": "healthy", "identity_verified": True}
+                payload["scopes"] = sorted(client.scopes)
+            except Exception as exc:
+                payload.update(ok=False, connection={"status": "unavailable", "reason": str(exc)})
+        emit(payload, as_json=args.json)
+        return 0 if payload["ok"] else 1
     configured = keychain_has_secret(account.imap.credential_ref,
                                       fallback_keychain=account.imap.fallback_keychain)
     payload: dict[str, object] = {
@@ -1075,6 +1106,7 @@ def cmd_account_check(args: argparse.Namespace) -> int:
         "imap_host": account.imap.host,
         "credential_ref": account.imap.credential_ref,
         "credential_configured": configured,
+        "backend": account.backend,
         "connection": {"status": "not_checked"},
     }
     if args.connect:
@@ -1084,30 +1116,41 @@ def cmd_account_check(args: argparse.Namespace) -> int:
                 "reason": "credential_not_configured",
             }
         else:
-            client = None
             try:
-                credential = keychain_read_secret(account.imap.credential_ref,
-                    fallback_keychain=account.imap.fallback_keychain)
-                payload["credential_source"] = credential.source
-                client = connect_imap(account)
-                typ, _ = client.login(account.imap.username, credential.value)
+                from .native import Himalaya
+                Himalaya(account).check()
                 payload["connection"] = {
-                    "status": "healthy" if typ == "OK" else "unavailable",
-                    "server_response": typ,
+                    "status": "healthy",
+                    "server_response": "OK",
                 }
             except Exception as exc:
                 payload["connection"] = {
                     "status": "unavailable",
                     "reason": type(exc).__name__,
                 }
-            finally:
-                if client is not None:
-                    try:
-                        client.logout()
-                    except Exception:
-                        pass
     emit(payload, as_json=args.json)
     return 0 if payload["connection"]["status"] not in {"blocked", "unavailable"} else 1
+
+
+def cmd_account_login(args: argparse.Namespace) -> int:
+    from .graph import login_graph
+    account = load_account(Path(args.config).expanduser(), args.account)
+    def notify(url):
+        print(json.dumps({"status": "awaiting_microsoft_login", "account": account.account_id,
+                          "authorization_url": url, "permissions": "Mail.ReadWrite" if args.write else "Mail.Read",
+                          "send_allowed": False}), flush=True)
+    payload = login_graph(account, write=args.write, notify=notify, timeout=args.timeout)
+    emit(payload, as_json=args.json)
+    return 0
+
+
+def cmd_account_folders(args: argparse.Namespace) -> int:
+    from .graph import GraphClient
+    account = load_account(Path(args.config).expanduser(), args.account)
+    client = GraphClient(account)
+    client.identity()
+    emit({"ok": True, "account": account.account_id, "folders": client.folders()}, as_json=args.json)
+    return 0
 
 
 def cmd_recent(args: argparse.Namespace) -> int:
@@ -1129,6 +1172,15 @@ def cmd_recent(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    if getattr(args, "remote", False):
+        if not args.account:
+            raise ValueError("Remote search requires an explicit --account")
+        from .remote_search import search_remote
+        result = search_remote(account=load_account(Path(args.config).expanduser(), args.account),
+                               db_path=Path(args.db).expanduser(), query=args.query, scope=args.scope,
+                               folder=args.folder, limit=args.limit, since=args.since, until=args.until)
+        emit(result, as_json=args.json)
+        return 0 if result["ok"] else 1
     conn = connect_email_store(Path(args.db).expanduser())
     try:
         rows = search_messages(
@@ -1163,7 +1215,7 @@ def cmd_mail_status(args: argparse.Namespace) -> int:
     conn = connect_email_store(Path(args.db).expanduser())
     try:
         emit({"ok": True, "folders": folder_status(conn, args.account),
-              "counts_are": "last verified IMAP snapshot, not a live server query"}, as_json=args.json)
+              "counts_are": "last verified provider snapshot, not a live server query"}, as_json=args.json)
     finally:
         conn.close()
     return 0
@@ -1188,7 +1240,7 @@ def cmd_review(args: argparse.Namespace) -> int:
                 conn.close()
             # Successful UID enumeration proves membership of available rows,
             # even while an old body-download backlog remains incomplete.
-            validated = any(f.get("folder", "").lower() == "inbox" and "remote_count" in f
+            validated = any(f.get("folder", "").lower() == "inbox" and "remote_count" in f and f.get("membership_verified", True)
                             for f in sync_result.get("folders", []))
             prepared.append({"account": account, "sync": sync_result,
                              "available_for_review": validated, "pending": queue,
@@ -1247,6 +1299,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 def cmd_mailbox_move(args: argparse.Namespace) -> int:
     try:
+        if getattr(args, "reconcile", False):
+            if args.apply:
+                raise ValueError("--reconcile never accepts --apply")
+            from .graph import reconcile_graph_moves
+            account = load_account(Path(args.config).expanduser(), args.account)
+            if not account.graph:
+                raise ValueError("This reconciliation command currently requires a Graph account")
+            payload = reconcile_graph_moves(account=account, db_path=Path(args.db).expanduser(),
+                destination=args.destination, exact_folder=args.destination_folder, storage_refs=args.storage_ref)
+            emit(payload, as_json=args.json)
+            return 0 if payload["ok"] else 1
         payload = move_messages(
             config_path=Path(args.config).expanduser(),
             db_path=Path(args.db).expanduser(),
@@ -1757,6 +1820,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--until", default="", help="include messages before this ISO datetime")
     search.add_argument("--limit", type=int, default=20)
     search.add_argument("--scope", choices=SCOPES, default="active")
+    search.add_argument("--remote", action="store_true", help="按需在服务器检索，只缓存命中的原文，不同步整个归档")
     search.add_argument("--include-body", action=argparse.BooleanOptionalAction, default=True)
     search.add_argument("--max-scan", type=int, default=500, help="compatibility option; indexed search always covers the full selected scope")
     search.set_defaults(func=cmd_search)
@@ -1771,7 +1835,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--mode", choices=["initial", "incremental"], default="incremental")
     sync.add_argument("--limit-per-folder", type=int, default=None)
     sync.add_argument("--dry-run", action="store_true")
-    sync.add_argument("--scope", choices=SCOPES, default="all")
+    sync.add_argument("--scope", choices=SCOPES, default="active")
     sync.add_argument("--folder", default="", help="sync one configured folder")
     sync.add_argument("--max-seconds", type=float, default=120.0,
                       help="每轮 IMAP 同步的总预算（默认 120 秒，超时返回可续跑的部分结果）")
@@ -1810,6 +1874,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="精确指定一个已存在的现有文件夹（不创建新文件夹）",
     )
     mailbox_move.add_argument("--storage-ref", action="append", required=True)
+    mailbox_move.add_argument("--reconcile", action="store_true", help="只读核对 Graph 未知移动结果并保存回执，不重试远端操作")
     mailbox_move.add_argument(
         "--apply",
         action="store_true",
@@ -1972,11 +2037,15 @@ def build_parser() -> argparse.ArgumentParser:
     account_add = account_actions.add_parser("add", help="写入账号元数据，不保存密码")
     account_add.add_argument("--id", required=True, dest="account_id")
     account_add.add_argument("--email", required=True)
-    account_add.add_argument("--host", required=True)
+    account_add.add_argument("--host", default="")
+    account_add.add_argument("--provider", choices=["imap", "microsoft_graph"], default="imap")
+    account_add.add_argument("--client-id", default="")
+    account_add.add_argument("--tenant", choices=["consumers", "common", "organizations"], default="consumers")
     account_add.add_argument("--port", type=int, default=993)
     account_add.add_argument("--security", choices=["ssl", "starttls", "plain"], default="ssl")
     account_add.add_argument("--username", default="")
     account_add.add_argument("--credential-ref", default="")
+    account_add.add_argument("--backend", choices=["himalaya"], default="himalaya")
     account_add.add_argument("--include", action="append", default=[])
     account_add.add_argument("--exclude", action="append", default=[])
     account_add.set_defaults(func=cmd_account_add)
@@ -1984,6 +2053,14 @@ def build_parser() -> argparse.ArgumentParser:
     account_check.add_argument("--account", required=True)
     account_check.add_argument("--connect", action="store_true", help="额外执行一次 IMAP 登录探测")
     account_check.set_defaults(func=cmd_account_check)
+    account_login = account_actions.add_parser("login", help="微软 OAuth 登录；令牌仅存入 Keychain")
+    account_login.add_argument("--account", required=True)
+    account_login.add_argument("--write", action="store_true", help="授权邮件整理与草稿；不申请发送权限")
+    account_login.add_argument("--timeout", type=int, default=600)
+    account_login.set_defaults(func=cmd_account_login)
+    account_folders = account_actions.add_parser("folders", help="只读盘点 Microsoft Graph 文件夹")
+    account_folders.add_argument("--account", required=True)
+    account_folders.set_defaults(func=cmd_account_folders)
 
     credential = sub.add_parser("credential", help="将邮箱密码安全保存到 macOS Keychain")
     credential_actions = credential.add_subparsers(dest="credential_action", required=True)

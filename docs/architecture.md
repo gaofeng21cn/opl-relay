@@ -14,8 +14,11 @@ OPL Persona or OPL App.
 
 ## Layers
 
-1. The engine owns IMAP sync, raw EML storage, stable identities, structured
-   memory, knowledge indexing, context assembly, and draft approval semantics.
+1. The management layer owns stable references, review and follow-up state,
+   selected cached evidence, structured memory and draft approval semantics.
+   Mail servers own actual mail state. Replaceable tools perform supported
+   retrieval/write operations. Relay validates backend identity and receipts;
+   its remaining Graph adapter owns OAuth renewal, delta and ImmutableId binding.
 2. The Codex Plugin supplies the `opl-relay` Skill. It is an installable
    capability carrier, not a database owner.
 3. The owner Package descriptor exposes the same capability and its current
@@ -30,7 +33,17 @@ OPL Persona or OPL App.
 ## Engine Modules
 
 - Configuration: account metadata and Keychain credential references.
-- Protocol: explicit IMAP synchronization with per-folder cursors.
+- Backend: Himalaya is the only transport and mail-write implementation. It
+  performs IMAP snapshots, MIME retrieval, server-draft creation and UID/Graph
+  operations. Relay retains exact preflight, source/target readback and
+  unknown-result handling, plus Graph delta/ImmutableId and renewable credentials.
+  The built-in Python IMAP engine and direct Graph mail-write fallback are retired.
+  UIDPLUS-only servers use native copy, verified target readback and exact UID
+  removal. The private backend seam accepts only fixed capability/identity/cleanup
+  commands; no arbitrary raw-command interface is exposed to assistants.
+  Graph moves bind the returned destination ID, verify identical MIME and source
+  absence, and preserve the original Relay reference as history. An unknown move
+  can be reconciled read-only against the exact target and original Message-ID.
 - Store: local SQLite raw EML store with stable `email-store://` identities.
 - Memory: evidence-backed candidate and approved relationship memory.
 - People: a bounded, read-only projection of that same MemoryStore's entities
@@ -71,9 +84,9 @@ integration.
 
 ## Server Drafts For Mobile Review
 
-`draft server-create` and `draft server-reply-all` are IMAP-only alternatives to
-the desktop draft provider. They prepare locally by default; `--apply` appends
-only to one advertised Drafts folder with the `\\Draft` flag. There is no SMTP,
+`draft server-create` and `draft server-reply-all` support IMAP and Microsoft
+Graph as alternatives to the desktop draft provider. They prepare locally by
+default; `--apply` writes only to the account's server Drafts folder. There is no SMTP,
 send, source-marking, draft-overwrite or draft-delete operation on this route.
 The user reviews and sends through their preferred mail client.
 
@@ -101,6 +114,13 @@ content must match before `server_verified=true` is returned. `server-inspect`
 performs this readback without creating another draft. A saved server draft does
 not prove that a particular phone has completed synchronization or rendered it.
 
+Graph drafts use the same request ledger plus an immutable remote-ID binding.
+Exchange's inserted charset-only HTML head and transport line endings are
+normalized; recipients, thread headers, visible text, other HTML and attachment
+bytes remain strictly compared. Unknown creation is reconciled by the request's
+Message-ID and never automatically repeated. Covered leftovers are moved to
+Deleted Items with readback, without permanent deletion.
+
 ### Leftover draft reconciliation
 
 Mail clients commonly send a review draft as a new message and leave the stored
@@ -124,9 +144,10 @@ different reply target, a different recipient set, or an earlier sent copy is
 reported as `keep`. An already-deleted or otherwise absent draft is reported as
 `absent` without a write.
 
-Removal requires UIDPLUS; without it the command fails closed rather than
-issuing an unscoped EXPUNGE. The draft is flagged `\Deleted` and removed with a
-UID-scoped EXPUNGE, then the Message-ID is searched again; a removal that cannot
+IMAP removal requires UIDPLUS; without it the command fails closed rather than
+issuing an unscoped EXPUNGE. Himalaya flags and removes the exact UID after fresh
+identity/content checks. Graph cleanup moves the draft to Deleted Items and does
+not depend on UIDPLUS. The draft identity is searched again; a removal that cannot
 be confirmed is an error, not a success. Applied rows move to state `cleaned`, so
 a later `server_draft` call with the same request ID still refuses to recreate
 the draft. The Sent copy is never modified, and the Apple Mail local copy is a
@@ -260,7 +281,7 @@ recipient headers and policy references in the evidence item's `review_target`.
 ## Mail Membership, Search, And Review Progress
 
 Raw evidence and current folder membership are separate. `present` projects a
-validated IMAP `SELECT` / `SEARCH ALL` snapshot; it is not a remote delete or
+validated native IMAP `STATUS` / UID search snapshot, or Graph delta; it is not a remote delete or
 read flag. Rows remain readable by `storage_ref` after movement or UIDVALIDITY
 changes. New UID generations must not overwrite earlier raw evidence. Mailbox
 operations require a current reference and retain their live provider checks.

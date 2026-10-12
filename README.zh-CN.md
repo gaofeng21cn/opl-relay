@@ -11,6 +11,10 @@
 <p align="center"><strong>面向 Codex 和 One Person Lab 的私有通信层，以原始证据支撑每一次判断和起草</strong></p>
 <p align="center">邮件证据 · 往来上下文 · 审核后记忆 · Obsidian 上下文 · Apple Mail 审核</p>
 
+OPL Relay 是数字分身的共享邮件管理层：让 OpenClaw、Codex 和 OPL 接续同一份审阅
+进度、往来跟进和执行记录。成熟邮件工具承担支持的检索与具体操作，Relay 保留账号、
+证据、审核和工作记录的边界。
+
 OPL Relay 帮助 Codex 处理学术和工作邮件，同时把程序安装、插件缓存和个人数据严格
 分开。它以邮件原文作为证据，持续整理人与项目的往来上下文，并把草稿交给 Apple Mail
 供用户审核；没有单独、明确的发送批准，就不会发送邮件。
@@ -33,8 +37,13 @@ Python 模块名不再作为第二个邮件入口。
 
 **以邮件原文为证据**
 
-Relay 把已配置的 IMAP 文件夹同步到本机 SQLite。检索结果和起草上下文使用稳定的
+Relay 把已配置的 IMAP 文件夹和 Microsoft Graph 邮箱同步到本机 SQLite。检索结果和起草上下文使用稳定的
 `email-store://` 引用，草稿中的事实可以追溯到原始邮件。
+日常同步默认只看活跃邮件；明确查询历史时可在服务器检索，只缓存命中的原文。
+参见[成熟邮件后端配置](docs/local-profile.md#mature-mail-backend)。
+
+Hotmail/Outlook.com 通过 OAuth 接入，令牌保存在钥匙串并自动续期；参见
+[微软邮箱配置](docs/local-profile.md#hotmail-and-outlookcom)。
 
 **经审核的关系记忆**
 
@@ -113,7 +122,9 @@ OpenClaw 负责微信等对话入口；邮件库、处理进度和草稿操作�
 
 ## 新用户首次配置
 
-当前需要 macOS、用于审核草稿的 Apple Mail，以及可用的 IMAP 邮箱。
+当前需要 macOS、配置好的 Himalaya 2.2.x 后端，以及可用的 IMAP 或 Microsoft Graph 邮箱。
+Apple Mail 用于桌面草稿审核；手机可以审核服务器草稿。首次连接检查前，先配置
+[后端执行文件](docs/local-profile.md#mature-mail-backend)。
 
 ```bash
 export OPL_PROFILE_WORKSPACE="$HOME/OPL/profiles/my-profile"

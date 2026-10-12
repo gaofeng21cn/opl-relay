@@ -30,7 +30,97 @@ On password rotation, update and read back both copies before resuming sync.
 This fallback does not bypass IMAP authentication or make a locked System
 keychain readable; a failed read of both sources still stops the operation.
 
-## Workspace
+## Hotmail And Outlook.com
+
+Microsoft accounts use delegated Microsoft Graph OAuth, not an IMAP password.
+Register a personal-account public/native application in your Microsoft Entra
+directory with the redirect URI `http://localhost`. No client secret is needed.
+Configure the application ID as metadata, then complete the browser consent:
+
+```bash
+opl-relay --json account add --id personal --email you@hotmail.com \
+  --provider microsoft_graph --client-id <application-client-id> \
+  --include '*' --exclude 'Junk Email' --exclude 'Deleted Items' \
+  --exclude Drafts --exclude Outbox
+opl-relay --json account login --account personal
+opl-relay --json account check --account personal --connect
+opl-relay --json account folders --account personal
+opl-relay --json sync --account personal --scope active
+```
+
+`account login` prints the authorization URL and waits up to ten minutes for its
+loopback callback. Open that URL in your browser. It requests `User.Read`,
+`Mail.Read` and `offline_access`; the configured email must match `/me` before
+tokens are saved. Access/refresh tokens stay in login Keychain and never enter
+accounts TOML, SQLite, source, or command arguments. Long credentials use the
+macOS Security API; background renewal retains the trusted Relay interpreter
+and `/usr/bin/security` reader without weakening global Keychain protections.
+
+Use `account login --account personal --write` when authorizing mailbox
+organization. This requests `Mail.ReadWrite`, not `Mail.Send`. Permission alone
+does not authorize moving messages: exact references, live preflight, explicit
+`mailbox move --apply`, an operation receipt, and source/target verification
+remain required. Existing Archive/Bill descendants can be selected through
+`--destination-folder`; Relay does not create folders or change importance,
+flags, or read state. The existing server-draft commands also support Graph:
+the user can review and send in their synchronized mail client. Creating a
+draft never sends, and phone edits are preserved.
+After an unknown Graph move, use the original `mailbox move` arguments with
+`--reconcile` instead of `--apply`. This reads the actual immutable identity,
+position and MIME and saves a confirmed receipt without another remote write.
+
+Graph sync uses immutable message IDs, MIME evidence and folder delta cursors
+in the same Relay store. Interrupted pages retry their missing bodies; an
+expired delta cursor rebuilds membership without discarding old evidence.
+Daily `review prepare` reads active folders only. Prefer `search --remote
+--account personal --scope history <query>` for requested history; it downloads
+only matching MIME into the same evidence store. Explicit `sync --scope history`
+remains available when offline historical coverage is actually required.
+`--max-seconds` bounds each invocation, not a daily message quota. `--dry-run`
+enumerates folders without fetching messages or writing provider cursors.
+
+Official protocol contracts: [delegated OAuth](https://learn.microsoft.com/en-us/graph/auth-v2-user),
+[immutable Outlook IDs](https://learn.microsoft.com/en-us/graph/outlook-immutable-id),
+[folder delta](https://learn.microsoft.com/en-us/graph/api/message-delta),
+and [message movement](https://learn.microsoft.com/en-us/graph/api/message-move).
+
+## Mature Mail Backend
+
+Himalaya is the sole mail transport backend. Accounts default to
+`backend = "himalaya"`; the retired `builtin` selector is rejected. Configure a pinned Himalaya 2.2.x
+executable in `<profile>/data/relay/tools.toml`:
+
+```toml
+[himalaya]
+executable = "/absolute/path/to/himalaya"
+```
+
+Relay generates a disposable account configuration from its canonical metadata.
+Credentials remain in Keychain and are resolved into the child environment;
+they never appear in config files, argv, logs or receipts. IMAP uses LOGIN over
+TLS; Graph uses the existing identity-bound, renewable bearer credential.
+Configured native operations fail explicitly rather than silently falling back.
+`account check --connect` validates the native backend as well as the provider.
+
+Himalaya handles authentication/transport, folder listings, IMAP UID snapshots,
+MIME reads, review-draft creation and movement. Relay verifies its structured
+receipts and retains Graph OAuth renewal, delta and ImmutableId binding because
+the CLI does not expose those management contracts. No Python IMAP connection,
+direct Graph mail writer or automatic legacy fallback remains. On UIDPLUS-only
+servers, Relay verifies the copied target before asking Himalaya to remove the
+exact source UID; it never requests an unscoped EXPUNGE. Native search uses `search --remote`
+with an explicit account; it caches only selected matches, does not advance a
+folder snapshot or review progress, and reports errors or result truncation.
+`sync` defaults to active scope. Archive is never a daily review queue.
+
+Gmail can presently use Himalaya through existing IMAP credentials. Native
+Gmail API via gog requires its own Google OAuth client and consent; an IMAP app
+password is not a Google API token. Do not claim a gog cutover before that
+account is authorized and server readback passes. Tool replacement must preserve
+current `email-store://` evidence and review records rather than creating a
+second assistant-specific store.
+
+## Profile Workspace
 
 `OPL_PROFILE_WORKSPACE` selects the active Profile Workspace.
 
