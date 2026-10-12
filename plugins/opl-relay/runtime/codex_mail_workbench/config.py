@@ -252,9 +252,10 @@ def keychain_read_secret(
         raise ValueError("不支持的后备钥匙串路径")
     cmd = ["/usr/bin/security", "find-generic-password", "-s", service,
            "-a", credential_ref, "-w"]
-    for path, source in ((LOGIN_KEYCHAIN, "login"), (fallback_keychain, "system_fallback")):
-        if source == "system_fallback" and path is None:
-            continue
+    # An explicitly provisioned unattended credential must not probe the
+    # interactive login Keychain before every background operation.
+    sources = ((fallback_keychain, "system_fallback"),) if fallback_keychain else ((LOGIN_KEYCHAIN, "login"),)
+    for path, source in sources:
         try:
             result = subprocess.run([*cmd, path], check=False,
                                     capture_output=True, text=True, timeout=10)

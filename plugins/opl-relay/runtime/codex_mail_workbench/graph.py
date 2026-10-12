@@ -74,14 +74,14 @@ def _token_request(account, parameters):
                  body=urlencode({"client_id": account.graph.client_id, **parameters}).encode())
 
 
-def _save_token(account, token):
+def _save_token(account, token, *, allow_interaction=False):
     if not token.get("access_token") or not token.get("refresh_token"):
         raise ValueError("Microsoft did not return renewable delegated credentials")
     token = {**token, "expires_at": time.time() + int(token.get("expires_in", 3600)),
              "client_id": account.graph.client_id, "email": account.email.lower()}
     serialized = json.dumps(token, separators=(",", ":"))
-    set_oauth_secret(account.graph.credential_ref, serialized)
-    if get_oauth_secret(account.graph.credential_ref) != serialized:
+    set_oauth_secret(account.graph.credential_ref, serialized, allow_interaction=allow_interaction)
+    if get_oauth_secret(account.graph.credential_ref, allow_interaction=allow_interaction) != serialized:
         raise RuntimeError("OAuth Keychain readback mismatch")
 
 
@@ -137,7 +137,7 @@ def login_graph(account: MailAccount, *, write=False, notify=None, timeout=600):
                                    "scope": " ".join(scopes)})
     client = GraphClient(account, token=token["access_token"])
     client.identity()
-    _save_token(account, token)
+    _save_token(account, token, allow_interaction=True)
     return {"ok": True, "account": account.account_id, "provider": "microsoft_graph",
             "email": account.email, "credential_configured": True,
             "scopes": token.get("scope", "").split(), "send_allowed": False}

@@ -262,3 +262,20 @@ def test_refresh_lock_cannot_outlive_sync_budget(monkeypatch, tmp_path):
         with pytest.raises(graph.GraphError) as error:
             graph.GraphClient(ACCOUNT, deadline=time.monotonic() + 0.02)._access_token()
     assert error.value.code == "oauth_refresh_busy"
+
+
+def test_token_renewal_does_not_enable_keychain_dialogs(monkeypatch):
+    saved, interaction = [], []
+
+    def store(ref, value, *, allow_interaction):
+        saved.append(value)
+        interaction.append(allow_interaction)
+
+    def read(ref, *, allow_interaction):
+        interaction.append(allow_interaction)
+        return saved[-1]
+
+    monkeypatch.setattr(graph, "set_oauth_secret", store)
+    monkeypatch.setattr(graph, "get_oauth_secret", read)
+    graph._save_token(ACCOUNT, {"access_token": "test-access", "refresh_token": "test-refresh"})
+    assert interaction == [False, False]

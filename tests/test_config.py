@@ -81,20 +81,33 @@ def test_add_account_writes_private_metadata_without_a_secret(tmp_path: Path) ->
     assert "password" not in config.read_text(encoding="utf-8").casefold()
 
 
-def test_keychain_fallback_is_explicit_and_reports_source(monkeypatch) -> None:
+def test_unattended_keychain_is_explicit_and_never_probes_login(monkeypatch) -> None:
     paths = []
 
     def fake_run(command, **kwargs):
         paths.append(command[-1])
-        return SimpleNamespace(returncode=51 if len(paths) == 1 else 0,
-                               stdout="fallback-secret\n")
+        return SimpleNamespace(returncode=0, stdout="fallback-secret\n")
 
     monkeypatch.setattr(credential_config.subprocess, "run", fake_run)
     result = credential_config.keychain_read_secret(
         "work-imap", fallback_keychain=credential_config.SYSTEM_KEYCHAIN)
     assert result.value == "fallback-secret"
     assert result.source == "system_fallback"
-    assert paths == [credential_config.LOGIN_KEYCHAIN, credential_config.SYSTEM_KEYCHAIN]
+    assert paths == [credential_config.SYSTEM_KEYCHAIN]
+
+
+def test_unattended_keychain_failure_does_not_prompt_via_login(monkeypatch) -> None:
+    paths = []
+
+    def fake_run(command, **kwargs):
+        paths.append(command[-1])
+        return SimpleNamespace(returncode=51, stdout="")
+
+    monkeypatch.setattr(credential_config.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="Keychain 读取失败"):
+        credential_config.keychain_read_secret(
+            "work-imap", fallback_keychain=credential_config.SYSTEM_KEYCHAIN)
+    assert paths == [credential_config.SYSTEM_KEYCHAIN]
 
 
 def test_keychain_without_fallback_fails_closed(monkeypatch) -> None:

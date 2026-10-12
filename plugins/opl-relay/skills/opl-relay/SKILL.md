@@ -60,6 +60,14 @@ active/history scopes. Background OAuth renewal is automatic. Server-draft
 commands support Graph and IMAP; users may review on their synchronized phone.
 See [Microsoft setup](../../../../docs/local-profile.md#hotmail-and-outlookcom).
 
+Routine operations reuse configured credentials and renew OAuth automatically.
+Do not request passwords or run `credential set`/`account login` before each
+review, draft or move. Background OAuth access never opens Keychain dialogs;
+IMAP accounts with an explicit System-keychain copy read that copy directly.
+On a real credential failure, stop the affected operation and report one
+actionable account error. Retry only after credentials or authorization change.
+Interactive credential setup is separate from normal unattended mail work.
+
 Relay owns shared mail-management records and execution checks, not a parallel
 mail client. Himalaya is the sole backend for IMAP transport, MIME reads, draft
 creation and mail writes. There is no built-in transport fallback. Keep its credentials and account config behind Relay's adapter; do

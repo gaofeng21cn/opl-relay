@@ -7,13 +7,14 @@ import sys
 from .config import KEYCHAIN_SERVICE, LOGIN_KEYCHAIN
 
 
-def _frameworks():
+def _frameworks(*, allow_interaction=False):
     if sys.platform != "darwin":
         raise RuntimeError("OAuth credential storage requires macOS Keychain")
     security = C.CDLL("/System/Library/Frameworks/Security.framework/Security")
     core = C.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
     pointer = C.c_void_p
     signatures = {
+        "SecKeychainSetUserInteractionAllowed": ([C.c_bool], C.c_int32),
         "SecKeychainOpen": ([C.c_char_p, C.POINTER(pointer)], C.c_int32),
         "SecKeychainFindGenericPassword": ([pointer, C.c_uint32, C.c_char_p, C.c_uint32, C.c_char_p,
                                             C.POINTER(C.c_uint32), C.POINTER(pointer), C.POINTER(pointer)], C.c_int32),
@@ -28,6 +29,9 @@ def _frameworks():
     for name, (args, restype) in signatures.items():
         fn = getattr(security, name)
         fn.argtypes, fn.restype = args, restype
+    status = security.SecKeychainSetUserInteractionAllowed(allow_interaction)
+    if status:
+        raise RuntimeError(f"macOS Keychain interaction policy failed (OSStatus {status})")
     core.CFRelease.argtypes = [pointer]
     core.CFStringCreateWithCString.argtypes = [pointer, C.c_char_p, C.c_uint32]
     core.CFStringCreateWithCString.restype = pointer
@@ -36,8 +40,8 @@ def _frameworks():
     return security, core
 
 
-def get_oauth_secret(reference: str) -> str:
-    security, core = _frameworks()
+def get_oauth_secret(reference: str, *, allow_interaction=False) -> str:
+    security, core = _frameworks(allow_interaction=allow_interaction)
     pointer = C.c_void_p
     keychain, data, item = pointer(), pointer(), pointer()
     length = C.c_uint32()
@@ -59,8 +63,8 @@ def get_oauth_secret(reference: str) -> str:
                 core.CFRelease(obj)
 
 
-def set_oauth_secret(reference: str, secret: str) -> None:
-    security, core = _frameworks()
+def set_oauth_secret(reference: str, secret: str, *, allow_interaction=False) -> None:
+    security, core = _frameworks(allow_interaction=allow_interaction)
     pointer = C.c_void_p
 
     def check(status):

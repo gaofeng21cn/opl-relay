@@ -19,16 +19,19 @@ the selected workspace's `data/relay` directory.
 
 Credentials remain in macOS Keychain service `codex-mail-workbench`. The service
 name is a local credential contract; it is never exported to Git or the Profile
-Workspace. Relay reads the login keychain first. An account may opt in to a
-second copy in `/Library/Keychains/System.keychain` by setting
+Workspace. An IMAP account may opt in to an explicitly provisioned unattended
+copy in `/Library/Keychains/System.keychain` by setting
 `fallback_keychain = "/Library/Keychains/System.keychain"` in its `[accounts.imap]`
-section. Relay uses that copy only when the login-keychain read fails, and sync
-reports `credential_source = "system_fallback"`. Provision the same service,
+section. Relay reads that copy directly, without first probing the interactive
+login keychain, and sync reports `credential_source = "system_fallback"`.
+If the configured copy fails, the operation stops rather than opening a login
+keychain prompt. IMAP accounts without this setting use the login keychain.
+Provision the same service,
 account reference and secret in the System keychain, restrict its trusted reader
 to `/usr/bin/security`, and verify a normal-user read before enabling fallback.
 On password rotation, update and read back both copies before resuming sync.
-This fallback does not bypass IMAP authentication or make a locked System
-keychain readable; a failed read of both sources still stops the operation.
+This setting does not bypass IMAP authentication or make a locked System
+keychain readable; a failed credential read stops the operation.
 
 ## Hotmail And Outlook.com
 
@@ -101,8 +104,10 @@ they never appear in config files, argv, logs or receipts. IMAP uses LOGIN over
 TLS; Graph uses the existing identity-bound, renewable bearer credential.
 OAuth reads and writes use the authorized macOS Security API without placing
 tokens in command output. Renewal preserves an existing Keychain access list.
-Refresh-lock waits respect the operation's time budget;
-initial Keychain authorization remains an interactive macOS boundary.
+Background OAuth reads and renewal disable Keychain interaction and return an
+authorization error instead of opening password dialogs. Only explicit
+`account login` permits initial Keychain authorization. Refresh-lock waits
+respect the operation's time budget.
 Configured native operations fail explicitly rather than silently falling back.
 `account check --connect` validates the native backend as well as the provider.
 

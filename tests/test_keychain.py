@@ -7,10 +7,13 @@ from codex_mail_workbench import keychain
 
 def test_oauth_rotation_preserves_existing_acl_and_avoids_access_prompt(monkeypatch):
     calls = []
+    interaction = []
     class Function:
         def __init__(self, name): self.name = name
         def __call__(self, *args):
             calls.append(self.name)
+            if self.name == "SecKeychainSetUserInteractionAllowed":
+                interaction.append(args[0])
             if self.name == "SecKeychainFindGenericPassword":
                 ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.c_void_p(1)
             return 0
@@ -21,6 +24,7 @@ def test_oauth_rotation_preserves_existing_acl_and_avoids_access_prompt(monkeypa
     monkeypatch.setattr(keychain.sys, "platform", "darwin")
     monkeypatch.setattr(keychain.C, "CDLL", lambda path: Library())
     keychain.set_oauth_secret("test-ref", "renewed-test-credential")
+    assert interaction == [False]
     assert calls.count("SecKeychainItemModifyAttributesAndData") == 1
     assert "SecKeychainAddGenericPassword" not in calls
     assert "SecAccessCreate" not in calls and "SecKeychainItemSetAccess" not in calls
@@ -49,7 +53,7 @@ def test_oauth_read_preserves_long_credentials_and_releases_native_content(monke
         def CFRelease(self, obj):
             released.append(obj.value)
 
-    monkeypatch.setattr(keychain, "_frameworks", lambda: (Security(), Core()))
+    monkeypatch.setattr(keychain, "_frameworks", lambda **kwargs: (Security(), Core()))
     assert keychain.get_oauth_secret("test-ref") == value.decode()
     assert released == ["content", 2, 1]
 
@@ -59,6 +63,6 @@ def test_oauth_read_reports_authorization_failure_without_treating_it_as_missing
         def SecKeychainOpen(self, *args):
             return -25308  # errSecInteractionNotAllowed
 
-    monkeypatch.setattr(keychain, "_frameworks", lambda: (Security(), object()))
+    monkeypatch.setattr(keychain, "_frameworks", lambda **kwargs: (Security(), object()))
     with pytest.raises(RuntimeError, match="OSStatus -25308"):
         keychain.get_oauth_secret("test-ref")
