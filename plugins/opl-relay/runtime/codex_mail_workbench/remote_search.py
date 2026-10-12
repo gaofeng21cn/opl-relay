@@ -7,8 +7,10 @@ from datetime import datetime
 
 from .message import extract_attachments, parse_headers
 from .native import Himalaya
-from .store import ACTIVE_FOLDERS, HISTORY_FOLDERS, connect_email_store, get_message_by_storage_ref
+from .store import connect_email_store, get_message_by_storage_ref
 from .sync import now_iso, sanitize_folder_name
+from .folders import folder_in_scope, normalize_folder
+from .store import bind_imap_folders
 
 
 def search_remote(*, account, db_path, query, scope="active", folder="", limit=20,
@@ -33,17 +35,14 @@ def search_remote(*, account, db_path, query, scope="active", folder="", limit=2
             control = Himalaya(account, deadline=deadline)
             folders = [{"id": f.name, "path": f.name, "roles": f.flags} for f in _list_mailboxes(control)
                        if "\\NOSELECT" not in {a.upper() for a in f.flags}]
+            bind_imap_folders(conn, account.account_id,
+                             [{"name": f["path"], "flags": f["roles"]} for f in folders])
         def selected(item):
-            name = item["path"].lower()
             if folder:
-                return folder in {item["id"], item["path"], sanitize_folder_name(item["path"])}
+                return normalize_folder(folder) in {item["id"], item["path"], sanitize_folder_name(item["path"])}
             if scope == "all":
                 return True
-            roles = {r.upper() for r in item.get("roles", ())}
-            if scope == "active":
-                return name in ACTIVE_FOLDERS or "\\SENT" in roles
-            return (name in HISTORY_FOLDERS or roles.intersection({"\\SENT", "\\ALL", "\\ARCHIVE"}) or
-                    name == "bill" or name.startswith(("archive/", "archives/", "bill/", "bill ")))
+            return folder_in_scope(item["path"], scope, item.get("roles", ()))
         folders = [f for f in folders if selected(f)]
         if not folders:
             raise ValueError("No remote folders match the requested scope")

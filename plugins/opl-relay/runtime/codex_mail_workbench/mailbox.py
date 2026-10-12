@@ -14,6 +14,7 @@ from .store import (
     record_mailbox_move,
 )
 from .sync import now_iso
+from .folders import normalize_folder
 
 
 class MailboxMoveFailure(RuntimeError):
@@ -103,6 +104,9 @@ def _find_all_mail(mailboxes: list[ImapMailbox]) -> ImapMailbox | None:
 def _resolve_exact_folder(folder: str, mailboxes: list[ImapMailbox]) -> str:
     target = folder.strip()
     exact_matches = [mailbox for mailbox in mailboxes if mailbox.name == target]
+    if not exact_matches:
+        target = normalize_folder(target)
+        exact_matches = [mailbox for mailbox in mailboxes if mailbox.name == target]
     matches = exact_matches or [
         mailbox
         for mailbox in mailboxes

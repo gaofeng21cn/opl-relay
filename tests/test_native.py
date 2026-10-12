@@ -7,7 +7,7 @@ import pytest
 
 from codex_mail_workbench import graph, native, remote_search
 from codex_mail_workbench.cli import build_parser
-from codex_mail_workbench.config import GraphEndpoint, MailAccount
+from codex_mail_workbench.config import GraphEndpoint, MailAccount, MailEndpoint
 from codex_mail_workbench.store import connect_email_store
 
 
@@ -63,6 +63,50 @@ def test_native_check_requires_actual_backend_success(native_tool, monkeypatch):
     monkeypatch.setattr(native_tool, "_run", lambda argv: {"backends": [{"ok": False}]})
     with pytest.raises(native.NativeError, match="connection_check_failed"):
         native_tool.check()
+
+
+def test_native_read_can_use_whole_budget_but_writes_remain_bounded(native_tool, monkeypatch):
+    monkeypatch.setattr(native.time, "monotonic", lambda: 10)
+    native_tool.deadline = 210
+    timeouts = []
+    def run(argv, **kw):
+        timeouts.append(kw["timeout"])
+        return SimpleNamespace(returncode=0, stdout=b'{}', stderr=b'')
+    monkeypatch.setattr(native.subprocess, "run", run)
+    native_tool._run(["msgraph", "messages", "get", "id", "--raw"], raw=True)
+    native_tool._run(["msgraph", "messages", "create"], body=RAW)
+    assert timeouts == [200, 60]
+
+
+def test_native_legacy_imap_names_are_normalized_and_batch_octets_are_preserved(native_tool, monkeypatch):
+    import base64
+    native_tool.account = replace(ACCOUNT, graph=None, provider="imap",
+        imap=MailEndpoint("imap.example.test", 993, "ssl", "owner@example.test", "test"))
+    monkeypatch.setattr(native, "keychain_get_secret", lambda *a, **kw: "test-secret")
+    raw = b"Subject: bytes\r\n\r\n\xff\x00\xfe"
+    def run(argv, **kw):
+        assert argv[-3:] == ["--mailbox", "[Gmail]/已发邮件", "--body"]
+        assert argv[argv.index("--mailbox") + 1] == "[Gmail]/已发邮件"
+        return SimpleNamespace(returncode=0,
+            stdout=('{"messages":[{"uid":9,"body":"' + base64.b64encode(raw).decode() + '"}]}').encode(), stderr=b'')
+    monkeypatch.setattr(native.subprocess, "run", run)
+    assert native_tool.fetch_bodies("[Gmail]/&XfJT0ZCuTvY-", [9]) == {9: raw}
+    with pytest.raises(native.NativeError, match="unexpected_fetch_identity"):
+        native_tool.fetch_bodies("[Gmail]/已发邮件", [10])
+
+
+def test_imap_folder_command_emits_json_without_graph(monkeypatch, capsys):
+    import json
+    from codex_mail_workbench import cli
+    account = replace(ACCOUNT, graph=None, provider="imap")
+    monkeypatch.setattr(cli, "load_account", lambda *a: account)
+    class Tool:
+        def __init__(self, account): pass
+        def folders(self):
+            return [{"name": "[Gmail]/已发邮件", "flags": frozenset({"\\sent"})}]
+    monkeypatch.setattr(native, "Himalaya", Tool)
+    assert cli.cmd_account_folders(SimpleNamespace(config="unused", account="native_test", json=True)) == 0
+    assert json.loads(capsys.readouterr().out)["folders"][0]["flags"] == ["\\sent"]
 
 
 def test_native_graph_search_uses_provider_search_and_preserves_identity(native_tool, monkeypatch):

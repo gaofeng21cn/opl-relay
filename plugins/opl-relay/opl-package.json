@@ -47,6 +47,7 @@
       "runtime/codex_mail_workbench/config.py",
       "runtime/codex_mail_workbench/context.py",
       "runtime/codex_mail_workbench/drafts.py",
+      "runtime/codex_mail_workbench/folders.py",
       "runtime/codex_mail_workbench/graph.py",
       "runtime/codex_mail_workbench/graph_drafts.py",
       "runtime/codex_mail_workbench/keychain.py",
@@ -67,7 +68,7 @@
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml"
     ],
-    "digest": "sha256:82f4096bfdef1d17ce6373cc1d7b51fd7574ef95fe09b7f7beea0e6557e48ffc"
+    "digest": "sha256:a5e56f8c822c1d165d5a6fde1f31e9cc00bace9d554f98f6acf1c3e69cf5e3a3"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

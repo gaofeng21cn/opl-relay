@@ -284,8 +284,9 @@ def _uid(conn, account, remote_id):
 
 
 def _slug(item):
-    from .sync import sanitize_folder_name
-    return sanitize_folder_name(item["path"]) + "--" + hashlib.sha256(item["id"].encode()).hexdigest()[:10]
+    from .folders import legacy_folder_slug
+    # Graph already has an immutable folder-id suffix; keep its issued identities.
+    return legacy_folder_slug(item["path"]) + "--" + hashlib.sha256(item["id"].encode()).hexdigest()[:10]
 
 
 def _now():

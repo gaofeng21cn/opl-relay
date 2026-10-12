@@ -297,12 +297,21 @@ cursor. Newest missing UIDs are fetched first; older failed fetches remain retry
 Empty folders reconcile to zero only
 after a valid matching SELECT/SEARCH response. A partial or failed folder is
 reported as incomplete; `status` includes the snapshot timestamp, server count,
-and local current count. Sync processes share one local database lock. FETCH
-batches are bounded by declared message size; large MIME messages are fetched
-in verified 1 MiB chunks so attachments cannot stall an entire batch. Partial
-reads are verified against the requested byte count. A full read whose length
+and local current count. Sync processes share one local database lock. Native
+UID FETCH batches are bounded to 4 MiB of declared message size and carry raw
+octets in Base64. Large MIME messages are read separately with Himalaya's raw
+reader. Read operations use the remaining overall sync budget instead of a
+fixed 60-second process cap; writes retain that cap and unknown-outcome handling.
+A full read whose length
 disagrees with the advertised `RFC822.SIZE` is accepted only when an independent
 re-retrieval returns identical bytes; otherwise it stays a retryable gap.
+
+IMAP SPECIAL-USE roles determine Inbox, Sent, Archive/All and Trash/Junk scope,
+independent of the mailbox display language. Relay retains those roles locally
+for cached queries. Legacy modified UTF-7 locations are rebound after a live
+folder listing; raw mail, review records and issued `storage_ref` values remain
+unchanged. Lossy folder slugs include a name digest to keep mailbox UID namespaces
+separate. Graph retains its existing folder-id-based identities.
 
 `recent` and `search` default to `active` (current Inbox and Sent). `history`
 adds archived and retained correspondence; known Trash/Junk copies are excluded.

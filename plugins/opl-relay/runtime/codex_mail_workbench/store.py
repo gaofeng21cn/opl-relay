@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .message import extract_text_body
+from .folders import normalize_folder, folder_role, folder_slug
 
 
 SCOPES = ("active", "history", "all")
@@ -112,6 +113,10 @@ def ensure_email_store_schema(conn: sqlite3.Connection) -> None:
           checked_at TEXT NOT NULL, complete INTEGER NOT NULL,
           PRIMARY KEY(account_id, folder_slug)
         );
+        CREATE TABLE IF NOT EXISTS mail_folders (
+          account_id TEXT NOT NULL, folder TEXT NOT NULL, role TEXT NOT NULL,
+          PRIMARY KEY(account_id, folder)
+        );
         CREATE TABLE IF NOT EXISTS mail_reviews (
           account_id TEXT NOT NULL, raw_sha256 TEXT NOT NULL,
           storage_ref TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL,
@@ -173,6 +178,34 @@ def build_storage_ref(
     return f"email-store://{account_id}/{folder_slug}/{int(uid)}/{raw_sha256[:16]}"
 
 
+def bind_imap_folders(conn: sqlite3.Connection, account: str, boxes) -> None:
+    """Rebind cached locations, retaining every previously issued storage_ref."""
+    names = {box["name"]: folder_role(box["name"], box["flags"]) for box in boxes}
+    with conn:
+        conn.executemany("INSERT INTO mail_folders VALUES (?,?,?) ON CONFLICT(account_id,folder) "
+                         "DO UPDATE SET role=excluded.role", ((account, name, role) for name, role in names.items()))
+        locations = conn.execute("SELECT DISTINCT folder,folder_slug FROM email_messages WHERE account_id=?",
+                                 (account,)).fetchall()
+        for old_name, old_slug in locations:
+            name = old_name if old_name in names else normalize_folder(old_name)
+            if name not in names:
+                continue  # A live LIST is required before rebinding a location.
+            slug = folder_slug(name)
+            if (name, slug) != (old_name, old_slug):
+                conn.execute("UPDATE email_messages SET folder=?,folder_slug=? WHERE account_id=? AND folder=? AND folder_slug=?",
+                             (name, slug, account, old_name, old_slug))
+        snapshots = conn.execute("SELECT folder,folder_slug,uidvalidity,remote_count,checked_at,complete "
+                                 "FROM folder_snapshots WHERE account_id=?", (account,)).fetchall()
+        for old_name, old_slug, epoch, count, checked_at, complete in snapshots:
+            name = old_name if old_name in names else normalize_folder(old_name)
+            if name not in names or (name, folder_slug(name)) == (old_name, old_slug):
+                continue
+            # Counts remain explicitly incomplete until the next UID snapshot.
+            conn.execute("DELETE FROM folder_snapshots WHERE account_id=? AND folder_slug=?", (account, old_slug))
+            conn.execute("INSERT OR IGNORE INTO folder_snapshots VALUES (?,?,?,?,?,?,?)",
+                         (account, name, folder_slug(name), epoch, count, checked_at, 0))
+
+
 def upsert_email_message(
     conn: sqlite3.Connection,
     *,
@@ -192,6 +225,11 @@ def upsert_email_message(
     ingest_ts: str,
 ) -> str:
     storage_ref = build_storage_ref(account_id, folder_slug, uid, raw_sha256)
+    prior = conn.execute("SELECT storage_ref FROM email_messages WHERE account_id=? AND folder_slug=? "
+                         "AND uidvalidity IS ? AND uid=? AND raw_sha256=? ORDER BY present DESC,rowid DESC LIMIT 1",
+                         (account_id, folder_slug, uidvalidity, int(uid), raw_sha256)).fetchone()
+    if prior:
+        storage_ref = prior[0]
     existing = conn.execute("SELECT raw_eml FROM email_blobs WHERE raw_sha256=?", (raw_sha256,)).fetchone()
     if existing is not None and bytes(existing[0]) != raw_eml:
         raise ValueError("raw hash already exists with different bytes")
@@ -299,11 +337,14 @@ def scope_filter(scope: str, folder: str | None = None) -> tuple[list[str], list
         raise ValueError(f"unknown mail scope: {scope}")
     if folder:
         # An explicit folder is itself a scope (including Junk/Trash).
-        return ["present=1", "deleted=0", "(folder_slug=? OR folder=?)"], [folder, folder]
+        return ["present=1", "deleted=0", "(folder_slug=? OR folder=?)"], [folder, normalize_folder(folder)]
     if scope == "all":
         return ["1=1"], []
     names = ACTIVE_FOLDERS if scope == "active" else HISTORY_FOLDERS
     folder_clause = f"lower(folder) IN ({','.join('?' for _ in names)})"
+    roles = "'inbox','sent'" if scope == "active" else "'inbox','sent','all','archive'"
+    folder_clause = "(" + folder_clause + f" OR EXISTS (SELECT 1 FROM mail_folders f WHERE " \
+        f"f.account_id=email_messages.account_id AND f.folder=email_messages.folder AND f.role IN ({roles})))"
     if scope == "history":
         folder_clause = "(" + folder_clause + " OR lower(folder) LIKE 'archive/%' OR lower(folder) LIKE 'archives/%' OR lower(folder)='bill' OR lower(folder) LIKE 'bill/%' OR lower(folder) LIKE 'bill %')"
     where = [folder_clause]
@@ -316,11 +357,15 @@ def scope_filter(scope: str, folder: str | None = None) -> tuple[list[str], list
             SELECT 1 FROM email_messages rejected
             WHERE rejected.account_id=email_messages.account_id
               AND rejected.raw_sha256=email_messages.raw_sha256 AND rejected.present=1
-              AND lower(rejected.folder) IN ('trash','deleted items','junk email','junk e-mail','junk','spam','[gmail]/trash','[gmail]/spam')
+              AND (lower(rejected.folder) IN ('trash','deleted items','junk email','junk e-mail','junk','spam','[gmail]/trash','[gmail]/spam')
+                OR EXISTS (SELECT 1 FROM mail_folders f WHERE f.account_id=rejected.account_id
+                  AND f.folder=rejected.folder AND f.role IN ('trash','junk')))
         )""")
         where.append("""NOT EXISTS (
             SELECT 1 FROM mailbox_operations op WHERE op.storage_ref=email_messages.storage_ref
-              AND lower(op.destination_folder) IN ('trash','deleted items','deleted messages','bin')
+              AND (lower(op.destination_folder) IN ('trash','deleted items','deleted messages','bin')
+                OR EXISTS (SELECT 1 FROM mail_folders f WHERE f.account_id=op.account_id
+                  AND f.folder=op.destination_folder AND f.role IN ('trash','junk')))
         )""")
     return where, list(names)
 

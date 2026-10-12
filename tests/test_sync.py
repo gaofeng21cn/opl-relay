@@ -32,6 +32,9 @@ class FakeImap:
         self.requested.append(uid)
         return self.messages[uid]
 
+    def fetch_bodies(self, folder, uids):
+        return {uid: self.mime(uid, folder=folder) for uid in uids}
+
 
 @pytest.fixture
 def environment(monkeypatch, tmp_path):
@@ -48,7 +51,7 @@ def environment(monkeypatch, tmp_path):
 
 
 def test_folder_names():
-    assert sync.sanitize_folder_name("Sent Items") == "Sent_Items"
+    assert sync.sanitize_folder_name("Sent Items").startswith("Sent_Items--")
     assert sync.sanitize_folder_name("父/子") != sync.sanitize_folder_name("父/女")
     assert not sync.should_sync_folder("Archive", ["*"], ["Archive"])
 
@@ -64,6 +67,22 @@ def test_history_sync_includes_configured_archive_and_bill_children(environment,
     assert [f['folder'] for f in active['folders']] == ['INBOX']
     history = sync.sync_account(**kwargs, scope='history')
     assert [f['folder'] for f in history['folders']] == folders[:-1]
+
+
+def test_active_sync_uses_sent_role_with_legacy_include_and_preserves_folder_identities(environment, monkeypatch):
+    client, kwargs = environment
+    account = sync.load_account()
+    account.include_folders[:] = ["INBOX", "[Gmail]/&XfJT0ZCuTvY-"]
+    boxes = [{"name": "INBOX", "flags": frozenset()},
+             {"name": "[Gmail]/已发邮件", "flags": frozenset({"\\sent"})},
+             {"name": "[Gmail]/所有邮件", "flags": frozenset({"\\all"})}]
+    monkeypatch.setattr(client, "folders", lambda: boxes)
+    result = sync.sync_account(**kwargs, scope="active")
+    assert result["ok"] and [f["folder"] for f in result["folders"]] == ["INBOX", "[Gmail]/已发邮件"]
+    conn = connect_email_store(kwargs["db_path"])
+    rows = list_messages(conn, scope="active")
+    assert len(rows) == 6 and len({row["storage_ref"] for row in rows}) == 6
+    conn.close()
 
 
 def test_missing_uid_retried_even_after_a_later_success(environment):
@@ -163,6 +182,8 @@ def test_native_declared_size_disagreement_requires_identical_reread():
         def mime(self, uid, *, folder):
             self.reads += 1
             return raw if self.reads == 1 else self.second
+        def fetch_bodies(self, folder, uids):
+            return {uid: self.mime(uid, folder=folder) for uid in uids}
     tool = Tool(raw)
     assert list(sync.fetch_message_batch(tool, [1], folder="INBOX")) == [(1, raw)]
     assert tool.reads == 2

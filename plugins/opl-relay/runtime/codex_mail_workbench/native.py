@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .config import keychain_get_secret, load_toml
 from .paths import default_state_dir
+from .folders import normalize_folder
 
 
 class NativeError(ValueError):
@@ -34,10 +35,19 @@ class Himalaya:
             raise NativeError("himalaya_not_installed")
 
     def _run(self, argv, *, raw=False, body=None, mutation=False):
-        remaining = self.deadline - time.monotonic() if self.deadline else 60
+        remaining = self.deadline - time.monotonic() if self.deadline else 120
         if remaining <= 0:
             raise NativeError("time_budget_exceeded")
         account = self.account
+        if not account.graph:
+            argv = list(argv)
+            if "--mailbox" in argv:
+                index = argv.index("--mailbox") + 1
+                argv[index] = self._mailbox_name(argv[index])
+            if argv[:2] == ["imap", "status"]:
+                argv[2] = self._mailbox_name(argv[2])
+            if argv[:2] in (["imap", "move"], ["imap", "copy"]):
+                argv[3] = self._mailbox_name(argv[3])
         quote = json.dumps
         lines = [f"[accounts.{quote(account.account_id)}]", f"email = {quote(account.email)}"]
         if account.graph:
@@ -68,8 +78,12 @@ class Himalaya:
             env = dict(os.environ, OPL_MAIL_BACKEND_SECRET=secret, NO_COLOR="1")
             env.pop("RUST_LOG", None)
             try:
+                remaining = self.deadline - time.monotonic() if self.deadline else 120
+                if remaining <= 0:
+                    raise NativeError("time_budget_exceeded")
+                is_mutation = mutation or body is not None or "move" in argv
                 result = subprocess.run(command + argv, input=body, capture_output=True,
-                                        timeout=min(60, remaining), env=env)
+                                        timeout=min(60, remaining) if is_mutation else remaining, env=env)
             except subprocess.TimeoutExpired:
                 raise NativeError("timeout_outcome_unknown" if mutation or body is not None or "move" in argv else "timeout") from None
             if result.returncode:
@@ -117,8 +131,12 @@ class Himalaya:
 
     def folders(self):
         boxes = self._run(["imap", "list", "--all"])["mailboxes"]
+        self._folder_names = {box["name"] for box in boxes}
         return [{"name": "INBOX" if b["name"].casefold() == "inbox" else b["name"],
                  "flags": frozenset(a.casefold() for a in b["attributes"])} for b in boxes]
+
+    def _mailbox_name(self, name):
+        return name if name in getattr(self, "_folder_names", ()) else normalize_folder(name)
 
     def status(self, folder):
         result = self._run(["imap", "status", folder])
@@ -143,6 +161,22 @@ class Himalaya:
                             "--mailbox", folder, "--size", "--flags"])
         return {int(self._uid(m["uid"])): m for m in result["messages"]}
 
+    def fetch_bodies(self, folder, uids):
+        """Native UID batch FETCH; Base64 preserves even non-UTF-8 octets."""
+        requested = {int(self._uid(uid)) for uid in uids}
+        result = self._run(["imap", "fetch", ",".join(self._uid(uid) for uid in uids),
+                            "--mailbox", folder, "--body"])
+        messages = {}
+        for item in result["messages"]:
+            uid = int(self._uid(item["uid"]))
+            if uid not in requested or uid in messages:
+                raise NativeError("unexpected_fetch_identity")
+            try:
+                messages[uid] = base64.b64decode(item["body"], validate=True)
+            except (ValueError, TypeError):
+                raise NativeError("invalid_fetch_body") from None
+        return messages
+
     def capabilities(self):
         raw = self._fixed_commands(["R1 CAPABILITY"], read_only=True)
         match = re.search(rb"(?im)^\* CAPABILITY ([^\r\n]+)", raw)
@@ -166,16 +200,16 @@ class Himalaya:
             raise NativeError("search_result_unavailable")
         return [int(self._uid(uid.decode())) for uid in match[1].split()]
 
-    @classmethod
-    def _folder_token(cls, folder):
+    def _folder_token(self, folder):
+        folder = self._mailbox_name(folder)
         # The raw CLI seam sends bytes verbatim. Match IMAP's mailbox identity
         # encoding; typed Himalaya commands handle this mapping themselves.
         def encode(match):
             value = base64.b64encode(match.group().encode("utf-16-be")).decode().rstrip("=").replace("/", ",")
             return "&" + value + "-"
-        cls._quote(folder)  # Reject literal and CLI-decoded control characters.
+        self._quote(folder)  # Reject literal and CLI-decoded control characters.
         encoded = re.sub(r"[^\x20-\x7e]+", encode, folder.replace("&", "&-"))
-        return cls._quote(encoded)
+        return self._quote(encoded)
 
     def _fixed_commands(self, commands, *, read_only=False):
         # Only owner-built CAPABILITY, identity search and exact UID cleanup

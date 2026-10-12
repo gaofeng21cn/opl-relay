@@ -1145,11 +1145,18 @@ def cmd_account_login(args: argparse.Namespace) -> int:
 
 
 def cmd_account_folders(args: argparse.Namespace) -> int:
-    from .graph import GraphClient
     account = load_account(Path(args.config).expanduser(), args.account)
-    client = GraphClient(account)
-    client.identity()
-    emit({"ok": True, "account": account.account_id, "folders": client.folders()}, as_json=args.json)
+    if account.graph:
+        from .graph import GraphClient
+        client = GraphClient(account)
+        client.identity()
+    else:
+        from .native import Himalaya
+        client = Himalaya(account)
+    folders = client.folders()
+    if not account.graph:
+        folders = [{"name": box["name"], "flags": sorted(box["flags"])} for box in folders]
+    emit({"ok": True, "account": account.account_id, "folders": folders}, as_json=args.json)
     return 0
 
 

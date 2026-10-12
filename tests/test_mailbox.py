@@ -136,6 +136,13 @@ def test_bill_destination_requires_an_existing_exact_folder() -> None:
     assert missing.value.code == "destination_missing"
 
 
+def test_exact_destination_accepts_legacy_name_but_prefers_literal_live_match():
+    boxes = [mailbox_module.ImapMailbox("[Gmail]/已发邮件", frozenset())]
+    assert mailbox_module._resolve_exact_folder("[Gmail]/&XfJT0ZCuTvY-", boxes) == "[Gmail]/已发邮件"
+    boxes = [mailbox_module.ImapMailbox(name, frozenset()) for name in ("Rock &- Roll", "Rock & Roll")]
+    assert mailbox_module._resolve_exact_folder("Rock &- Roll", boxes) == "Rock &- Roll"
+
+
 def test_move_dry_run_does_not_mutate_mailbox_or_local_store(monkeypatch, tmp_path: Path) -> None:
     db_path = tmp_path / "mail.sqlite"
     storage_ref = seed_message(db_path)

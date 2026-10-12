@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import fcntl
 import time
 from datetime import datetime
@@ -13,7 +12,9 @@ from .config import load_account
 from .native import Himalaya, NativeError
 from .message import extract_attachments, parse_headers
 from .paths import default_config_path, default_db_path, default_sync_state_dir
-from .store import ACTIVE_FOLDERS, HISTORY_FOLDERS, connect_email_store, reconcile_folder, upsert_email_message
+from .store import connect_email_store, reconcile_folder, upsert_email_message
+from .folders import folder_slug, normalize_folder, folder_in_scope
+from .store import bind_imap_folders
 
 
 DEFAULT_SYNC_MAX_SECONDS = 120.0
@@ -45,22 +46,14 @@ def now_iso() -> str:
 
 
 def sanitize_folder_name(folder: str) -> str:
-    text = folder.strip()
-    if not text:
-        return "UNKNOWN"
-    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
-    text = text.replace("\\", "_").replace("/", "__")
-    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
-    cleaned = text.strip("._")
-    if cleaned:
-        return cleaned
-    return f"folder_{digest}"
+    return folder_slug(folder)
 
 
 def should_sync_folder(name: str, include: Iterable[str], exclude: Iterable[str]) -> bool:
-    if name in exclude:
+    name = normalize_folder(name)
+    if name in {normalize_folder(value) for value in exclude}:
         return False
-    include_set = list(include)
+    include_set = [normalize_folder(value) for value in include]
     return "*" in include_set or name in include_set
 
 
@@ -89,19 +82,40 @@ def sync_account(**kwargs: object) -> dict[str, object]:
 
 def fetch_message_batch(client, uids, *, folder, budget=None):
     """Delegate MIME transport; retain byte-count and stable-read verification."""
-    from concurrent.futures import ThreadPoolExecutor
     if budget:
         budget.before_io(client, "message metadata")
     metadata = client.metadata(folder, uids)
-    def retrieve(uid):
-        raw = client.mime(uid, folder=folder)
-        if not raw or (len(raw) != metadata[uid]["size"] and client.mime(uid, folder=folder) != raw):
-            raise ValueError(f"Native FETCH byte count mismatch for UID {uid}")
-        return raw
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        pending = [(uid, pool.submit(retrieve, uid)) for uid in uids if uid in metadata]
-        for uid, future in pending:
-            yield uid, future.result()
+    groups, current, byte_count = [], [], 0
+    for uid in uids:
+        if uid not in metadata:
+            continue
+        size = metadata[uid]["size"]
+        if not isinstance(size, int) or size < 0:
+            raise ValueError("Invalid native message size")
+        if current and byte_count + size > 4 * 1024 * 1024:
+            groups.append(current)
+            current, byte_count = [], 0
+        if size > 4 * 1024 * 1024:
+            groups.append([uid])
+        else:
+            current.append(uid)
+            byte_count += size
+    if current:
+        groups.append(current)
+    for group in groups:
+        if budget:
+            budget.before_io(client, "message bodies")
+        if len(group) == 1 and metadata[group[0]]["size"] > 4 * 1024 * 1024:
+            raw_map = {group[0]: client.mime(group[0], folder=folder)}
+        else:
+            raw_map = client.fetch_bodies(folder, group)
+        for uid in group:
+            if uid not in raw_map:
+                continue  # Concurrent removals remain retryable gaps.
+            raw = raw_map[uid]
+            if not raw or (len(raw) != metadata[uid]["size"] and client.mime(uid, folder=folder) != raw):
+                raise ValueError(f"Native FETCH byte count mismatch for UID {uid}")
+            yield uid, raw
 
 
 def _sync_account(
@@ -159,6 +173,16 @@ def _sync_account(
             summary["timed_out"] = budget.remaining() <= 0 or getattr(exc, "code", "") == "timeout"
             summary["error"] = f"{type(exc).__name__}: {exc}"
             return summary
+        if not dry_run:
+            bind_imap_folders(conn, account_id, boxes)
+            live_names = {box["name"] for box in boxes}
+            for old_name in list(folders_state):
+                name = normalize_folder(old_name)
+                if old_name not in live_names and name in live_names:
+                    previous = dict(folders_state.pop(old_name))
+                    previous.update(folder_name=name, complete=False)
+                    folders_state.setdefault(name, previous)
+        folder_flags = {b["name"]: b["flags"] for b in boxes}
         sync_folders = [b["name"] for b in boxes if "\\noselect" not in b["flags"]]
         sync_folders = [
             folder
@@ -166,14 +190,11 @@ def _sync_account(
             if should_sync_folder(folder, account.include_folders, account.exclude_folders)
         ]
         if folder:
-            sync_folders = [name for name in sync_folders if name == folder or sanitize_folder_name(name) == folder]
+            sync_folders = [name for name in sync_folders if name == normalize_folder(folder) or sanitize_folder_name(name) == folder]
             if not sync_folders:
                 raise ValueError("requested folder not found in configured IMAP scope")
         elif scope != "all":
-            names = ACTIVE_FOLDERS if scope == "active" else HISTORY_FOLDERS
-            sync_folders = [name for name in sync_folders if name.lower() in names or (
-                scope == "history" and (name.lower() == "bill" or
-                name.lower().startswith(("archive/", "archives/", "bill/", "bill "))))]
+            sync_folders = [name for name in sync_folders if folder_in_scope(name, scope, folder_flags[name])]
         for folder_index, folder_name in enumerate(sync_folders):
             summary["next_folders"] = sync_folders[folder_index:]
             folder_slug = sanitize_folder_name(folder_name)

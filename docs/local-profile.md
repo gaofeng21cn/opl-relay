@@ -112,6 +112,11 @@ exact source UID; it never requests an unscoped EXPUNGE. Native search uses `sea
 with an explicit account; it caches only selected matches, does not advance a
 folder snapshot or review progress, and reports errors or result truncation.
 `sync` defaults to active scope. Archive is never a daily review queue.
+IMAP directory selection accepts existing modified UTF-7 configuration names;
+SPECIAL-USE roles identify localized Sent and Archive directories. A normal sync
+rebinds cached locations while preserving previously issued mail references and
+review records. `account folders` supports both IMAP and Graph and reports the
+actual remote directory tree without downloading messages.
 
 Gmail can presently use Himalaya through existing IMAP credentials. Native
 Gmail API via gog requires its own Google OAuth client and consent; an IMAP app
