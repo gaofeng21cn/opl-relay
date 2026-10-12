@@ -157,7 +157,16 @@ class GraphClient:
         path = default_state_dir() / (self.account.account_id + ".oauth.lock")
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            lock_deadline = self.deadline or time.monotonic() + 30
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    remaining = lock_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise GraphError(0, "oauth_refresh_busy") from None
+                    time.sleep(min(0.1, remaining))
             token = json.loads(keychain_get_secret(self.account.graph.credential_ref))
             if (token.get("client_id") != self.account.graph.client_id or
                     token.get("email") != self.account.email.lower()):

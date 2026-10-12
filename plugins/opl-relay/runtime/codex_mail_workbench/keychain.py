@@ -50,6 +50,10 @@ def set_oauth_secret(reference: str, secret: str) -> None:
         else:
             check(status)
             check(security.SecKeychainItemModifyAttributesAndData(item, None, len(value), value))
+            # Rotation changes only the credential value. Replacing an existing
+            # ACL requires interactive macOS authorization and can strand the
+            # background refresh lock even though the new token was saved.
+            return
         # Same trusted reader as Relay's existing password contract. This grants
         # no third-party access and does not bypass a locked Keychain or prompt.
         check(security.SecTrustedApplicationCreateFromPath(b"/usr/bin/security", C.byref(trusted)))

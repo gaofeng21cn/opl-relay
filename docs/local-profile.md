@@ -99,6 +99,9 @@ Relay generates a disposable account configuration from its canonical metadata.
 Credentials remain in Keychain and are resolved into the child environment;
 they never appear in config files, argv, logs or receipts. IMAP uses LOGIN over
 TLS; Graph uses the existing identity-bound, renewable bearer credential.
+OAuth renewal updates the stored credential without replacing an existing
+Keychain access list. Refresh-lock waits respect the operation's time budget;
+initial Keychain authorization remains an interactive macOS boundary.
 Configured native operations fail explicitly rather than silently falling back.
 `account check --connect` validates the native backend as well as the provider.
 

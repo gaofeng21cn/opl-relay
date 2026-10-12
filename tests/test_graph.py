@@ -250,3 +250,15 @@ def test_token_refresh_keeps_rotated_credentials_in_keychain_only(monkeypatch, t
     assert graph.GraphClient(ACCOUNT)._access_token() == "fresh-access"
     assert saved[0]["refresh_token"] == "rotated-refresh"
     assert not any("refresh" in p.read_text() for p in tmp_path.iterdir())
+
+
+def test_refresh_lock_cannot_outlive_sync_budget(monkeypatch, tmp_path):
+    import fcntl
+    import time
+    from codex_mail_workbench import paths
+    monkeypatch.setattr(paths, "default_state_dir", lambda: tmp_path)
+    with (tmp_path / (ACCOUNT.account_id + ".oauth.lock")).open("a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(graph.GraphError) as error:
+            graph.GraphClient(ACCOUNT, deadline=time.monotonic() + 0.02)._access_token()
+    assert error.value.code == "oauth_refresh_busy"
