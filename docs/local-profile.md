@@ -108,6 +108,10 @@ Background OAuth reads and renewal disable Keychain interaction and return an
 authorization error instead of opening password dialogs. Only explicit
 `account login` permits initial Keychain authorization. Refresh-lock waits
 respect the operation's time budget.
+For unattended use, the stable launcher must select the same supported Python
+interpreter used for initial Keychain authorization. Do not rely on a terminal's
+`PATH`: launchd may otherwise choose an older system interpreter. Validate the
+actual background entry point, as well as the interactive CLI.
 Configured native operations fail explicitly rather than silently falling back.
 `account check --connect` validates the native backend as well as the provider.
 
