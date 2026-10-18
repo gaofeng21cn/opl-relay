@@ -434,49 +434,6 @@ def list_messages(
     return [_row_to_message(row) for row in conn.execute(sql, params).fetchall()]
 
 
-def list_messages_with_raw(
-    conn: sqlite3.Connection,
-    *,
-    account_ids: list[str] | None = None,
-    folder_slug: str | None = None,
-    since: str | None = None,
-    until: str | None = None,
-    limit: int = 200,
-    scope: str = "active",
-) -> list[tuple[dict[str, Any], bytes]]:
-    where, params = scope_filter(scope, folder_slug)
-    if account_ids:
-        placeholders = ",".join(["?"] * len(account_ids))
-        where.append(f"account_id IN ({placeholders})")
-        params.extend(account_ids)
-    if since:
-        where.append("datetime(date_iso) >= datetime(?)")
-        params.append(since)
-    if until:
-        where.append("datetime(date_iso) < datetime(?)")
-        params.append(until)
-    params.append(max(1, int(limit)))
-    sql = (
-        "SELECT account_id, folder, folder_slug, uid, uidvalidity, message_id, subject, "
-        "sender, recipient, date_iso, attachments_json, ingest_ts, storage_ref, raw_sha256, raw_eml "
-        "FROM email_messages JOIN email_blobs USING(raw_sha256) "
-        f"WHERE {' AND '.join(where)} "
-        "ORDER BY date_iso DESC, ingest_ts DESC, uid DESC LIMIT ?"
-    )
-    out: list[tuple[dict[str, Any], bytes]] = []
-    for row in conn.execute(sql, params).fetchall():
-        meta = _row_to_message(row[:14])
-        raw = row[14]
-        if isinstance(raw, memoryview):
-            raw = raw.tobytes()
-        elif isinstance(raw, str):
-            raw = raw.encode("utf-8", errors="ignore")
-        elif not isinstance(raw, bytes):
-            raw = bytes(raw)
-        out.append((meta, raw))
-    return out
-
-
 def search_messages(
     conn: sqlite3.Connection,
     *,
