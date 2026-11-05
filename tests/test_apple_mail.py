@@ -4,7 +4,9 @@ import base64
 from email.message import EmailMessage
 from pathlib import Path
 
-from codex_mail_workbench.apple_mail import JXA_SOURCE, AppleMailProvider, _snapshot
+import pytest
+
+from codex_mail_workbench.apple_mail import AppleMailError, JXA_SOURCE, AppleMailProvider, _snapshot
 from codex_mail_workbench.drafts import Recipient
 
 
@@ -57,6 +59,30 @@ def test_snapshot_prefers_mime_body_and_hashes_attachments() -> None:
     assert current.attachments[0].content_sha256
     assert current.attachments[0].provider_id == "attachment-1"
     assert current.provider_threading["quoted_context"] is True
+
+
+def test_server_adoption_uses_message_id_and_exact_mime_readback() -> None:
+    current = raw_draft()
+    raw = current["source"].encode()
+    calls = []
+    def runner(action, payload):
+        calls.append((action, payload))
+        return current
+    result = AppleMailProvider(runner).inspect_server_draft(
+        sender="work@example.test", message_id="draft@example.test", expected_raw=raw)
+    assert result.provider_message_id == "draft@example.test"
+    assert calls == [("inspectServerDraft", {
+        "sender": "work@example.test", "messageId": "draft@example.test"})]
+    assert "Expected one synchronized server draft" in JXA_SOURCE
+
+
+def test_server_adoption_rejects_changed_synced_mime() -> None:
+    current = raw_draft()
+    current["source"] = current["source"].replace("Second paragraph.", "User edit.")
+    provider = AppleMailProvider(lambda action, payload: current)
+    with pytest.raises(AppleMailError, match="differs from the reviewed server MIME"):
+        provider.inspect_server_draft(sender="work@example.test", message_id="draft@example.test",
+                                      expected_raw=raw_draft()["source"].encode())
 
 
 def test_provider_passes_guard_to_atomic_send() -> None:

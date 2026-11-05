@@ -104,6 +104,14 @@ function quotedAnchor(message) {
   return "";
 }
 
+function headerValue(source, name) {
+  var escaped = String(name);
+  var match = String(source || "").match(new RegExp(
+    "^" + escaped + ":([^\\r\\n]*(?:\\r?\\n[ \\t][^\\r\\n]*)*)", "mi"
+  ));
+  return match ? match[1].replace(/\r?\n[ \t]+/g, " ").trim() : "";
+}
+
 function threadingRow(message, sourceMessage) {
   var source = String(message.source() || "");
   var content = normalizedContent(message.content());
@@ -113,6 +121,8 @@ function threadingRow(message, sourceMessage) {
   return {
     inReplyTo: /^In-Reply-To:/mi.test(source),
     references: /^References:/mi.test(source),
+    inReplyToValue: headerValue(source, "In-Reply-To"),
+    referencesValue: headerValue(source, "References"),
     quotedContext: sourceMessage ? quoteIndex >= 0 : null,
     sourceAnchor: anchor,
     currentSignatureCount: (currentContent.match(/Best regards,/g) || []).length
@@ -295,17 +305,47 @@ function validateReplyRecipients(account, message) {
 }
 
 function findDraft(mailbox, uuid) {
+  var matches = [];
   var messages = mailbox.messages();
   for (var i = 0; i < messages.length; i++) {
     try {
       if (providerIdentity(messages[i]) === String(uuid)) {
-        return messages[i];
+        matches.push(messages[i]);
       }
     } catch (error) {
       continue;
     }
   }
-  return null;
+  if (matches.length > 1) {
+    throw new Error("More than one Apple Mail draft matches the exact identity");
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function findDraftByMessageId(mailbox, messageId) {
+  var matches = [];
+  var wanted = normalizedMessageId(messageId);
+  var messages = mailbox.messages();
+  for (var i = 0; i < messages.length; i++) {
+    try {
+      if (normalizedMessageId(messages[i].messageId()) === wanted) {
+        matches.push(messages[i]);
+      }
+    } catch (error) {
+      continue;
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error("Expected one synchronized server draft, found " + matches.length);
+  }
+  return matches[0];
+}
+
+function inspectServerDraft(app, payload) {
+  var account = accountForSender(app, payload.sender);
+  var drafts = mailboxByRole(account, "drafts");
+  var message = findDraftByMessageId(drafts, payload.messageId);
+  return draftRow(message, account, drafts);
 }
 
 function normalizedMessageId(value) {
@@ -677,6 +717,8 @@ function run(argv) {
     result = {providerAccount: String(accountForSender(app, payload.sender).name())};
   } else if (action === "inspect") {
     result = inspectDraft(app, payload);
+  } else if (action === "inspectServerDraft") {
+    result = inspectServerDraft(app, payload);
   } else if (action === "open") {
     result = openDraft(app, payload);
   } else if (action === "send") {
@@ -830,6 +872,8 @@ def _snapshot(raw: dict[str, Any]) -> DraftSnapshot:
             "in_reply_to": bool((raw.get("threading") or {}).get("inReplyTo")),
             "references": bool((raw.get("threading") or {}).get("references")),
             "quoted_context": (raw.get("threading") or {}).get("quotedContext"),
+            "in_reply_to_value": str((raw.get("threading") or {}).get("inReplyToValue") or ""),
+            "references_value": str((raw.get("threading") or {}).get("referencesValue") or ""),
             "source_anchor": str((raw.get("threading") or {}).get("sourceAnchor") or ""),
             "current_signature_count": int(
                 (raw.get("threading") or {}).get("currentSignatureCount") or 0
@@ -936,6 +980,16 @@ class AppleMailProvider:
         )
         if not isinstance(raw, dict):
             raise AppleMailError("Apple Mail 未返回草稿对象")
+        return _snapshot(raw)
+
+    def inspect_server_draft(self, *, sender: str, message_id: str, expected_raw: bytes) -> DraftSnapshot:
+        raw = self._runner("inspectServerDraft", {"sender": sender, "messageId": message_id})
+        if not isinstance(raw, dict):
+            raise AppleMailError("Apple Mail did not return the synchronized server draft")
+        from .graph_drafts import _canonical
+        source = str(raw.get("source") or "").encode("utf-8")
+        if not source or _canonical(source) != _canonical(expected_raw):
+            raise AppleMailError("Apple Mail draft differs from the reviewed server MIME; preserve edits")
         return _snapshot(raw)
 
     def open(self, *, provider_account: str, provider_uuid: str) -> DraftSnapshot:

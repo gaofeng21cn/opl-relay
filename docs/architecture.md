@@ -86,9 +86,20 @@ integration.
 
 `draft server-create` and `draft server-reply-all` support IMAP and Microsoft
 Graph as alternatives to the desktop draft provider. They prepare locally by
-default; `--apply` writes only to the account's server Drafts folder. There is no SMTP,
-send, source-marking, draft-overwrite or draft-delete operation on this route.
-The user reviews and sends through their preferred mail client.
+default; `--apply` writes only to the account's server Drafts folder. They do
+not add an SMTP transport, overwrite a live draft, or mark the source message.
+The user reviews the server draft. An explicitly authorized `draft server-send`
+uses the existing Apple Mail delivery adapter: it locates the synchronized
+server draft by exact `Message-ID`, compares MIME, routing, attachments and
+thread headers, then uses the existing single-send ledger and Sent readback.
+
+`draft reply-context` accepts an exact `--storage-ref`, or combines `--query`
+with `--latest-sent --sync` for a one-call follow-up source selection. It returns
+the exact source body, complete To/Cc, thread
+headers and Reply All route in one read. For follow-ups, `--latest-sent` chooses
+a newer own Sent message only when actual Message-ID/References relationships
+match; subject equality alone cannot choose the source. `--sync` performs one
+active synchronization before selection and the result reports coverage.
 
 Reply All binds the full raw source by `email-store://` and hash. Recipients are
 From (or Reply-To), original To, and Cc, excluding all configured own addresses,
@@ -143,6 +154,11 @@ always kept, preserving edits made in another mail client. The same subject with
 different reply target, a different recipient set, or an earlier sent copy is
 reported as `keep`. An already-deleted or otherwise absent draft is reported as
 `absent` without a write.
+
+When reconciling one manually sent reply by an exact `--sent-message-id`, a
+missing `In-Reply-To` may be compensated only when the sender, routing, visible
+body and attachment names and bytes also match. A different reply target or any
+content or attachment difference keeps the draft.
 
 IMAP removal requires UIDPLUS; without it the command fails closed rather than
 issuing an unscoped EXPUNGE. Himalaya flags and removes the exact UID after fresh

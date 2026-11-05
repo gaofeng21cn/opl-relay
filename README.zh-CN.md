@@ -190,7 +190,7 @@ Relay 会重新获取源 UID，比对完整原文 SHA-256 和 `Message-ID`，验
 结果不确定时先重新读取状态，不盲目重试。不会创建文件夹、执行无范围 `EXPUNGE`、
 永久删除邮件或标记邮件。
 
-通过微信提出需求、在手机审核时，直接准备服务器“回复所有人”草稿：
+默认通过服务器 Drafts 准备回复草稿；手机、微信和桌面审核都使用这一路径：
 
 ```bash
 opl-relay --json draft server-reply-all \
@@ -205,7 +205,29 @@ opl-relay --json draft server-reply-all \
 纯文本/HTML 输出，并在新正文后添加一次指定签名。不会覆盖手机上的现有草稿，
 也不会自动重发原邮件附件。详见[服务器草稿合同](docs/architecture.md#server-drafts-for-mobile-review)。
 
-在桌面审核时，建立并查看 Apple Mail 草稿：
+催办邮件先用一次 `reply-context --query ... --latest-sent --sync` 选择同线程中较新的本人已发邮件，
+避免只按主题猜测回复锚点：
+
+```bash
+opl-relay --json draft reply-context --account work --query 'Invitation to Deliver a Keynote Lecture' --latest-sent --sync
+```
+
+用户审核服务器草稿后，如需由 Relay 执行发送，使用审核回读得到的指纹：
+
+```bash
+opl-relay --json draft server-send --account work \
+  --request-id reply-unique-id --approval 'sha256:...'
+```
+
+Relay 会核对 Apple Mail 中同一 `Message-ID` 的同步草稿、正文、收件人、附件和线程标头，
+然后执行一次性发送并回读 Sent；不会通过界面搜索数字草稿 ID，也不会在结果未知时重发。
+
+回复正文需要整体重写、逐句润色或重新生成时，优先沿用同一请求 ID 更新服务器草稿。
+这样不依赖桌面富文本编辑器，也不会因选区不完整留下重复段落。用户已发送后运行
+`draft server-reconcile` 清理 Relay 自己留下的草稿。
+
+用户明确要求在 Apple Mail 中审核、草稿已有手工修改或附件，或线程只存在于桌面客户端时，
+建立并查看 Apple Mail 草稿：
 
 ```bash
 opl-relay --json draft create \
@@ -233,7 +255,7 @@ opl-relay --json draft reply-all \
 ```
 
 Codex 操作既有线程时，使用 Computer Use 在 Apple Mail 可视界面中执行原生“回复所有人”，
-并在 Mail 默认插入点粘贴已审核正文。Mail 的富文本编辑器中不要在签名首行附近用坐标点击定位光标；这种操作可能残留首字母、吞掉签名首字符或产生异常换行。默认插入点不可用时，应从原邮件重新建立“回复所有人”草稿。Relay 负责定位原邮件和保存后的回读，不能用同主题
+并在 Mail 默认插入点粘贴已审核正文。Mail 的富文本编辑器中不要在签名首行附近用坐标点击定位光标；这种操作可能残留首字母、吞掉签名首字符或产生异常换行。也不要依赖网页视图的选区替换来改写既有草稿：选区可能只覆盖一部分，留下重复或粘连的段落。需要修改措辞时，从原邮件重建草稿，或改用服务器草稿路径。默认插入点不可用时，应从原邮件重新建立“回复所有人”草稿。Relay 负责定位原邮件和保存后的回读，不能用同主题
 新邮件代替这一过程。若原生路由包含自身地址、重复地址、Bcc、
 空收件人集，或来源 tuple 不能唯一确定，命令会失败关闭，不登记稳定审核草稿。最终
 保存的草稿是审核面；provider-native Reply All 是路由 authority。

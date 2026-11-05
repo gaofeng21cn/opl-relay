@@ -1,6 +1,6 @@
 ---
 name: opl-relay
-description: Use OPL Relay to inspect configured mailboxes, retrieve approved private memory and Obsidian context, and manage review-gated Apple Mail drafts.
+description: Use OPL Relay to inspect configured mailboxes, retrieve approved private context, and prepare, review or explicitly send threaded mail drafts.
 ---
 
 # OPL Relay
@@ -10,9 +10,9 @@ instructions only; it never treats the plugin directory as user storage.
 
 ## Resolve Runtime
 
-1. Run `opl-relay --json setup status` before mailbox work.
+1. Run `opl-relay --json setup status` on first use of a Profile or when its configuration changes. Reuse its resolved account and paths within the task.
 2. If the Profile is unconfigured, run `opl-relay --json setup init`.
-3. Run `opl-relay --json doctor` before reading or syncing mail.
+3. Run `opl-relay --json doctor` once when resolving the runtime, or to diagnose a real configuration failure. Do not repeat setup, account discovery or help calls for each approved mail action.
 4. Treat `profile_workspace` as the user's single Profile Workspace, Relay's
    `state_dir` as its `data/relay` child, and `workspace.path` as that same
    profile root.
@@ -253,107 +253,63 @@ external-site content into public skill files.
 
 ## Draft Approval
 
-For messaging-channel requests reviewed on a phone, use server Drafts instead
-of requiring a desktop editor. `draft server-reply-all --account ...
---storage-ref ... --request-id ... --body-file ... --signature-file ...` prepares
-a preview; the same command with `--apply` writes only a server draft and verifies
-it by fresh server readback. Use `server-create` with explicit To/Cc/subject for
-new correspondence, and `server-inspect` with the account and stable request ID
-after an interruption. These commands never send. The user reviews and sends
-from their own mail app. Implementation and limits are described in
-[the server draft contract](../../../../docs/architecture.md#server-drafts-for-mobile-review).
+Use server Drafts for normal replies and revisions; use `server-create` only
+for new correspondence. Mail servers own the saved draft. Apple Mail supplies
+the existing fingerprint-gated delivery adapter when Codex is asked to send;
+server drafting does not require Apple Mail. For desktop-local composition,
+manual attachments or UI diagnosis, read [Apple Mail drafts](references/apple-mail.md).
 
-The server Reply All route derives recipients from complete raw headers,
-preserves thread identifiers and readable quoted history, and excludes verified
-own addresses and duplicates. Supply only new prose in the body file and the
-approved signature separately. Review wording and both text/HTML layout; never
-turn Markdown formatting into literal email syntax. Preserve user edits and
-attachments: this route does not overwrite or delete existing mobile drafts.
-Only `server_verified=true` with `state=draft` proves server delivery. Reuse the
-same request ID to reconcile an unknown result; do not blindly recreate it.
+### Routine Reply And Follow-up
 
-Once the user reports sending a review draft, run
-`draft server-reconcile --account <id>` and read the per-draft actions. It is a
-read-only preview that removes nothing. Pass `--apply` to delete the drafts a
-sent reply already covers, which is the normal outcome after the user sends from
-a client that does not consume the stored draft. A `keep` result means the
-evidence was weaker than an exact reply target, recipients, and subject, so the
-draft may still be pending; never widen the match by hand. An `absent` result
-means the server copy is already gone. This route never sends, never edits the
-Sent copy. IMAP cleanup requires UIDPLUS and removes only an exact UID through
-Himalaya; Graph cleanup moves the draft to Deleted Items. If the user's desktop mail client
-still lists a reconciled draft, that is a local client cache: remove it through
-the Mail.app route instead of writing IMAP again.
+1. Reuse the resolved Profile/account. Sync the selected account once when
+   freshness matters. For a reminder after the user's unanswered
+   outgoing mail, add `--latest-sent`; this selects a newer own Sent message
+   sharing actual thread identifiers, never subject alone. Use `draft
+   reply-context --account <id> --query <subject> --latest-sent --sync` to do
+   selection and fresh sync in one call, or pass an exact `--storage-ref` for
+   an ordinary answer. Check coverage and the selected source before composing.
+2. Use the thread and already approved personal context to cover every pending
+   request, including attachments, travel information or speaker material.
+   Preserve all Reply All participants and the quoted chain. New prose and
+   the approved signature are separate inputs.
+3. Run `draft server-reply-all --account <id> --storage-ref <selected-ref>
+   --request-id <stable-id> --body-file <private-file> --signature-file
+   <private-file> --apply`. Its verified result already contains complete
+   headers, body and a content fingerprint. One successful readback is enough;
+   do not immediately repeat `server-inspect`. Use a local preview first only
+   when wording or routing still needs review. A prepared, unsaved preview can
+   be revised under the same request ID; an existing server draft is never
+   overwritten. Use a new request ID for a different source message.
+4. Stop at the requested review surface. Saving a draft never grants permission
+   to send. If the user approves sending this exact content, call `draft
+   server-send --account <id> --request-id <stable-id> --approval <reviewed-fingerprint>`.
+   It verifies the live server copy, finds the same Message-ID in Apple Mail,
+   compares MIME, routing, body, attachments and thread identifiers, and reuses
+   Relay's single-send ledger. It does not require UI search or numeric Mail
+   IDs. Apple Mail must have synchronized the draft. If the user has edited it
+   or added attachments, inspect and review that current Apple Mail draft
+   instead; never silently send the earlier server copy.
+5. The send result includes the Sent receipt and scoped leftover-draft cleanup.
+   A verified Sent result completes sending even if cleanup is pending; never
+   send again to repair cleanup. Use `server-inspect` after an unknown result.
+   It reconciles the same handoff and never re-enables an already claimed send.
 
-`draft create` and `draft reply-all` may create and open an Apple Mail draft.
-They do not authorize sending. Let the user review the draft in Apple Mail, run
-`draft inspect` again after approval, and pass only the current fingerprint to
-`draft send`. Any content change invalidates approval. Never retry an `unknown`
-send result.
+For independent user sending or pending cleanup, run `draft server-reconcile
+--account <id> --request-id <stable-id> --sent-message-id <sent-id>` to preview
+only this request and live Sent identity. Add `--apply` when the exact cleanup
+is authorized. Keep unknown or edited drafts. A terminal absent/cleaned record
+is not scanned again. Leave other drafts alone; routine completion is not an
+account-wide housekeeping request. `read <ref>` already includes structured
+From/To/Cc, Message-ID, In-Reply-To and References, so another raw MIME dump is
+usually unnecessary.
 
-For a reply in an existing multi-recipient Apple Mail thread, Reply All is the
-default workflow. Use Mail's native Reply All route rather than creating a new
-message or rebuilding recipients from a flattened Relay record. A private reply
-is appropriate only when the user explicitly requests it or confidentiality
-clearly requires it.
-
-For Codex-operated mail, use Computer Use for the Apple Mail interaction: open
-the exact source message, invoke the visible native Reply All control, and paste
-the reviewed response at Mail's default insertion point. In Mail's rich-text
-editor, do not place the cursor by clicking near the first character of the
-signature or use coordinate-based insertion at the signature boundary. This
-can leave a stray character in the greeting, remove the first character of the
-signature, or introduce unwanted line breaks. If the default insertion point is
-unavailable, recreate the Reply All draft from the original message instead of
-repairing the body around the signature. Relay remains the
-authority for source lookup, account and recipient readback, draft adoption,
-thread validation, and approval gating. Do not use background body replacement
-or construct a same-subject outgoing message as a substitute for Reply All.
-
-Treat the thread context as part of the reply, not as optional decoration:
-
-1. Preserve Mail's complete native To/Cc route. Do not manually remove existing
-   participants merely because they are not the primary follow-up owner.
-2. Preserve the quoted message chain and the provider threading headers. Do not
-   replace the composer body with body-only text.
-3. Insert only the new response above the account signature. Do not include a
-   hand-written copy of the configured Apple Mail signature in `--body-file`.
-4. After saving, reread the Apple Mail draft and verify To/Cc, subject, the
-   greeting's first character, expected paragraph breaks, exactly one intact
-   signature, `In-Reply-To`/`References`, and at least one recognizable
-   quoted-thread anchor before reporting the draft ready. Confirm that
-   user-added attachments remain present and unchanged.
-5. If any recipient or quoted context is missing, stop and rebuild from the
-   original message with native Reply All. Do not repair the route from memory.
-
-Functional testing must use a dedicated low-consequence thread whose recipients
-are test addresses or people explicitly approved for the test. Never use an
-active editorial, conference, clinical, administrative, or collaboration thread
-with real multi-recipient routing merely because the test does not intend to
-send. A diagnostic marker in the body is not a safety control. Before the UI
-test, read back To/Cc and confirm the test boundary; never invoke Send. After the
-test, discard the draft through the provider path and verify all three surfaces:
-no matching Drafts item, no compose window, and no diagnostic marker in Sent.
-Important live threads may be used only for read-only comparison after the
-workflow has passed on the controlled test thread, or for the actual requested
-draft content.
-
-```bash
-opl-relay --json draft reply-all \
-  --account work \
-  --apple-mail-account 'Work' \
-  --apple-mail-id 12345 \
-  --mailbox-path 'INBOX/Conference' \
-  --body-file ./reply.txt
-```
-
-The Apple Mail `account`, numeric message `id`, and `mailboxPath` must be the
-exact tuple returned by the local screen. Relay invokes Mail's visible native
-Reply All editor so Mail owns the signature and quoted chain. It fails closed
-if the route contains the sender's own address, duplicates, Bcc, no recipients,
-an ambiguous source, or if saved readback lacks `In-Reply-To`, `References`, the
-source quote anchor, or exactly one current signature above the quote. Sending
-still requires the separate fingerprint-bound `draft send` operation.
+A `server-send --check` run checks delivery readiness without sending or claiming
+it. Use only when diagnosing the handoff, not as an extra mandatory step for
+every message. Do not run help, source searches, all-account sync, tests or Git
+maintenance while completing a routine approved email. If a tool returns a
+running session, wait on that same session; an empty output is not evidence
+that the operation failed. Reconcile unknown external writes read-only before
+considering any retry.
 
 ## Persona Draft Handoff
 

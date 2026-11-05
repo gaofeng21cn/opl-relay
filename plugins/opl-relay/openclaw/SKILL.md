@@ -84,12 +84,30 @@ approved signature in a separate file. Relay derives the Reply All route and
 thread headers from raw mail; do not rebuild recipients from a flattened
 summary. Use `draft server-create` only for new correspondence.
 
+For a follow-up, resolve the source once before drafting:
+
+```bash
+opl-relay --json draft reply-context --account <account-id> \
+  --query 'thread subject' --latest-sent --sync
+```
+
+`--latest-sent` selects a newer own Sent message only when actual thread
+identifiers match; subject equality alone is not a reply anchor.
+
 Run the command without `--apply` to inspect the complete preview, then repeat
 the same request with `--apply` to save to the account's server Drafts folder.
 Only `server_verified=true` proves the server copy was read back. This route
-never sends, overwrites a draft being edited on a phone, or reattaches original
-files without an explicit request. Use `draft server-inspect` with the same
-request ID after an uncertain result; do not mint a new ID to retry.
+does not overwrite a draft being edited on a phone or reattach original files
+without an explicit request. Use `draft server-inspect` with the same request
+ID after an uncertain result; do not mint a new ID to retry.
+
+When the user explicitly authorizes Relay to send the reviewed server draft,
+use `draft server-send --account <account-id> --request-id <id> --approval
+<fingerprint>`. Relay verifies the same Message-ID in synchronized Apple Mail,
+compares MIME, recipients, attachments and thread headers, and uses the
+existing one-send ledger and Sent readback. `server-send --check` only checks
+readiness; it does not claim or send. Unknown results are reconciled read-only,
+never retried blindly.
 
 After the user reports sending that draft, preview `draft server-reconcile`
 for the account. Apply only candidates whose sent reply matches the exact
@@ -100,6 +118,6 @@ copy and the draft's absence afterward. A desktop mail client may retain a
 local cache copy; handle it through that client's own exact-message route.
 
 Apple Mail review drafts are a separate Relay path. A server Drafts save never
-authorizes `draft send`. Use the user's chosen mail client for final review and
-delivery, and report the owner-surface readback rather than assuming that a
-phone has synced merely because IMAP APPEND succeeded.
+authorizes `server-send`; the explicit approval fingerprint and live Apple Mail
+MIME comparison are required. A phone or desktop synchronization is not implied
+merely because IMAP APPEND succeeded.

@@ -59,16 +59,19 @@
       "runtime/codex_mail_workbench/paths.py",
       "runtime/codex_mail_workbench/people.py",
       "runtime/codex_mail_workbench/persona.py",
+      "runtime/codex_mail_workbench/reply_context.py",
       "runtime/codex_mail_workbench/remote_search.py",
       "runtime/codex_mail_workbench/server_drafts.py",
+      "runtime/codex_mail_workbench/server_send.py",
       "runtime/codex_mail_workbench/store.py",
       "runtime/codex_mail_workbench/sync.py",
       "runtime/codex_mail_workbench/triage.py",
       "runtime/codex_mail_workbench/workspace.py",
       "skills/opl-relay/SKILL.md",
-      "skills/opl-relay/agents/openai.yaml"
+      "skills/opl-relay/agents/openai.yaml",
+      "skills/opl-relay/references/apple-mail.md"
     ],
-    "digest": "sha256:0a114b7e7dedef6e58a688414e10e12ab307887fa43c569c250b2b599f5cb37d"
+    "digest": "sha256:aea7bf97d59127759b8f9176ee55c2d6aafdf98c7134938f4c59b27d99c976c2"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

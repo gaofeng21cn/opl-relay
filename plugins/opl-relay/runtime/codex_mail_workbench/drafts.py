@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import unicodedata
+from email.utils import getaddresses
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -166,16 +167,22 @@ def approval_payload(account_id: str, snapshot: DraftSnapshot) -> dict[str, Any]
             item["content_sha256"],
         )
     )
+    sender = getaddresses([snapshot.sender])
     return {
         "account_id": account_id,
         "provider_account": normalize_text(snapshot.provider_account),
-        "sender": snapshot.sender.strip().casefold(),
+        "sender": (sender[0][1] if len(sender) == 1 else snapshot.sender).strip().casefold(),
+        "message_id": normalize_text(snapshot.provider_message_id).strip().strip("<>").casefold(),
         "to": [_recipient_payload(item) for item in snapshot.to],
         "cc": [_recipient_payload(item) for item in snapshot.cc],
         "bcc": [_recipient_payload(item) for item in snapshot.bcc],
         "subject": normalize_text(snapshot.subject),
         "body_text": normalize_body(snapshot.body_text),
         "attachments": attachments,
+        "threading": {
+            "in_reply_to": normalize_text(str(snapshot.provider_threading.get("in_reply_to_value", ""))).strip(),
+            "references": normalize_text(str(snapshot.provider_threading.get("references_value", ""))).strip(),
+        },
     }
 
 

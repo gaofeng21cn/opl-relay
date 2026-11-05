@@ -210,8 +210,9 @@ archive uses UID MOVE from Inbox to the advertised All Mail folder. Unknown
 results require a fresh readback before retrying. Relay never creates folders,
 performs an unscoped `EXPUNGE`, permanently deletes mail, or marks messages.
 
-For phone-based review (including requests through Weixin), prepare a server
-Reply All draft from an exact source message:
+Server Drafts are the default review path for replies, including desktop,
+phone, and Weixin requests. Prepare a Reply All draft from an exact source
+message:
 
 ```bash
 opl-relay --json draft server-reply-all \
@@ -228,7 +229,35 @@ headers, quoted history and a single new signature in UTF-8 plain text/HTML.
 It does not edit existing mobile drafts or automatically reattach original files.
 See the [server draft contract](docs/architecture.md#server-drafts-for-mobile-review).
 
-For desktop review, create and inspect an Apple Mail draft:
+For a follow-up, resolve the reply anchor once before drafting. `--latest-sent`
+selects a newer own Sent message only when actual thread identifiers match;
+subject equality alone is not enough:
+
+```bash
+opl-relay --json draft reply-context \
+  --account work --query 'Invitation to Deliver a Keynote Lecture' --latest-sent --sync
+```
+
+After the user approves the verified server draft, send it with the returned
+fingerprint:
+
+```bash
+opl-relay --json draft server-send --account work \
+  --request-id reply-unique-id --approval 'sha256:...'
+```
+
+Relay checks the same `Message-ID` in synchronized Apple Mail, compares MIME,
+routing, attachments and thread headers, sends once, reads back Sent, and
+does not retry an unknown result.
+
+Prefer this route when the reply needs to be rewritten, polished, or regenerated.
+Reuse the same request ID for the revised preview; it does not depend on desktop
+rich-text selection, so a partial replacement cannot leave duplicated paragraphs.
+After the user sends it, run `draft server-reconcile`.
+
+Use the Apple Mail route when the user explicitly asks for Mail.app, the draft
+already has manual edits or attachments to preserve, or the thread exists only
+in the desktop client. Create and inspect an Apple Mail draft:
 
 ```bash
 opl-relay --json draft create \
@@ -265,7 +294,10 @@ first character of the signature or use coordinate-based insertion at the
 signature boundary; that can leave a stray character in the greeting, remove the
 first character of the signature, or introduce unwanted line breaks. If the
 default insertion point is unavailable, recreate the Reply All draft from the
-source message instead of repairing the body around the signature. Relay handles
+source message instead of repairing the body around the signature. Do not rely
+on rich-text selection to rewrite an existing draft: a partial selection can
+leave duplicated or joined paragraphs. For wording changes, rebuild from the
+source message or use the server Drafts route. Relay handles
 source lookup and saved-draft readback; it must not replace this with a
 same-subject outgoing message. Relay rejects self-addresses, duplicates, Bcc,
 empty recipient sets, and ambiguous source tuples before registering the stable

@@ -12,7 +12,7 @@ from urllib.parse import quote, urlencode
 
 from .graph import GraphClient, GraphError
 from .server_drafts import (_is_superseded, _ledger, _message_date,
-                            _subject_key, content_snapshot)
+                            _subject_key, content_snapshot, review_payload)
 
 
 def _schema(conn):
@@ -101,17 +101,19 @@ def save_graph_draft(*, account, conn, row, raw, request_id, inspect):
     return {"request_id": request_id, "remote_id": remote_id, "folder": "Drafts",
             "server_verified": True, "state": "draft", "send_allowed": False,
             "message_id": headers["Message-ID"], "to": headers["To"], "cc": headers["Cc"],
-            "subject": headers["Subject"]}
+            "subject": headers["Subject"], **review_payload(raw)}
 
 
-def reconcile_graph_drafts(*, account, ledger_path, apply=False):
+def reconcile_graph_drafts(*, account, ledger_path, apply=False, request_id=None, sent_message_id=None):
     conn = _ledger(ledger_path)
     entries = []
     try:
         _schema(conn)
         rows = conn.execute("""SELECT r.request_id,g.remote_id,g.verified_raw
             FROM server_draft_requests r JOIN graph_server_drafts g USING(request_id)
-            WHERE r.account_id=? AND r.state='verified'""", (account.account_id,)).fetchall()
+            WHERE r.account_id=? AND r.state IN ('verified','sent')"""
+            + (" AND r.request_id=?" if request_id else ""),
+            (account.account_id, request_id) if request_id else (account.account_id,)).fetchall()
         if not rows:
             return {"account_id": account.account_id, "checked": 0, "candidates": 0, "cleaned": 0, "drafts": []}
         client = GraphClient(account)
@@ -127,9 +129,16 @@ def reconcile_graph_drafts(*, account, ledger_path, apply=False):
                 if exc.status != 404:
                     raise
                 entry.update(action="absent", reason="draft no longer on server")
+                if apply:
+                    conn.execute("UPDATE server_draft_requests SET state='absent' WHERE request_id=?", (row["request_id"],))
+                    conn.commit()
                 continue
             if not meta.get("isDraft") or meta.get("parentFolderId") != drafts_id:
                 entry.update(action="absent", reason="message is no longer in Drafts")
+                if apply:
+                    conn.execute("UPDATE server_draft_requests SET state='absent' WHERE request_id=?",
+                                 (row["request_id"],))
+                    conn.commit()
                 continue
             expected = bytes(row["verified_raw"])
             raw = client.mime(row["remote_id"])
@@ -141,6 +150,8 @@ def reconcile_graph_drafts(*, account, ledger_path, apply=False):
             params = {"$select": "id,subject", "$top": "100"}
             if since:
                 params["$filter"] = "sentDateTime ge " + (since - timedelta(days=2)).isoformat()
+            if sent_message_id:
+                params["$filter"] = "internetMessageId eq '" + sent_message_id.replace("'", "''") + "'"
             found = None
             for sent_meta in client.pages("/me/mailFolders/sentitems/messages?" + urlencode(params)):
                 if _subject_key(sent_meta.get("subject", "")) != _subject_key(str(draft.get("Subject", ""))):

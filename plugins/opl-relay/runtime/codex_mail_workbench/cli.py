@@ -1287,6 +1287,8 @@ def cmd_read(args: argparse.Namespace) -> int:
     if not meta or raw is None:
         return fail("message not found", as_json=args.json, code=2)
     meta["body_text"] = extract_text_body(raw)
+    from .server_drafts import content_snapshot
+    meta["headers"] = content_snapshot(raw)["headers"]
     if args.include_raw:
         meta["raw_eml"] = raw.decode("utf-8", errors="replace")
     emit({"ok": True, "message": meta}, as_json=args.json)
@@ -1690,8 +1692,38 @@ def cmd_draft_server_reconcile(args: argparse.Namespace) -> int:
         ledger_path=Path(args.draft_db).expanduser(),
         account_id=args.account,
         apply=args.apply,
+        request_id=args.request_id,
+        sent_message_id=args.sent_message_id,
     )
     emit({"ok": True, "reconcile": payload}, as_json=args.json)
+    return 0
+
+
+def cmd_server_send(args: argparse.Namespace) -> int:
+    from .server_send import send_server_draft
+    payload = send_server_draft(config_path=Path(args.config).expanduser(),
+                                ledger_path=Path(args.draft_db).expanduser(), account_id=args.account,
+                                request_id=args.request_id, approval=args.approval, check=args.check)
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
+
+
+def cmd_reply_context(args: argparse.Namespace) -> int:
+    from .reply_context import reply_context
+    result = None
+    if args.sync:
+        result = sync_account(config_path=Path(args.config).expanduser(), db_path=Path(args.db).expanduser(),
+                              account_id=args.account, scope="active", max_duration_sec=60)
+        if not result.get("ok") or any(not item.get("complete") for item in result.get("folders", [])):
+            emit({"ok": False, "sync": result, "error": "Active sync is incomplete; inspect available mail before selecting a reply"}, as_json=args.json)
+            return 1
+    payload = reply_context(config_path=Path(args.config).expanduser(), db_path=Path(args.db).expanduser(),
+                            account_id=args.account, storage_ref=args.storage_ref, query=args.query,
+                            latest_sent=args.latest_sent)
+    if result is not None:
+        payload["sync"] = result
+        payload["coverage"]["freshness"] = "fresh active sync"
+    emit({"ok": True, "reply_context": payload}, as_json=args.json)
     return 0
 
 
@@ -2116,8 +2148,26 @@ def build_parser() -> argparse.ArgumentParser:
         "server-reconcile",
         help="对账 Drafts 与 Sent，清除已由已发件取代的残留服务器草稿")
     reconcile.add_argument("--account", required=True)
+    reconcile.add_argument("--request-id", help="只核对这一个 Relay 请求")
+    reconcile.add_argument("--sent-message-id", help="在 Sent 中实时验证这一 Message-ID，避免扫描历史")
     reconcile.add_argument("--apply", action="store_true", help="执行删除；默认只做只读预览")
     reconcile.set_defaults(func=cmd_draft_server_reconcile)
+
+    server_send = draft_actions.add_parser("server-send", help="按已审核指纹单次发送服务器草稿并核对 Sent")
+    server_send.add_argument("--account", required=True)
+    server_send.add_argument("--request-id", required=True)
+    server_send.add_argument("--approval", required=True)
+    server_send.add_argument("--check", action="store_true", help="只核对同一草稿的交付就绪状态，不发送或认领")
+    server_send.set_defaults(func=cmd_server_send)
+
+    reply_context = draft_actions.add_parser("reply-context", help="一次读取回复原文、完整收件人及线程锚点")
+    reply_context.add_argument("--account", required=True)
+    source = reply_context.add_mutually_exclusive_group(required=True)
+    source.add_argument("--storage-ref")
+    source.add_argument("--query", help="搜索当前活动邮箱；配合 --latest-sent 选择最新本人已发线程")
+    reply_context.add_argument("--latest-sent", action="store_true", help="催办时选同线程中较新的本人已发邮件")
+    reply_context.add_argument("--sync", action="store_true", help="选择来源前只同步一次当前账户")
+    reply_context.set_defaults(func=cmd_reply_context)
 
     draft_create = draft_actions.add_parser("create", help="创建并保存 Apple Mail 草稿")
     draft_create.add_argument("--account", required=True)

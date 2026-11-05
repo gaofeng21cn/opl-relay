@@ -261,10 +261,11 @@ def reconciler(tmp_path, monkeypatch):
     return install
 
 
-def seed_verified_draft(tmp_path, *, reply=True, request_id="one"):
+def seed_verified_draft(tmp_path, *, reply=True, request_id="one", attachments=()):
     """Record one ledger-owned draft, built by the production message builder."""
     raw = (build(  # noqa: E501 - a threaded reply to the shared fixture source
-        sender="owner@example.test", self_addresses=["owner@example.test", "alias@example.test"]
+        sender="owner@example.test", self_addresses=["owner@example.test", "alias@example.test"],
+        attachments=attachments
     ) if reply else sd.build_message(
         sender="owner@example.test", self_addresses=["owner@example.test"],
         body="Approved content", signature=SIGNATURE,
@@ -275,6 +276,64 @@ def seed_verified_draft(tmp_path, *, reply=True, request_id="one"):
     conn.commit()
     conn.close()
     return raw
+
+
+def test_scoped_reconciliation_reads_only_selected_request_and_exact_sent(tmp_path, reconciler):
+    selected = seed_verified_draft(tmp_path, request_id="selected")
+    other = seed_verified_draft(tmp_path, request_id="other")
+    sent = sent_message()
+    sent_id = str(BytesParser(policy=policy.default).parsebytes(sent)["Message-ID"])
+    client = ReconcilerImap(drafts=[selected, other], sent=[sent])
+    def no_history_scan(*args, **kwargs):
+        pytest.fail("scoped reconciliation must not enumerate Sent history")
+    client.ids = no_history_scan
+    result = sd.reconcile_server_drafts(**reconciler(client), request_id="selected",
+                                       sent_message_id=sent_id, apply=True)
+    assert result["checked"] == 1 and result["cleaned"] == 1
+    assert client.drafts == [other]
+
+
+def test_exact_sent_without_reply_header_cleans_matching_reply(tmp_path, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    sent = BytesParser(policy=policy.default).parsebytes(draft)
+    del sent["In-Reply-To"]
+    del sent["Message-ID"]
+    del sent["Date"]
+    sent["Message-ID"] = "<manual-send@example.test>"
+    sent["Date"] = formatdate(localtime=True)
+    sent.get_body(preferencelist=("plain",)).set_content(
+        sent.get_body(preferencelist=("plain",)).get_content() + "\ufffc\ufffc")
+    client = ReconcilerImap(drafts=[draft], sent=[sent.as_bytes()])
+
+    result = sd.reconcile_server_drafts(**reconciler(client), request_id="one",
+                                        sent_message_id="<manual-send@example.test>", apply=True)
+    assert result["cleaned"] == 1 and client.drafts == []
+
+
+def test_exact_sent_without_reply_header_preserves_different_reply(tmp_path, reconciler):
+    draft = seed_verified_draft(tmp_path)
+    sent = BytesParser(policy=policy.default).parsebytes(draft)
+    del sent["In-Reply-To"]
+    del sent["Message-ID"]
+    del sent["Date"]
+    sent["Message-ID"] = "<manual-send@example.test>"
+    sent["Date"] = formatdate(localtime=True)
+    sent.get_body(preferencelist=("plain",)).set_content("A different sent reply.")
+    client = ReconcilerImap(drafts=[draft], sent=[sent.as_bytes()])
+
+    result = sd.reconcile_server_drafts(**reconciler(client), request_id="one",
+                                        sent_message_id="<manual-send@example.test>", apply=True)
+    assert result["drafts"][0]["action"] == "keep"
+    assert client.drafts == [draft] and client.mutations == []
+
+
+def test_absent_applied_drafts_are_not_rescanned_forever(tmp_path, reconciler):
+    seed_verified_draft(tmp_path)
+    client = ReconcilerImap()
+    arguments = reconciler(client)
+    assert sd.reconcile_server_drafts(**arguments, apply=True)["drafts"][0]["action"] == "absent"
+    client.folders = lambda: pytest.fail("resolved absent draft must not reconnect")
+    assert sd.reconcile_server_drafts(**arguments)["checked"] == 0
 
 
 def test_reconcile_removes_draft_already_carried_by_a_sent_reply(tmp_path, monkeypatch, reconciler):

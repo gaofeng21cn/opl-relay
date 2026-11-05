@@ -1,4 +1,4 @@
-"""IMAP-only review drafts. This module has no send or existing-draft edit path."""
+"""Server review drafts, exact reply routing and scoped reconciliation."""
 from __future__ import annotations
 
 import hashlib
@@ -215,17 +215,51 @@ def _message_date(message):
     return parsed if parsed.tzinfo is not None else None
 
 
-def _is_superseded(draft, sent):
+def _same_sent_content(draft, sent):
+    def visible_body(message):
+        part = message.get_body(preferencelist=("plain", "html"))
+        if part is None:
+            return ""
+        text = part.get_content()
+        if part.get_content_type() == "text/html":
+            parser = QuoteText()
+            parser.feed(text)
+            text = "".join(parser.parts)
+        text = text.replace("\ufffc", "")
+        text = "\n".join(re.sub(r"^\s*(?:>\s*)+", "", line) for line in text.splitlines())
+        return " ".join(text.split())
+
+    def attachments(message):
+        result = []
+        for part in message.walk():
+            if part.is_multipart() or not (part.get_filename() or part.get_content_disposition() == "attachment"):
+                continue
+            payload = part.get_payload(decode=True) or b""
+            result.append((part.get_filename() or "", part.get_content_type(), hashlib.sha256(payload).hexdigest()))
+        return sorted(result)
+
+    body = visible_body(draft)
+    return bool(body) and body == visible_body(sent) and attachments(draft) == attachments(sent)
+
+
+def _is_superseded(draft, sent, *, exact_sent_message_id=None):
     """Decide whether a sent message already carries this review draft's reply.
 
-    Same reply target (``In-Reply-To``), same recipients, same subject, and not
-    older than the draft: the draft is a leftover the client failed to consume.
-    Anything weaker stays untouched so a pending edit is never destroyed.
+    Require the same reply target, recipients, subject and a recent sent date.
+    A scoped exact Sent identity can compensate for a missing reply target only
+    when sender, routing, visible body and attachment bytes also match.
     """
     draft_parent = str(draft.get("In-Reply-To", "")).strip()
     sent_parent = str(sent.get("In-Reply-To", "")).strip()
     if draft_parent and sent_parent != draft_parent:
-        return False
+        if (sent_parent or not exact_sent_message_id
+                or str(sent.get("Message-ID", "")).strip() != exact_sent_message_id):
+            return False
+        if any(_address_set(draft, field) != _address_set(sent, field)
+               for field in ("From", "To", "Cc", "Bcc")):
+            return False
+        if not _same_sent_content(draft, sent):
+            return False
     if _subject_key(str(sent.get("Subject", ""))) != _subject_key(str(draft.get("Subject", ""))):
         return False
     recipients = _address_set(draft, "To", "Cc")
@@ -241,6 +275,8 @@ def _is_superseded(draft, sent):
 def _search_message(client, folder, message_id, *, readonly=True):
     epoch = client.status(folder)["uidvalidity"]
     uids = client.find_message(folder, message_id)
+    if not uids:
+        return None
     metadata = client.metadata(folder, uids)
     found = []
     for uid in uids:
@@ -278,10 +314,23 @@ def inspect_message(client, folder, expected):
     return {"uid": found["uid"], "folder": folder, "message_id": message_id,
             "to": str(actual["To"]), "cc": str(actual.get("Cc", "")),
             "subject": str(actual["Subject"]), "server_verified": True,
-            "state": "draft", "send_allowed": False}
+            "state": "draft", "send_allowed": False, **review_payload(found["raw"])}
 
 
-def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False):
+def review_payload(raw):
+    message = BytesParser(policy=policy.default).parsebytes(raw)
+    return {"headers": content_snapshot(raw)["headers"],
+            "body_text": message.get_body(preferencelist=("plain", "html")).get_content(),
+            "approval_fingerprint": server_fingerprint(raw)}
+
+
+def server_fingerprint(raw):
+    payload = content_snapshot(raw)
+    return "sha256:" + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False,
+                            request_id=None, sent_message_id=None):
     """Delete review drafts that a client left behind after sending the reply.
 
     Only drafts this ledger created and verified on the server are considered.
@@ -293,14 +342,17 @@ def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False
     account = accounts[account_id]
     if account.graph:
         from .graph_drafts import reconcile_graph_drafts
-        return reconcile_graph_drafts(account=account, ledger_path=ledger_path, apply=apply)
+        return reconcile_graph_drafts(account=account, ledger_path=ledger_path, apply=apply,
+                                      request_id=request_id, sent_message_id=sent_message_id)
     conn = _ledger(ledger_path)
     client = None
     entries = []
     try:
         rows = conn.execute(
             "SELECT request_id, raw FROM server_draft_requests"
-            " WHERE account_id=? AND state='verified' ORDER BY request_id", (account_id,)).fetchall()
+            " WHERE account_id=? AND state IN ('verified','sent')"
+            + (" AND request_id=?" if request_id else "") + " ORDER BY request_id",
+            (account_id, request_id) if request_id else (account_id,)).fetchall()
         if not rows:
             return {"account_id": account_id, "checked": 0, "candidates": 0, "cleaned": 0, "drafts": []}
         client = Himalaya(account)
@@ -319,10 +371,17 @@ def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False
             if not found:
                 entry.update(action="absent", reason="draft is no longer on the server")
                 entries.append(entry)
+                if apply:
+                    conn.execute("UPDATE server_draft_requests SET state='absent' WHERE request_id=?", (row["request_id"],))
+                    conn.commit()
                 continue
             if found["deleted"] or not found["draft"]:
                 entry.update(action="absent", reason="message is not a live draft")
                 entries.append(entry)
+                if apply:
+                    conn.execute("UPDATE server_draft_requests SET state='absent' WHERE request_id=?",
+                                 (row["request_id"],))
+                    conn.commit()
                 continue
             entry["uid"] = found["uid"]
             entry["user_edited"] = content_snapshot(found["raw"]) != content_snapshot(expected)
@@ -334,8 +393,14 @@ def reconcile_server_drafts(*, config_path, ledger_path, account_id, apply=False
             since = since - timedelta(days=2) if since is not None else None
             cache_key = since.date() if since is not None else None
             if cache_key not in sent_cache:
-                sent_cache[cache_key] = _recent_sent_messages(client, sent_folder, since)
-            match = next((sent for sent in sent_cache[cache_key] if _is_superseded(draft, sent)), None)
+                if sent_message_id:
+                    sent = _search_message(client, sent_folder, sent_message_id)
+                    sent_cache[cache_key] = [sent["message"]] if sent and not sent["deleted"] else []
+                else:
+                    sent_cache[cache_key] = _recent_sent_messages(client, sent_folder, since)
+            exact_sent_id = sent_message_id if request_id else None
+            match = next((sent for sent in sent_cache[cache_key]
+                          if _is_superseded(draft, sent, exact_sent_message_id=exact_sent_id)), None)
             if match is None:
                 entries.append(entry)
                 continue
@@ -385,6 +450,16 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
         row = conn.execute("SELECT * FROM server_draft_requests WHERE request_id=?", (request_id,)).fetchone()
         if row and row["account_id"] != account_id:
             raise ValueError("Request ID belongs to a different account")
+        if row:
+            conn.commit()
+            from .server_send import inspect_delivery
+            delivery = inspect_delivery(conn=conn, ledger_path=ledger_path, account=account,
+                                        request_id=request_id, raw=bytes(row["raw"]))
+            if delivery is not None:
+                conn.commit()
+                return delivery
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM server_draft_requests WHERE request_id=?", (request_id,)).fetchone()
         if inspect:
             if not row:
                 raise ValueError("Unknown draft request")
@@ -413,7 +488,11 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
             digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
             if row:
                 if row["input_hash"] != digest:
-                    raise ValueError("Request ID already binds different content; do not replace a mobile draft")
+                    if row["state"] != "prepared":
+                        raise ValueError("Request ID already binds different content; do not replace a mobile draft")
+                    conn.execute("UPDATE server_draft_requests SET input_hash=?,raw=? WHERE request_id=?",
+                                 (digest, raw, request_id))
+                    row = conn.execute("SELECT * FROM server_draft_requests WHERE request_id=?", (request_id,)).fetchone()
                 raw = bytes(row["raw"])
             else:
                 conn.execute("INSERT INTO server_draft_requests VALUES (?,?,?,?,?,?)",
@@ -424,8 +503,11 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
             msg = BytesParser(policy=policy.default).parsebytes(raw)
             return {"state": "prepared", "request_id": request_id, "server_verified": False,
                     "send_allowed": False, "headers": content_snapshot(raw)["headers"],
+                    "approval_fingerprint": server_fingerprint(raw),
                     "body_text": msg.get_body(preferencelist=("plain",)).get_content(),
                     "body_html": msg.get_body(preferencelist=("html",)).get_content()}
+        if row["state"] in {"cleaned", "absent"}:
+            raise ValueError("Draft is no longer pending; do not recreate or resend")
         if account.graph:
             from .graph_drafts import save_graph_draft
             return save_graph_draft(account=account, conn=conn, row=row, raw=raw,
