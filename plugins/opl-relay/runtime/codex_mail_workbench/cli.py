@@ -1853,6 +1853,29 @@ def cmd_workbench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_connect(args: argparse.Namespace) -> int:
+    from .connect import create_provider
+
+    try:
+        try:
+            request = json.load(sys.stdin)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = {"ok": False, "disposition": "not_dispatched",
+                       "error": {"code": "INVALID_REQUEST", "message": "连接请求无效"}}
+        else:
+            provider = create_provider(
+                config_path=Path(args.config).expanduser(),
+                db_path=Path(args.db).expanduser(),
+                ledger_path=Path(args.draft_db).expanduser(),
+            )
+            payload = provider.dispatch(request)
+    except Exception:
+        payload = {"ok": False, "disposition": "not_dispatched",
+                   "error": {"code": "PROVIDER_UNAVAILABLE", "message": "Relay 邮箱连接暂不可用"}}
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="opl-relay")
     parser.add_argument("--json", action="store_true", help="输出稳定 JSON")
@@ -1874,6 +1897,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="外部知识源 sources.toml 路径",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    connect = sub.add_parser("connect", help="通过 stdin JSON 暴露 Relay 邮箱连接 provider")
+    connect.set_defaults(func=cmd_connect)
 
     workbench = sub.add_parser("workbench", help="打开共享邮件工作台或启动 MCP App")
     workbench_actions = workbench.add_subparsers(dest="workbench_action", required=True)

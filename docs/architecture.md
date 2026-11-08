@@ -59,6 +59,8 @@ OPL Persona or OPL App.
   content digests, and all triage judgments.
 - CLI: `opl-relay` is the only public command entry. Internal Python names and
   credential-store identifiers do not create additional command identities.
+  Its `--json connect` stdin bridge is the shared mailbox provider for Framework,
+  Agent, and Mini App consumers; see [Connect Provider](connect-provider.md).
 
 ## Runtime Ownership
 

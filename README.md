@@ -64,6 +64,11 @@ it. OPL App exposes the same workbench from Inbox and Drafts. Generic MCP,
 Codex and native DSH connection adapters share the installed engine; see
 [host installation](docs/distribution.md#host-installation-adapters).
 
+Framework and local Agent/Mini App consumers can share Relay mailbox access
+through `opl-relay --json connect`; the provider binds each call to a configured
+mailbox and reads Relay's synchronized local cache. See the
+[Connect Provider contract](docs/connect-provider.md).
+
 **Evidence-first mail**
 
 Relay synchronizes configured IMAP folders and Microsoft Graph mailboxes into a private local SQLite store.

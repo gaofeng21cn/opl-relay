@@ -54,6 +54,10 @@ OPL_PROFILE_WORKSPACE=/path/to/profile opl-relay --json workbench open
 OPL App 的收件箱和草稿页也提供同一工作台入口。通用 MCP、Codex 和 DSH 原生配置包
 都连接已安装的同一引擎，参见[安装适配](docs/distribution.md#host-installation-adapters)。
 
+Framework 与本地 Agent/Mini App 可通过 `opl-relay --json connect` 共用 Relay
+邮箱连接；每次调用都绑定到一个已配置邮箱，并从 Relay 同步缓存读取。详见
+[Connect Provider 合同](docs/connect-provider.md)。
+
 **以邮件原文为证据**
 
 Relay 把已配置的 IMAP 文件夹和 Microsoft Graph 邮箱同步到本机 SQLite。检索结果和起草上下文使用稳定的
