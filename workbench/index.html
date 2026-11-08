@@ -18,10 +18,10 @@
       <div class="window-title" aria-label="OPL Relay 邮箱工作台">
         <span class="window-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 7 8 6 8-6"/></svg></span>
         <strong>Email Workbench</strong>
-        <span class="live-status"><i></i>运行中</span>
+        <span id="operation-status" class="live-status" role="status" aria-live="polite">正在连接…</span>
       </div>
       <div class="chrome-right">
-        <button class="chrome-button unsupported-action" type="button" aria-label="全屏" title="全屏暂未接入">
+        <button id="fullscreen" class="chrome-button" type="button" aria-label="全屏" title="全屏">
           <svg class="chrome-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3m13 5h3a2 2 0 0 0 2-2v-3"/></svg>
         </button>
         <button class="chrome-button unsupported-action" type="button" aria-label="活动记录" title="活动记录暂未接入">

@@ -1,4 +1,4 @@
-import { App } from '@modelcontextprotocol/ext-apps';
+import { App, applyDocumentTheme, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps';
 import DOMPurify from 'dompurify';
 
 const $ = (id) => document.getElementById(id);
@@ -58,6 +58,40 @@ const initialFocus = Object.fromEntries(new URLSearchParams(location.search));
 let selection = 0;
 let bridge;
 let capability;
+let operationSequence = 0;
+const embedded = window.self !== window.top;
+const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+function applyHostContext(context = {}) {
+  applyDocumentTheme(context.theme || (systemTheme.matches ? 'dark' : 'light'));
+  if (context.styles?.variables) applyHostStyleVariables(context.styles.variables);
+  const root = document.documentElement;
+  root.dataset.embedded = String(embedded);
+  root.dataset.displayMode = context.displayMode || 'inline';
+  if (context.containerDimensions) {
+    const height = context.containerDimensions.height ?? context.containerDimensions.maxHeight;
+    if (Number.isFinite(height) && height > 0) root.style.setProperty('--host-max-height', `${height}px`);
+    else root.style.removeProperty('--host-max-height');
+  }
+  if (context.safeAreaInsets) {
+    for (const side of ['top', 'right', 'bottom', 'left']) root.style.setProperty(`--safe-${side}`, `${Math.max(0, context.safeAreaInsets[side] || 0)}px`);
+  }
+  const fullscreen = $('fullscreen');
+  fullscreen.hidden = embedded && !context.availableDisplayModes?.includes('fullscreen');
+  fullscreen.title = context.displayMode === 'fullscreen' ? '退出全屏' : '全屏';
+  fullscreen.setAttribute('aria-label', fullscreen.title);
+}
+applyHostContext();
+systemTheme.addEventListener('change', () => { if (!embedded) applyHostContext(); });
+
+function updateContext(identity) {
+  if (bridge) bridge.updateModelContext({ content: [{ type: 'text', text: JSON.stringify({ account_id: state.account, ...identity }) }] }).catch(() => {});
+}
+
+function operation(text, status = 'idle') {
+  const node = $('operation-status');
+  node.textContent = text;
+  node.dataset.state = status;
+}
 if (window.self === window.top) {
   capability = location.hash.slice(1);
   try {
@@ -68,6 +102,8 @@ if (window.self === window.top) {
 }
 
 function notice(text, error = false) {
+  operationSequence++;
+  operation(text, error ? 'error' : 'complete');
   $('notice').textContent = text;
   $('notice').className = `notice${error ? ' error' : ''}`;
   $('notice').hidden = false;
@@ -81,21 +117,48 @@ async function run(action) {
 }
 
 async function api(action, input = {}) {
-  if (bridge) {
-    const result = await bridge.callServerTool({ name: `relay_${action}`, arguments: input });
-    if (result.isError) throw new Error(result.content?.find((part) => part.type === 'text')?.text || '操作未完成');
-    return result.structuredContent;
+  const sequence = ++operationSequence;
+  const labels = { save: '正在保存编辑…', publish: '正在保存并核对邮箱草稿…', send: '正在发送并核对结果…', sync: '正在同步邮件…', upload: '正在保存附件…', reply: '正在准备回复…' };
+  operation(labels[action] || '正在读取…', 'running');
+  try {
+    let result;
+    if (bridge) {
+      const response = await bridge.callServerTool({ name: `relay_${action}`, arguments: input });
+      if (response.isError) throw new Error(response.content?.find((part) => part.type === 'text')?.text || '操作未完成');
+      result = response.structuredContent;
+    } else {
+      const response = await fetch(`/api/${action}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${capability}` }, body: JSON.stringify(input),
+      });
+      result = await response.json();
+      if (!response.ok) throw new Error(result.error || '操作未完成');
+    }
+    if (result?.ok === false) throw new Error(result.error || '操作未完成');
+    if (sequence === operationSequence) operation('已读取当前状态');
+    return result;
+  } catch (error) {
+    if (sequence === operationSequence) operation(error.message || '操作未完成，请核对当前状态', 'error');
+    throw error;
   }
-  const response = await fetch(`/api/${action}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${capability}` }, body: JSON.stringify(input),
-  });
-  const result = await response.json();
-  if (!response.ok || result.ok === false) throw new Error(result.error || '操作未完成');
-  return result;
 }
 
-function preserveEdits() {
-  return !state.dirty || window.confirm('当前回复还有未保存的修改。离开并放弃这些修改？');
+async function preserveEdits() {
+  if (!state.dirty) return true;
+  if (preserveEdits.pending) return false;
+  preserveEdits.pending = true;
+  try {
+    return await new Promise((resolve) => {
+      const dialog = element('dialog');
+      const title = element('h2', '保留当前修改？'); title.id = `unsaved-${crypto.randomUUID()}`;
+      dialog.setAttribute('aria-labelledby', title.id);
+      const actions = element('div', undefined, 'dialog-actions');
+      let discard = false;
+      actions.append(button('继续编辑', () => dialog.close(), 'primary'), button('放弃修改并离开', () => { discard = true; dialog.close(); }));
+      dialog.append(title, element('p', '当前回复还有未保存的正文或附件。'), actions);
+      dialog.addEventListener('close', () => { dialog.remove(); resolve(discard); }, { once: true });
+      document.body.append(dialog); dialog.showModal();
+    });
+  } finally { preserveEdits.pending = false; }
 }
 
 function setDirty(value) {
@@ -183,7 +246,7 @@ async function loadList(focus = {}) {
 }
 
 async function select(item) {
-  if (!preserveEdits()) return;
+  if (!await preserveEdits()) return;
   const current = ++selection;
   const accountId = state.account;
   state.dirty = false;
@@ -209,7 +272,7 @@ async function select(item) {
   $('composer').hidden = true;
   state.edit = null;
   renderMessage(result.message);
-  if (bridge) await bridge.updateModelContext({ content: [{ type: 'text', text: JSON.stringify({ account_id: state.account, storage_ref: item.storage_ref, subject: item.subject }) }] });
+  updateContext({ storage_ref: result.message.storage_ref, subject: result.message.subject });
 }
 
 function renderMessage(message) {
@@ -232,7 +295,7 @@ function renderMessage(message) {
     $('reply-body').focus();
   }, 'back', 'primary'));
   else toolbar.append(actionButton('回复', async () => {
-    if (!preserveEdits()) return;
+    if (!await preserveEdits()) return;
     const accountId = state.account;
     const current = ++selection;
     const request_id = `reply-${crypto.randomUUID()}`;
@@ -248,8 +311,8 @@ function renderMessage(message) {
     actionButton('更多操作', unsupported('更多操作'), 'more', 'soft-action'),
   );
   const controls = element('div', undefined, 'reader-actions');
-  controls.append(button('返回列表', () => {
-    if (!preserveEdits()) return;
+  controls.append(button('返回列表', async () => {
+    if (!await preserveEdits()) return;
     state.dirty = false; state.edit = null; state.selected = null; $('composer').hidden = true;
     showEmptyReader();
     document.querySelector('.workspace').classList.remove('reading', 'view-source');
@@ -334,7 +397,7 @@ function compose(draft) {
   const details = element('details'); details.append(element('summary', '原邮件上下文（保留）'), element('pre', draft.quote)); quoted.append(details);
   composer.append(top, headers, label, editor, signature, attachments, picker, quoted, actions);
   renderEditAttachments();
-  if (bridge) run(() => bridge.updateModelContext({ content: [{ type: 'text', text: JSON.stringify({ account_id: state.account, draft_id: draft.id, revision: draft.revision, state: draft.state }) }] }));
+  updateContext({ draft_id: draft.id, revision: draft.revision, state: draft.state });
 }
 
 async function showSource() {
@@ -371,6 +434,8 @@ async function saveEdit() {
     state.edit = result.draft;
     setDirty($('reply-body').value !== body || JSON.stringify(state.attachments.map((item) => item.id)) !== JSON.stringify(attachment_ids));
     notice('编辑已保存，尚未发送');
+    if (!state.dirty) $('edit-status').textContent = '编辑已保存';
+    updateContext({ draft_id: result.draft.id, revision: result.draft.revision, state: result.draft.state });
   } finally {
     if (save) { save.disabled = false; save.textContent = '保存编辑'; save.removeAttribute('aria-busy'); }
   }
@@ -404,6 +469,7 @@ async function publish() {
 
 function showServer(draft) {
   const accountId = state.account;
+  updateContext({ request_id: draft.request_id, state: draft.state });
   if (draft.state !== 'draft') {
     notice(draft.state === 'sent' ? '邮件已发送，不会重复发送' : '发送结果尚待核对，请勿重试发送', draft.state !== 'sent');
     return;
@@ -468,7 +534,7 @@ async function boot(focus = {}) {
 }
 
 $('account').onchange = () => run(async () => {
-  if (!preserveEdits()) { $('account').value = state.account; return; }
+  if (!await preserveEdits()) { $('account').value = state.account; return; }
   selection++;
   state.account = $('account').value; state.dirty = false; state.edit = null; state.selected = null;
   $('composer').hidden = true;
@@ -477,7 +543,7 @@ $('account').onchange = () => run(async () => {
   await loadList();
 });
 for (const mode of ['inbox', 'sent', 'drafts', 'history']) $(mode).onclick = () => run(async () => {
-  if (!preserveEdits()) return;
+  if (!await preserveEdits()) return;
   selection++;
   state.mode = mode; state.dirty = false; state.edit = null; state.selected = null; $('search').value = ''; $('composer').hidden = true; showEmptyReader(); document.querySelector('.workspace').classList.remove('reading', 'view-source'); await loadList();
 });
@@ -492,11 +558,17 @@ for (const node of document.querySelectorAll('.unsupported-action')) {
   node.onclick = () => notice(`${node.textContent.trim() || node.getAttribute('aria-label') || '该操作'}尚未接入当前 Relay。`);
 }
 window.addEventListener('beforeunload', (event) => { if (state.dirty) { event.preventDefault(); event.returnValue = ''; } });
+$('fullscreen').onclick = () => run(async () => {
+  if (bridge) await bridge.requestDisplayMode({ mode: bridge.getHostContext()?.displayMode === 'fullscreen' ? 'inline' : 'fullscreen' });
+  else if (document.fullscreenElement) await document.exitFullscreen();
+  else await document.documentElement.requestFullscreen();
+});
 
 if (capability && window.self === window.top) run(() => boot(initialFocus));
 else {
   bridge = new App({ name: 'OPL Relay Workbench', version: '0.1.0' });
-  bridge.ontoolresult = (result) => run(() => { if (preserveEdits()) return boot(result.structuredContent?.focus || {}); });
+  bridge.ontoolresult = (result) => run(async () => { if (await preserveEdits()) return boot(result.structuredContent?.focus || {}); });
   bridge.ontoolinput = () => {};
-  run(async () => { await bridge.connect(); });
+  bridge.onhostcontextchanged = () => applyHostContext(bridge.getHostContext());
+  run(async () => { await bridge.connect(); applyHostContext(bridge.getHostContext()); });
 }

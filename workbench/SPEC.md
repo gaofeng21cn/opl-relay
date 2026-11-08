@@ -24,7 +24,7 @@ the source reference. New reply text is edited separately from the approved
 signature and immutable quoted history. The editor preserves plain-text line
 breaks; incoming HTML is sanitized with DOMPurify in a sandboxed document.
 
-The neutral white interface uses a compact top chrome, a left workbench
+The interface uses a compact top chrome, a left workbench
 navigation, a card-based message list and a dedicated reading surface. Wide
 screens keep source and reply side by side; intermediate screens switch between
 them; narrow host panels use horizontal navigation and one content pane.
@@ -33,9 +33,25 @@ state and pinned save actions remain visible, with distinct keyboard focus and
 readable body, heading and metadata sizes. Layout follows viewport width; it
 does not shrink typography to keep every column on screen.
 
+The shared interaction model is defined by the Framework's
+[MCP Apps specification](https://github.com/gaofeng21cn/one-person-lab/blob/main/docs/mcp-apps/SPEC.md).
+Relay retains its dedicated mail editor while using the official MCP Apps SDK
+for host theme, style variables, viewport constraints and display mode. Browser
+mode follows the system theme. Embedded mode uses compact chrome and responsive
+panes, without maintaining a second host or credentials store. Host context
+changes preserve the current message, draft and unsaved input.
+
+Loading, failures and owner results use one visible operation status. Local edit
+save, mailbox draft save and delivery remain distinct outcomes. A failure keeps
+the user's input; an uncertain publication or send is read back through Relay
+before another attempt. Selected mail and saved draft identity/revision update
+model context without sending a message or starting an Agent task. Context
+notification failure does not invalidate a completed mail operation.
+
 Local editing records use the existing drafts ledger and optimistic revision
 checks. Browser memory holds unsaved input; changing selection warns before
-discarding it. Attachments are private Profile files identified by bytes and
+discarding it through an in-view dialog that also works in opaque MCP sandboxes.
+Attachments are private Profile files identified by bytes and
 hash. Saving to the mailbox creates a stable server draft request. Existing
 server drafts are reviewable; their immutable content is never overwritten.
 To change published content, start a new reply from its exact source.

@@ -33,9 +33,10 @@ test('opaque App sandboxes initialize without browser session storage', async ()
   let reads = 0;
   const surface = {};
   const context = {
-    App: class { async connect() { connected = true; } }, DOMPurify: {},
-    document: { getElementById: () => ({}), querySelectorAll: () => [] },
-    window: { self: surface, top: {}, addEventListener() {} },
+    App: class { async connect() { connected = true; } getHostContext() { return {}; } }, DOMPurify: {},
+    applyDocumentTheme() {}, applyHostStyleVariables() {},
+    document: { documentElement: { dataset: {}, style: {} }, getElementById: () => ({ setAttribute() {} }), querySelectorAll: () => [] },
+    window: { self: surface, top: {}, addEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }) },
     location: { search: '', hash: '' }, URLSearchParams,
   };
   Object.defineProperty(context, 'sessionStorage', { get() { reads++; throw new Error('Opaque sandbox has no sessionStorage'); } });

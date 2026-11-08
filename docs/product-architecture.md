@@ -103,3 +103,12 @@ presentation that Studio renders as an explicit link. Supporting MCP App hosts
 embed the same built UI; official DSH's configuration-only bundle connects the
 same installed Relay server and uses its browser handoff. Installation and UI
 rendering are host responsibilities; mail state and execution remain in Relay.
+
+The dedicated workbench follows the shared Mini App interaction model while
+keeping mail composition and review specialized. It consumes host theme and
+viewport context, reports loading and owner results consistently, and updates
+model context with exact message or draft references. Browser fallback uses the
+same UI and business actions. Connection authorization and credential lifecycle
+remain with Connect/provider owners; the workbench only uses the existing
+authenticated Relay transport. Interaction details belong to the
+[workbench specification](../workbench/SPEC.md).
