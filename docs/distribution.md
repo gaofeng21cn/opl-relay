@@ -67,6 +67,12 @@ Hosts pass their selected `OPL_PROFILE_WORKSPACE` to the process.
 Developers run `npm ci`, `npm run build` and `npm test` from `workbench/`.
 The build refreshes the Package's existing content lock after writing the final
 bundled bytes; CI checks both the build output and that manifest for drift.
+Content-lock encoding uses the Framework-generated Python helper in
+`workbench/_opl_package_content_lock.py`, through Relay's existing Python
+prerequisite (`PYTHON` selects the executable). Refresh it with Framework's
+`scripts/materialize-python-support.mjs --module package_content_lock
+--target workbench/_opl_package_content_lock.py`; `make check-framework-support`
+checks both generated helpers when `OPL_FRAMEWORK_ROOT` selects the source.
 The build bundles the official MCP SDK, official MCP App bridge and DOMPurify;
 `package-lock.json` pins dependencies and the packaged notices carry their
 licenses. No MiniMax plugin implementation or artwork is redistributed.
