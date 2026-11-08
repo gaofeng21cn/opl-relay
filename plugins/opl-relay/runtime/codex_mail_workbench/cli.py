@@ -136,6 +136,13 @@ APP_CONTRIBUTION_DATA_CONTRACTS = {
 }
 
 APP_CONTRIBUTION_ACTION_CONTRACTS = {
+    "communications.mail.v1#workbench.open": {
+        "operation": "execute",
+        "confirmation_required": False,
+        "input": {name: {"type": "string", "required": False}
+                  for name in ("account", "storage_ref", "draft_id", "request_id")},
+        "result": "communications.mail.v1#workbench.open.result",
+    },
     "communications.mail.v1#sync.incremental": {
         "operation": "execute",
         "confirmation_required": False,
@@ -236,8 +243,9 @@ APP_CONTRIBUTION_ACTION_CONTRACTS = {
 
 
 APP_CONTRIBUTION_DATA_ACTIONS = {
-    "communications.mail.v1#recent": ["communications.mail.v1#sync.incremental"],
+    "communications.mail.v1#recent": ["communications.mail.v1#sync.incremental", "communications.mail.v1#workbench.open"],
     "communications.mail.v1#draft.inspect": [
+        "communications.mail.v1#workbench.open",
         "communications.mail.v1#draft.create",
         "communications.mail.v1#draft.reply_all",
         "communications.mail.v1#draft.create_from_persona",
@@ -253,9 +261,11 @@ APP_CONTRIBUTION_DATA_ACTIONS = {
 
 APP_CONTRIBUTION_COLLECTION_ACTIONS = {
     "communications.mail.v1#recent": [
+        ("communications.mail.v1#workbench.open", {"en-US": "Open mail workbench", "zh-CN": "打开邮件工作台"}),
         ("communications.mail.v1#sync.incremental", {"en-US": "Sync mail", "zh-CN": "同步邮件"}),
     ],
     "communications.mail.v1#draft.inspect": [
+        ("communications.mail.v1#workbench.open", {"en-US": "Open mail workbench", "zh-CN": "打开邮件工作台"}),
         ("communications.mail.v1#draft.create", {"en-US": "New draft", "zh-CN": "新建草稿"}),
         ("communications.mail.v1#draft.reply_all", {"en-US": "Reply all draft", "zh-CN": "回复全部草稿"}),
         ("communications.mail.v1#draft.create_from_persona", {"en-US": "Draft from proposal", "zh-CN": "从提案创建草稿"}),
@@ -699,6 +709,13 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
 
 
 def _app_contribution_action(args: argparse.Namespace, ref: str, payload: dict[str, object]) -> object:
+    if ref == "communications.mail.v1#workbench.open":
+        from .workbench import open_workbench
+
+        focus = {("account_id" if name == "account" else name): value for name in
+                 ("account", "storage_ref", "draft_id", "request_id")
+                 if (value := _app_contribution_string(payload.get(name), name))}
+        return {"ok": True, "presentation": {"mode": "browser", **open_workbench(focus=focus)}}
     if ref == "communications.mail.v1#sync.incremental":
         return sync_account(
             config_path=Path(args.config).expanduser(),
@@ -1813,6 +1830,29 @@ def cmd_draft_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_workbench(args: argparse.Namespace) -> int:
+    from .workbench import Workbench, bundle_root, connection_config, open_workbench
+    if args.workbench_action == "connection":
+        emit(connection_config(host=args.host, output=args.output), as_json=True)
+        return 0
+    if args.workbench_action == "open":
+        focus = {key: value for key, value in {
+            "account_id": args.account, "storage_ref": args.storage_ref,
+            "draft_id": args.draft_id, "request_id": args.request_id,
+        }.items() if value}
+        emit(open_workbench(focus=focus), as_json=True)
+        return 0
+    if args.workbench_action == "mcp":
+        import os
+        os.execvp("node", ["node", str(bundle_root() / "server.mjs"), "--python", sys.executable])
+    request = json.load(sys.stdin)
+    if not isinstance(request, dict) or set(request) != {"action", "input"}:
+        raise ValueError("workbench action expects action and input")
+    workbench = Workbench(config_path=args.config, db_path=args.db, ledger_path=args.draft_db)
+    emit(workbench.dispatch(request["action"], request["input"]), as_json=True)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="opl-relay")
     parser.add_argument("--json", action="store_true", help="输出稳定 JSON")
@@ -1834,6 +1874,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="外部知识源 sources.toml 路径",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    workbench = sub.add_parser("workbench", help="打开共享邮件工作台或启动 MCP App")
+    workbench_actions = workbench.add_subparsers(dest="workbench_action", required=True)
+    workbench_open = workbench_actions.add_parser("open")
+    for argument in ("account", "storage-ref", "draft-id", "request-id"):
+        workbench_open.add_argument("--" + argument, default="")
+    workbench_open.set_defaults(func=cmd_workbench)
+    workbench_connection = workbench_actions.add_parser("connection", help="生成当前宿主的连接配置或 DSH 原生配置包")
+    workbench_connection.add_argument("--host", choices=("generic", "codex", "dsh", "opl"), default="generic")
+    workbench_connection.add_argument("--output", default="")
+    workbench_connection.set_defaults(func=cmd_workbench)
+    for action in ("mcp", "action"):
+        workbench_actions.add_parser(action).set_defaults(func=cmd_workbench)
 
     doctor = sub.add_parser("doctor", help="检查配置、数据库和安装状态")
     doctor.set_defaults(func=cmd_doctor)

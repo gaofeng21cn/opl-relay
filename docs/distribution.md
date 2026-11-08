@@ -56,6 +56,92 @@ codex plugin add opl-relay@opl-relay --json
 snapshot. Reinstalling the Plugin selects the embedded engine and Skill bytes
 from that refreshed snapshot. Neither operation touches the Profile Workspace.
 
+## Shared Workbench And MCP App
+
+The Codex manifest references `mcp.json`, whose portable stdio declaration uses
+`${PLUGIN_ROOT}` to run the bundled Node server. Python 3.11+ runs Relay and
+Node.js 20+ runs this optional UI adapter. The Plugin contains the built HTML,
+server and third-party notices; end users do not need npm or a source checkout.
+Hosts pass their selected `OPL_PROFILE_WORKSPACE` to the process.
+
+Developers run `npm ci`, `npm run build` and `npm test` from `workbench/`.
+The build refreshes the Package's existing content lock after writing the final
+bundled bytes; CI checks both the build output and that manifest for drift.
+The build bundles the official MCP SDK, official MCP App bridge and DOMPurify;
+`package-lock.json` pins dependencies and the packaged notices carry their
+licenses. No MiniMax plugin implementation or artwork is redistributed.
+
+`open_workbench` negotiates the `io.modelcontextprotocol/ui` capability and the
+`text/html;profile=mcp-app` MIME type. A supporting host receives the standard
+App resource; a plain MCP client receives a browser resource link and the
+focused loopback URL in `structuredContent.presentation`. Both paths use the
+same built page, exact-source draft records and backend. App-only attachment
+and send tools are withdrawn from clients without the UI capability, including
+DSH's ordinary MCP client. Their users review and confirm those actions in the
+browser workbench. Capability advertisement is not send approval.
+
+The equivalent CLI entry `opl-relay --json workbench open` starts or reuses the
+Profile's authenticated loopback page. These URLs work on the machine running
+Relay; they are not remote MCP HTTP endpoints. No public listener or remote
+authentication service is implied. Actual host rendering is qualified
+separately from protocol checks. A fresh host session may be required after
+installing an MCP server.
+
+### Host Installation Adapters
+
+The native carrier continues to own the Relay payload and its updates. Export
+the current engine location, Python interpreter and selected Profile without
+reading mailbox credentials or creating a Profile:
+
+```bash
+opl-relay --json workbench connection --host generic
+opl-relay --json workbench connection --host codex
+opl-relay --json workbench connection --host opl
+```
+
+`generic` and `opl` return an `mcpServers` configuration; `codex` returns the
+corresponding `mcp_servers` table data. These are connection descriptions for
+the host's own configuration interface, not another installer or registry.
+The Codex Plugin already registers the server through its bundled `mcp.json`;
+do not add a duplicate manual registration when using that Plugin.
+
+Official DSH accepts a configuration-only native bundle:
+
+```bash
+opl-relay --json workbench connection --host dsh --output /private/path/relay-dsh
+```
+
+Install that directory through DSH's `plugin_manager` local-bundle interface.
+The generated `package.json` and `cordis.patch.yml` configure the official
+`@deepseek-ai/dsh-mcp-client` over stdio. DSH owns loading, disabling and
+uninstalling this configuration; it does not own a second Relay engine or
+mail store. The directory must be empty and stays outside Git because it binds
+local paths. Regenerate the bundle after a carrier update that relocates Relay
+or after changing the selected Profile. Do not modify signed DSH resources.
+DSH currently uses the browser handoff, not inline standard App rendering.
+
+OPL App's declared Inbox and Drafts commands expose the same workbench through
+`communications.mail.v1#workbench.open`. The App action bridge validates the
+owner result, then Studio displays an explicit open link using the generic
+browser-presentation contract. This fallback does not claim native MCP App
+rendering in Studio. Supported MCP App hosts continue to consume the standard
+resource directly; all modes retain the same mail and approval authority.
+
+Developers can qualify the generated DSH connection with the official plugins
+installed in an isolated Node runtime meeting DSH's own Node.js 24.9+
+requirement (the standalone Relay UI still supports Node.js 20+):
+
+```bash
+cd workbench
+npm run qualify:dsh -- /path/to/official-dsh-runtime
+```
+
+The qualification loads the generated configuration into official Cordis and
+MCP plugins, reads a synthetic mailbox, prepares Reply All, checks the browser
+handoff and unloads the tools. It neither sends mail nor proves Desktop plugin
+manager UI installation. The send adapter still requires macOS Apple Mail;
+portable installation and rendering do not remove that current dependency.
+
 ## Package Installation Is Separate
 
 The file `plugins/opl-relay/opl-package.json` is a Package owner descriptor. It

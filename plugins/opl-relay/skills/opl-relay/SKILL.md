@@ -5,8 +5,8 @@ description: Use OPL Relay to inspect configured mailboxes, retrieve approved pr
 
 # OPL Relay
 
-Use the installed Relay CLI as the authority. The plugin contains capability
-instructions only; it never treats the plugin directory as user storage.
+Use the installed Relay CLI as the authority. The plugin carries the runtime
+and shared review UI; it never treats its directory as user storage.
 
 ## Resolve Runtime
 
@@ -89,6 +89,46 @@ These identifiers describe available contracts. They do not move private data
 into the plugin or authorize a mailbox write by themselves.
 
 ## Mail And Context
+
+### Shared review workbench
+
+When the user wants visual mail review or an editable draft, use the bundled
+`open_workbench` MCP tool. It can focus `account_id`, `storage_ref`, `draft_id`
+or `request_id`. It negotiates the host's App support: `presentation.mode` is
+`mcp-app` for inline rendering or `browser` with the same workbench's local URL.
+Open a returned browser URL in the host's browser panel or on the same machine;
+do not repeatedly try an unavailable renderer. If the tool is absent, run
+`opl-relay --json workbench open` with the same focus flags. Python 3.11+ and
+Node.js 20+ are required. Keep the URL's capability private.
+
+For a host connection, use `workbench connection --host generic|codex|opl` and
+the host's native MCP configuration. The Codex Plugin already registers that
+server; avoid duplicate manual entries. For official DSH, generate a native
+configuration-only bundle with `workbench connection --host dsh --output
+<empty-private-directory>` and install it through DSH's `plugin_manager`.
+Never copy the engine, mail data or credentials into a second host-owned store.
+App-only send and attachment tools are unavailable to ordinary MCP clients;
+use the returned browser workbench for human review and confirmation.
+
+Prepare an exact-source local reply using `relay_reply`, or pass the same fixed
+action as JSON on stdin to `opl-relay --json workbench action`:
+
+```json
+{"action":"reply","input":{"account_id":"work","storage_ref":"email-store://...","request_id":"stable-reply-id","body":"Approved reply text"}}
+```
+
+Then open with `--account work --draft-id stable-reply-id`. Reply All derives
+To/Cc and quoted history from the exact source; preserve the approved signature
+from `templates/mail-signature.txt`. The workbench lets the user edit only the
+new reply text and add attachments. Local save does not create a server draft;
+publishing does, and sending needs a separate explicit confirmation. Preserve
+concurrent edits using the returned revision; never replace input after a
+conflict. Published drafts are inspected, not overwritten. An unknown save or
+send is reconciled by its original request, never recreated or resent. Continue
+to use context and approved memory before drafting; the UI does not replace
+that reasoning or authorize mailbox changes.
+
+### Evidence and context
 
 For a read-only People or memory-evidence view, use the Package's
 `app-contribution` ABI with operation `read` and ref

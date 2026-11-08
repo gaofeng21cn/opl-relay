@@ -1,6 +1,6 @@
 {
   "name": "opl-relay",
-  "version": "0.5.8",
+  "version": "0.6.0",
   "description": "Local-first mail evidence, relationship context, and review-gated drafting for Codex.",
   "author": {
     "name": "OPL"
@@ -9,10 +9,11 @@
   "license": "Apache-2.0",
   "keywords": ["mail", "memory", "obsidian", "apple-mail", "local-first"],
   "skills": "./skills/",
+  "mcpServers": "./mcp.json",
   "interface": {
     "displayName": "OPL Relay",
-    "shortDescription": "Evidence-first mail and Apple Mail review for Codex.",
-    "longDescription": "Manage local mail evidence, approved relationship memory, Obsidian context, and Apple Mail drafts without storing user data in the plugin.",
+    "shortDescription": "Mail evidence and a shared review workbench for Codex.",
+    "longDescription": "Read mail, edit threaded replies, review attachments and explicitly send verified drafts in a shared workbench. Private data stays in your Profile.",
     "developerName": "OPL",
     "category": "Productivity",
     "capabilities": [
@@ -27,7 +28,7 @@
     "logo": "./assets/icon.png",
     "defaultPrompt": [
       "检查最近三天的邮件并告诉我需要决定什么。",
-      "结合往来邮件和记忆，在 Apple Mail 为这个联系人起草回复，等我审核后再发送。",
+      "打开邮件工作台，结合往来和记忆起草回复所有人，等我审核。",
       "初始化 Profile Workspace 并配置一个 IMAP 邮箱。"
     ],
     "brandColor": "#1260E8"

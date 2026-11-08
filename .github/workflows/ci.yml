@@ -33,8 +33,40 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: workbench/package-lock.json
+
+      - name: Build and qualify shared workbench
+        working-directory: workbench
+        run: |
+          npm ci
+          npm run build
+          npm test
+          git diff --exit-code -- ../plugins/opl-relay/workbench/ ../plugins/opl-relay/opl-package.json
+
       - name: Run test suite
         run: python -m pytest -q
+
+      - name: Set up official DSH runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Qualify official DSH MCP connection
+        working-directory: workbench
+        run: |
+          npm install --prefix "$RUNNER_TEMP/relay-dsh-runtime" --no-package-lock --ignore-scripts --no-audit --no-fund \
+            @deepseek-ai/cordis@4.1.0 \
+            @deepseek-ai/dsh-mcp-client@0.2.2-rc.1 \
+            @deepseek-ai/dsh-mcp-resources@0.2.2-rc.1 \
+            @deepseek-ai/dsh-tools@0.2.2-rc.1 \
+            @deepseek-ai/dsh-system-prompt@0.2.2-rc.1 \
+            @deepseek-ai/dsh-tool-executor-native@0.2.2-rc.1
+          npm run qualify:dsh -- "$RUNNER_TEMP/relay-dsh-runtime"
 
       - name: Validate Plugin structure
         run: |

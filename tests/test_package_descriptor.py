@@ -26,6 +26,7 @@ CAPABILITY_IDS = {
 }
 VIEW_TYPES = {"list_detail", "timeline", "approval_diff"}
 ACTION_REFS = {
+    "communications.mail.v1#workbench.open",
     "communications.mail.v1#sync.incremental",
     "communications.mail.v1#draft.create",
     "communications.mail.v1#draft.reply_all",
@@ -102,6 +103,8 @@ def test_package_content_lock_matches_plugin_bytes() -> None:
     assert content_lock["canonicalization"] == "ordered_path_length_file_length_bytes"
     assert "opl-package.json" not in content_lock["paths"]
     assert "runtime/codex_mail_workbench/people.py" in content_lock["paths"]
+    assert {"mcp.json", "runtime/codex_mail_workbench/workbench.py", "workbench/server.mjs",
+            "workbench/index.html", "workbench/THIRD_PARTY_NOTICES.txt"} <= set(content_lock["paths"])
     for relative_path in content_lock["paths"]:
         path_bytes = relative_path.encode("utf-8")
         file_bytes = (PLUGIN_ROOT / relative_path).read_bytes()

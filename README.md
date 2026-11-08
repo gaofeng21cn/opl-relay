@@ -9,7 +9,7 @@
 <h1 align="center">OPL Relay</h1>
 
 <p align="center"><strong>A private, evidence-backed communication layer for Codex and One Person Lab</strong></p>
-<p align="center">Mail evidence · Relationship context · Approved memory · Obsidian context · Apple Mail review</p>
+<p align="center">Mail evidence · Relationship context · Approved memory · Shared mail workbench</p>
 
 OPL Relay is a shared mail-management layer for OpenClaw, Codex and OPL:
 continuous review, correspondence follow-up and verified operations. Mature
@@ -19,7 +19,8 @@ evidence, approval and work-record boundaries.
 OPL Relay helps Codex work with your academic and professional email without
 turning a source checkout or plugin cache into a personal-data folder. It keeps
 the original messages as evidence, builds reusable relationship context, and
-routes drafts through Apple Mail for human review before any send.
+provides a shared workbench for draft review, alongside synchronized mailbox
+drafts and Apple Mail. Every send requires separate approval.
 
 OPL Relay is a standalone communication product. It can be installed and used
 on its own, and it collaborates with OPL Persona through explicit, reviewed
@@ -39,6 +40,29 @@ entry point.
 - "Use the approved Persona proposal to create a mail draft, without sending."
 
 ## Core Capabilities
+
+**Shared mail workbench**
+
+Read mail, prepare Reply All with its original recipients and quoted context,
+edit the reply, add and preview attachments, and review the complete message in
+one view. Supporting hosts render the bundled standard MCP App; ordinary MCP
+clients receive a link to the same browser workbench. Local edits stay private in the
+Profile until you explicitly save to the mailbox. Sending requires a separate
+confirmation against the current verified draft.
+
+With Python 3.11+ and Node.js 20+ available:
+
+```bash
+OPL_PROFILE_WORKSPACE=/path/to/profile opl-relay --json workbench open
+```
+
+Open the returned capability URL locally. In Codex, ask “Open the Relay mail
+workbench” to use its App tool or built-in browser. `--account`, `--storage-ref`,
+`--draft-id` and `--request-id` focus an account, source, local edit or server
+draft. A bundled MCP App declaration does not imply that every host can render
+it. OPL App exposes the same workbench from Inbox and Drafts. Generic MCP,
+Codex and native DSH connection adapters share the installed engine; see
+[host installation](docs/distribution.md#host-installation-adapters).
 
 **Evidence-first mail**
 
@@ -372,9 +396,14 @@ boundaries.
 python3 -m pip install -e . pytest
 make test
 make validate-package
+cd workbench
+npm ci
+npm run build
+npm test
 ```
 
-The repository CI validates source tests and Plugin structure. The manual CI
+The repository CI validates source tests, reproducible UI bundles, MCP/HTTP
+contracts and Plugin structure. The manual CI
 qualification exercises discovery and installation through an isolated local
 Codex Marketplace.
 

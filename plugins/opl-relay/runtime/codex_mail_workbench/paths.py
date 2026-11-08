@@ -4,15 +4,7 @@ import os
 from pathlib import Path
 
 
-PROFILE_WORKSPACE_ENV = "OPL_PROFILE_WORKSPACE"
-
-
-def default_profile_workspace() -> Path:
-    configured = os.environ.get(PROFILE_WORKSPACE_ENV)
-    if configured:
-        return Path(configured).expanduser()
-    profile_name = Path.home().name or "default"
-    return Path.home() / "OPL" / "profiles" / profile_name
+from ._opl_profile_workspace import PROFILE_WORKSPACE_ENV, default_profile_workspace
 
 
 def profile_workspace_source() -> str:

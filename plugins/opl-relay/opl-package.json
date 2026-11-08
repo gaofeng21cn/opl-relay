@@ -3,7 +3,7 @@
   "package_id": "opl-relay",
   "display_name": "OPL Relay",
   "publisher": "one-person-lab",
-  "version": "0.5.8",
+  "version": "0.6.0",
   "source": "first_party",
   "package_role": "capability_package",
   "source_repo": "https://github.com/gaofeng21cn/opl-relay",
@@ -15,7 +15,9 @@
   },
   "connect_skill_sync_policy": {
     "default_scope": "codex",
-    "allowed_scopes": ["codex"],
+    "allowed_scopes": [
+      "codex"
+    ],
     "implicit_without_target": "require_target"
   },
   "exports": {
@@ -39,6 +41,7 @@
       ".codex-plugin/plugin.json",
       "assets/icon.png",
       "bin/opl-relay",
+      "mcp.json",
       "openclaw/SKILL.md",
       "plugin.json",
       "runtime/codex_mail_workbench/__init__.py",
@@ -67,11 +70,16 @@
       "runtime/codex_mail_workbench/sync.py",
       "runtime/codex_mail_workbench/triage.py",
       "runtime/codex_mail_workbench/workspace.py",
+      "runtime/codex_mail_workbench/workbench.py",
+      "workbench/server.mjs",
+      "workbench/index.html",
+      "workbench/THIRD_PARTY_NOTICES.txt",
       "skills/opl-relay/SKILL.md",
       "skills/opl-relay/agents/openai.yaml",
-      "skills/opl-relay/references/apple-mail.md"
+      "skills/opl-relay/references/apple-mail.md",
+      "runtime/codex_mail_workbench/_opl_profile_workspace.py"
     ],
-    "digest": "sha256:aea7bf97d59127759b8f9176ee55c2d6aafdf98c7134938f4c59b27d99c976c2"
+    "digest": "sha256:fb35894626c7ccb32a3d4142e44ed1b801cd6fbbdb4b7e5170f0cb1fe21a0685"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
@@ -156,6 +164,7 @@
         },
         "data_ref": "communications.mail.v1#recent",
         "command_ids": [
+          "relay.workbench.open",
           "relay.mail.sync"
         ],
         "empty_state_i18n": {
@@ -186,6 +195,7 @@
         },
         "data_ref": "communications.mail.v1#draft.inspect",
         "command_ids": [
+          "relay.workbench.open",
           "relay.draft.create",
           "relay.draft.reply-all",
           "relay.draft.create-from-persona",
@@ -280,6 +290,14 @@
       }
     ],
     "commands": [
+      {
+        "command_id": "relay.workbench.open",
+        "label_i18n": {
+          "zh-CN": "打开邮件工作台",
+          "en-US": "Open mail workbench"
+        },
+        "action_ref": "communications.mail.v1#workbench.open"
+      },
       {
         "command_id": "relay.mail.sync",
         "label_i18n": {

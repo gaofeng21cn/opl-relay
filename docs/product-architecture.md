@@ -17,8 +17,9 @@ communication into continuous, verifiable work records across OpenClaw, Codex
 and OPL. It retains review progress, reasons, thread/task relationships and
 execution receipts. It is not intended to replace a general mail client.
 Persona combines cross-domain PI context and produces proposals; it does not own Relay's mail store.
-OPL App supplies the chat and visual product. There is no separate Relay UI
-repository or Persona desktop product.
+OPL App supplies the chat and visual product. Relay owns its shared mail-review
+view within this repository; Codex and other hosts render it through MCP Apps
+or a browser panel. There is no separate Relay UI repository or Persona desktop product.
 
 | Boundary | Owner |
 | --- | --- |
@@ -89,9 +90,16 @@ not prove App rendering, native-carrier installation, healthy accounts or a
 completed external write. A host can show unavailable contributions locally
 without blocking unrelated Packages.
 
-Apple Mail remains the review frontend for the implemented draft workflow.
-Server Drafts also allow review in any synchronized mail client, including a
-phone. The selected tool does not change approval or receipt ownership.
-Any future App review surface must preserve the same draft identity,
-fingerprint, explicit send gate and final receipt. Unified review must not
-merge Persona proposal approval with Relay sending authority.
+The shared workbench, Apple Mail and synchronized mail clients are review
+surfaces over Relay's existing draft contracts. Workbench edits stay local
+until explicitly published as server Drafts. The selected surface preserves
+the same exact source, draft identity, fingerprint, explicit send gate and final
+receipt. Unified review must not merge Persona proposal approval with Relay
+sending authority. See [implementation](architecture.md#shared-mail-workbench).
+
+Inbox and Drafts expose the same owner workbench through the declared
+`workbench.open` command. App's canonical action bridge returns a browser
+presentation that Studio renders as an explicit link. Supporting MCP App hosts
+embed the same built UI; official DSH's configuration-only bundle connects the
+same installed Relay server and uses its browser handoff. Installation and UI
+rendering are host responsibilities; mail state and execution remain in Relay.

@@ -9,15 +9,15 @@
 <h1 align="center">OPL Relay</h1>
 
 <p align="center"><strong>面向 Codex 和 One Person Lab 的私有通信层，以原始证据支撑每一次判断和起草</strong></p>
-<p align="center">邮件证据 · 往来上下文 · 审核后记忆 · Obsidian 上下文 · Apple Mail 审核</p>
+<p align="center">邮件证据 · 往来上下文 · 审核后记忆 · 共享邮件工作台</p>
 
 OPL Relay 是数字分身的共享邮件管理层：让 OpenClaw、Codex 和 OPL 接续同一份审阅
 进度、往来跟进和执行记录。成熟邮件工具承担支持的检索与具体操作，Relay 保留账号、
 证据、审核和工作记录的边界。
 
 OPL Relay 帮助 Codex 处理学术和工作邮件，同时把程序安装、插件缓存和个人数据严格
-分开。它以邮件原文作为证据，持续整理人与项目的往来上下文，并把草稿交给 Apple Mail
-供用户审核；没有单独、明确的发送批准，就不会发送邮件。
+分开。它以邮件原文作为证据，持续整理人与项目的往来上下文，提供共享邮件工作台、
+服务器草稿和 Apple Mail 审核入口；发送需要单独、明确的批准。
 
 OPL Relay 是可以独立安装、独立使用的通信产品。它与 OPL Persona 并列协作，双方只
 通过明确、经过审核的交接传递上下文。
@@ -34,6 +34,25 @@ Python 模块名不再作为第二个邮件入口。
 - “把 Persona 已批准的邮件提案交给 Relay 起草，但不要直接发送。”
 
 ## 核心能力
+
+**共享邮件工作台**
+
+在同一界面中阅读邮件、回复所有人、编辑正文、添加与预览附件，再审核完整邮件。
+回复保留原收件人、抄送、签名和引用上下文。支持标准 MCP App 的宿主内嵌工作台；
+普通 MCP 宿主获得同一界面的浏览器链接。本地编辑保存在私有 Profile，
+点击“保存到邮箱草稿箱”才创建服务器草稿；发送还需对当前核实的草稿单独确认。
+
+安装 Python 3.11+ 和 Node.js 20+ 后：
+
+```bash
+OPL_PROFILE_WORKSPACE=/path/to/profile opl-relay --json workbench open
+```
+
+在本机打开返回的网址；在 Codex 中直接说“打开 Relay 邮件工作台”，由 App 工具或
+内置浏览器展示。`--account`、`--storage-ref`、`--draft-id`、`--request-id` 分别定位
+邮箱、原信、本地编辑或服务器草稿。插件已声明 MCP App，不代表所有宿主都能渲染。
+OPL App 的收件箱和草稿页也提供同一工作台入口。通用 MCP、Codex 和 DSH 原生配置包
+都连接已安装的同一引擎，参见[安装适配](docs/distribution.md#host-installation-adapters)。
 
 **以邮件原文为证据**
 
@@ -316,9 +335,14 @@ Package publication 必须从公开不可变 GHCR digest 回读；installed/curr
 python3 -m pip install -e . pytest
 make test
 make validate-package
+cd workbench
+npm ci
+npm run build
+npm test
 ```
 
-GitHub CI 会校验源码测试和插件结构；手动 CI 资格验证会在隔离的 Codex 环境中验证插件发现和安装流程。
+GitHub CI 会校验源码测试、可复现的 UI 构建、MCP/HTTP 合同和插件结构；手动 CI
+资格验证会在隔离的 Codex 环境中验证插件发现和安装流程。
 
 ## 许可证
 

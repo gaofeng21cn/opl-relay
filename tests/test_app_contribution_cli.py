@@ -503,9 +503,9 @@ def test_triage_input_required_has_usable_read_form_and_only_existing_options(tm
 
 def test_collection_commands_are_explicit_even_without_rows(tmp_path: Path):
     expected = {
-        "communications.mail.v1#recent": {"communications.mail.v1#sync.incremental"},
+        "communications.mail.v1#recent": {"communications.mail.v1#sync.incremental", "communications.mail.v1#workbench.open"},
         "communications.mail.v1#draft.inspect": {"communications.mail.v1#draft.create", "communications.mail.v1#draft.reply_all",
-                                                "communications.mail.v1#draft.create_from_persona"},
+                                                "communications.mail.v1#draft.create_from_persona", "communications.mail.v1#workbench.open"},
         "communications.mail.v1#triage.evidence": set(),
         "personal.memory.v1#people": {"personal.context.v1#build"},
         "personal.memory.v1#search": set(),

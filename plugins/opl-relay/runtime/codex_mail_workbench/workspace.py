@@ -7,11 +7,15 @@ from pathlib import Path
 from typing import Any
 
 
-WORKSPACE_SCHEMA = "opl_profile_workspace.v1"
-MARKER_NAME = ".opl-profile-workspace.json"
+from ._opl_profile_workspace import (
+    MARKER_NAME,
+    PROFILE_WORKSPACE_DIRS,
+    WORKSPACE_SCHEMA,
+    initialize_profile_workspace,
+)
 ROOT_FILES = ("AGENTS.md", "profile.md")
 CONTENT_DIRS = ("profile", "policies", "context", "templates")
-MANAGED_DIRS = (*CONTENT_DIRS, "exports", "data/relay", "data/persona")
+MANAGED_DIRS = PROFILE_WORKSPACE_DIRS
 PRIVATE_STATE_NAMES = {
     "accounts.toml",
     "drafts.sqlite",
@@ -165,22 +169,7 @@ def setup_status(path: Path) -> dict[str, Any]:
 
 def initialize_workspace(path: Path) -> dict[str, Any]:
     root = _resolve(path)
-    root.mkdir(parents=True, exist_ok=True)
-    for name in MANAGED_DIRS:
-        (root / name).mkdir(parents=True, exist_ok=True)
-    marker = root / MARKER_NAME
-    expected = json.dumps({"schema": WORKSPACE_SCHEMA}, indent=2, sort_keys=True) + "\n"
-    if marker.exists() and marker.read_text(encoding="utf-8") != expected:
-        raise ValueError(f"workspace marker already exists with different content: {marker}")
-    marker.write_text(expected, encoding="utf-8")
-    created: list[str] = []
-    for relative, content in _TEMPLATES.items():
-        target = root / relative
-        if target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        created.append(relative)
+    created = initialize_profile_workspace(root, _TEMPLATES)
     return inspect_workspace(root) | {"created": created, "setup": setup_status(root)}
 
 

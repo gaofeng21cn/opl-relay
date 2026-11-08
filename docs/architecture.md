@@ -51,7 +51,7 @@ OPL Persona or OPL App.
 - Knowledge: read-only Obsidian indexing into a rebuildable local index.
 - Context: bounded packages combining approved memory, selected mail evidence,
   and relevant knowledge excerpts.
-- Drafts: Apple Mail as the editable review UI plus a local lifecycle ledger and
+- Drafts: the shared workbench, synchronized server drafts and Apple Mail, plus a local lifecycle ledger and
   exact approval fingerprint. An approved Persona `mail.draft_context`
   proposal may prepare this review draft, but it never authorizes sending.
 - Triage evidence: a facts-only v2 envelope exposes mail headers, recipient
@@ -81,6 +81,50 @@ state under that workspace when they act for the same user.
 See [Workspace Contract](workspace-contract.md) for the single-root rule and
 [Product Architecture](product-architecture.md) for the broader OPL
 integration.
+
+## Shared Mail Workbench
+
+`workbench/` owns the shared review UI and its Node adapter; the packaged
+`plugins/opl-relay/workbench/` contains a self-contained build. The official MCP
+SDK exposes a standard `ui://` App resource and bounded tools. The official
+`ext-apps` bridge connects UI events to those tools. The same UI runs from a
+loopback HTTP server for hosts without MCP App rendering. Both adapters call
+`opl-relay workbench action`; neither implements a mail transport.
+
+The Node server uses the official App registration helpers to preserve current
+and legacy resource metadata. Client UI capability and MIME negotiation selects
+an App resource or a focused browser handoff; ordinary MCP tools stay callable
+in either case. App-only tools are removed for non-UI clients, and their
+callbacks reject use without that capability. OPL App's `workbench.open`
+contribution returns the same browser presentation through its canonical action
+ABI. Host connection generation describes the existing installed engine and
+Profile; DSH receives a native configuration-only bundle. See
+[host installation](distribution.md#host-installation-adapters).
+
+`workbench.py` uses existing mailbox identities, Reply All derivation,
+`server_draft`, approval fingerprints and delivery receipts. Local reply edits
+and attachment metadata live in new tables within the existing `drafts.sqlite`.
+Revision checks preserve concurrent user edits. Imported attachment bytes live
+under `data/relay/workbench-attachments`, with size, path and hash checks. Reads
+do not create the draft ledger. Existing published drafts are inspected rather
+than overwritten; to change one, start a new reply from its exact source.
+
+Publishing claims one stable server request before the remote operation. A
+validation failure before a durable remote attempt can return to editing;
+unknown outcomes remain locked for inspection. Final review includes all
+recipients, complete body and attachment names/sizes. Only an explicit send
+confirmation supplies the current approval fingerprint to the existing send
+owner. UI visibility metadata is not authorization.
+
+The loopback adapter uses a per-process capability in the initial URL fragment,
+then session storage and authenticated requests. It checks Host, Origin, JSON
+schema and payload size, exposes only bundled resources and fixed actions, and
+keeps its state and log in the Profile. Reopening checks the running bundle and
+installed CLI path; a verified obsolete process is retired before replacement.
+Incoming HTML uses DOMPurify and a
+sandboxed iframe; remote resources are blocked. Images and PDFs use local blob
+previews. MCP protocol qualification, browser behavior and native host rendering
+are separate acceptance surfaces.
 
 ## Server Drafts For Mobile Review
 
