@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 const output = resolve('../plugins/opl-relay/workbench');
 await mkdir(output, { recursive: true });
@@ -28,14 +28,12 @@ await writeFile(resolve(output, 'THIRD_PARTY_NOTICES.txt'), notices);
 const manifestPath = resolve(output, '../opl-package.json');
 const manifestText = await readFile(manifestPath, 'utf8');
 const manifest = JSON.parse(manifestText);
-const digest = createHash('sha256');
-for (const path of manifest.content_lock.paths) {
-  const pathBytes = Buffer.from(path, 'utf8');
-  const fileBytes = await readFile(resolve(output, '..', path));
-  for (const content of [pathBytes, fileBytes]) {
-    const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(content.length));
-    digest.update(length); digest.update(content);
-  }
-}
-const locked = `sha256:${digest.digest('hex')}`;
+const locked = execFileSync(process.env.PYTHON || 'python3', ['-c', `
+import json, sys
+from pathlib import Path
+from _opl_package_content_lock import content_digest
+manifest_path = Path(sys.argv[1])
+paths = json.loads(manifest_path.read_text())["content_lock"]["paths"]
+print(content_digest(paths, lambda relative: (manifest_path.parent / relative).read_bytes()))
+`, manifestPath], { encoding: 'utf8' }).trim();
 await writeFile(manifestPath, manifestText.replace(`"digest": "${manifest.content_lock.digest}"`, `"digest": "${locked}"`));
