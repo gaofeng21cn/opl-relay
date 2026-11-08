@@ -8,6 +8,24 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { runInNewContext } from 'node:vm';
+import { actions } from '../../plugins/opl-relay/workbench/server.mjs';
+
+test('save rejects oversized attachment arrays before collecting item errors', () => {
+  const valid = actions.save.schema.safeParse({
+    account_id: 'demo', draft_id: 'draft', revision: 1, body: '',
+    attachment_ids: Array.from({ length: 10 }, (_, index) => `attachment-${index}`),
+  });
+  assert.equal(valid.success, true);
+
+  const oversized = actions.save.schema.safeParse({
+    account_id: 'demo', draft_id: 'draft', revision: 1, body: '',
+    attachment_ids: Array(20000).fill(0),
+  });
+  assert.equal(oversized.success, false);
+  assert.deepEqual(oversized.error.issues.map(({ code, path }) => ({ code, path })), [
+    { code: 'too_big', path: ['attachment_ids'] },
+  ]);
+});
 
 test('opaque App sandboxes initialize without browser session storage', async () => {
   const source = (await readFile('app.js', 'utf8')).replace(/^import .*;\n/gm, '');
