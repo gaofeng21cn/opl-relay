@@ -28,7 +28,7 @@ or a browser panel. There is no separate Relay UI repository or Persona desktop 
 | Stable mail identities, raw evidence, relationship memory, draft fingerprints and send receipts | Relay |
 | Reasoning, drafting and user interaction | OpenClaw, Codex or OPL using the same Profile and Relay records |
 | Cross-domain context, private policy interpretation, provenance and proposals | Persona |
-| User knowledge and personal profile values | User-selected Obsidian vault |
+| User knowledge and personal profile values | User-selected Obsidian vault or ordinary Markdown directory |
 | Public content, approved local website changes and publication | `gflab_web` |
 | Runtime, Package discovery, carrier delegation and App projection | Framework |
 | App product contracts and acceptance | `one-person-lab-app` |
@@ -65,6 +65,14 @@ opl-relay --json triage evidence 'email-store://...' --policy-ref 'policy://...'
 ```
 
 Persona owns interpretation, policy-content digests and Inbox staging.
+For relationship memory, Persona consumes Relay's fresh public
+`personal.memory.v1#people` and `personal.memory.v1#search` reads. Relay checks
+source currentness before returning approved summaries; the consumer does not
+read Relay's SQLite files or promote an old result to a personal fact store.
+User knowledge remains at its selected source, with no required parallel body
+library in Relay. See the
+[currentness boundary](architecture.md#knowledge-and-memory-currentness).
+
 Relay validates a separately approved Persona `mail.draft_context` proposal
 before creating an Apple Mail review draft. Persona approval never authorizes
 a send. Relay still owns the account and recipient route, draft identity,

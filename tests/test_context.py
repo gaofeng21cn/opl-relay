@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from codex_mail_workbench.context import ContextBuilder
@@ -8,6 +9,10 @@ from codex_mail_workbench.store import connect_email_store, upsert_email_message
 
 def test_context_builds_bounded_evidence_package(tmp_path: Path) -> None:
     mail_db = tmp_path / "mail.sqlite"
+    raw = (b"Subject: Example Consortium annual meeting\r\n"
+           b"From: Professor Example <person@example.test>\r\n"
+           b"To: work@example.test\r\n\r\n"
+           b"The annual meeting will take place in November.")
     conn = connect_email_store(mail_db)
     try:
         storage_ref = upsert_email_message(
@@ -22,13 +27,8 @@ def test_context_builds_bounded_evidence_package(tmp_path: Path) -> None:
             sender="Professor Example <person@example.test>",
             recipient="work@example.test",
             date_iso="2026-07-20T09:00:00+08:00",
-            raw_sha256="c" * 64,
-            raw_eml=(
-                b"Subject: Example Consortium annual meeting\r\n"
-                b"From: Professor Example <person@example.test>\r\n"
-                b"To: work@example.test\r\n\r\n"
-                b"The annual meeting will take place in November."
-            ),
+            raw_sha256=hashlib.sha256(raw).hexdigest(),
+            raw_eml=raw,
             attachments=[],
             ingest_ts="2026-07-20T09:01:00+08:00",
         )
@@ -50,6 +50,7 @@ def test_context_builds_bounded_evidence_package(tmp_path: Path) -> None:
             {
                 "source_ref": storage_ref,
                 "source_kind": "email",
+                "source_sha256": hashlib.sha256(raw).hexdigest(),
             }
         ],
     )

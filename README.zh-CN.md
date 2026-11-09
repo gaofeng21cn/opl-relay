@@ -70,11 +70,11 @@ Hotmail/Outlook.com 通过 OAuth 接入，令牌保存在钥匙串并自动续�
 
 **经审核的关系记忆**
 
-长期记忆必须同时提供来源证据，并经过用户明确批准，才能进入后续起草上下文。
+长期记忆提供来源证据，经用户明确批准后，在证据和有效期仍满足要求时进入后续起草上下文。
 
-**只读使用 Obsidian**
+**只读使用个人知识**
 
-可以把指定的 Markdown 路径建立为只读索引。Relay 不会反向修改 Obsidian 仓库。
+可以为已有 Obsidian 资料库或普通 Markdown 目录的指定路径建立只读索引，正文继续在原处维护。Relay 在使用前核对当前来源范围和版本；过期或失效的记忆保留供复核，不进入当前上下文。配置见[个人知识来源](docs/local-profile.md#obsidian-and-markdown-sources)。
 
 **在 Apple Mail 中完成审核**
 
