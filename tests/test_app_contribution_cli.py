@@ -45,7 +45,7 @@ def seed(profile: Path):
     for content in ("APPROVED FACT", "CANDIDATE FACT"):
         memories.append(store.propose_memory(
             entity_ref=entity["entity_ref"], category="fact", content=content,
-            sources=[{"source_ref": "email-store://work/INBOX/1/abcdef", "source_kind": "email",
+            sources=[{"source_ref": "user://statement/colleague", "source_kind": "user",
                       "excerpt": "SOURCE EXCERPT"}],
         ))
     store.approve(memories[0]["memory_ref"])

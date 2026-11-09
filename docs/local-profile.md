@@ -194,17 +194,42 @@ SQLite databases, `sources.toml`, and sync state. It refuses conflicting target
 bytes and verifies every copied file after writing. It does not delete the
 source; source cleanup remains an explicit, separately verified operation.
 
-## Obsidian
+## Obsidian And Markdown Sources
 
-Configure Obsidian roots in the data root's `sources.toml`. The provider is
-read-only and writes only a rebuildable derived index into `memory.sqlite`.
-Use narrow include paths:
+Configure user-owned source roots in the data root's `sources.toml`. Use
+`type = "obsidian"` for an existing vault or `type = "markdown"` for an ordinary
+directory. Both are read-only sources; the editable originals stay in that
+directory. Relay writes a rebuildable discovery index into `memory.sqlite`.
+Select narrow include paths rather than copying a second knowledge library into
+the Profile:
+
+```toml
+[[sources]]
+source_id = "research-notes"
+type = "markdown"
+path = "/path/to/notes"
+enabled = true
+include = ["research/**/*.md"]
+exclude = ["research/private/**"]
+```
 
 ```bash
 opl-relay --json sources list
 opl-relay --json sources index
 opl-relay --json sources search "<person or project>"
 ```
+
+Search and context reads check the current source configuration and source
+version before returning an indexed excerpt. If a file changes, reindex it for
+discovery and review affected derived memories before using them again. Disabling
+a source or narrowing its paths takes effect on subsequent reads; old indexed
+content is not a fallback. Existing memory records remain inspectable for review.
+Use `opl-relay --json memory search --include-stale` for a management view with
+the source review status attached. Evidence or validity changes create a new
+candidate; approving it replaces the latest accepted version. Approval refuses
+a proposal whose accepted predecessor has changed in the meantime.
+The exact lifecycle is defined in
+[Knowledge And Memory Currentness](architecture.md#knowledge-and-memory-currentness).
 
 ## Publication Check
 

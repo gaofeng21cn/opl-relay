@@ -21,7 +21,7 @@ def propose(store: MemoryStore, entity_ref: str, content: str, *, sources=None, 
         entity_ref=entity_ref,
         category="fact",
         content=content,
-        sources=sources or [{"source_ref": "email-store://work/INBOX/1/abcdef", "source_kind": "email"}],
+        sources=sources or [{"source_ref": "user://statement/colleague", "source_kind": "user"}],
         **kwargs,
     )
 
@@ -43,7 +43,7 @@ def test_people_reuses_entity_identity_and_approved_evidence(tmp_path: Path):
     assert person["kind"] == "person"
     assert person["approved_memory_count"] == 1
     assert person["approved_memories"][0]["memory_ref"] == memory["memory_ref"]
-    assert person["source_refs"] == ["email-store://work/INBOX/1/abcdef"]
+    assert person["source_refs"] == ["user://statement/colleague"]
     assert "emails" not in person
     assert "person@example.test" not in json.dumps(result)
     assert result["source_policy"]["read_only"] is True
@@ -118,7 +118,7 @@ def test_people_and_evidence_bound_output_without_exporting_source_content(tmp_p
         kind="person", canonical_name="Colleague", aliases=[f"Alias {index}" for index in range(30)]
     )
     sources = [
-        {"source_ref": f"email-store://work/INBOX/{index}/abcdef", "source_kind": "email",
+        {"source_ref": f"user://statement/{index}", "source_kind": "user",
          "excerpt": "PRIVATE SOURCE EXCERPT", "source_sha256": "f" * 64}
         for index in range(12)
     ]

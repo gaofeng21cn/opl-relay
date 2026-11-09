@@ -83,12 +83,14 @@ Hotmail/Outlook.com uses OAuth with Keychain token renewal; see
 **Relationship context with approval**
 
 Long-lived memory is proposed with source evidence. It becomes active drafting
-context only after explicit approval.
+context after explicit approval while its evidence and validity remain current.
 
-**Read-only Obsidian context**
+**Read-only knowledge context**
 
-Selected Markdown paths can be indexed as a read-only source. Relay never
-writes back to the vault.
+Selected Obsidian or ordinary Markdown paths can be indexed as a read-only
+source, with the editable bodies maintained in place. Relay checks the current
+source scope and version before use. Stale memories remain available for review
+and are excluded from current context. See [knowledge source setup](docs/local-profile.md#obsidian-and-markdown-sources).
 
 **Apple Mail review**
 

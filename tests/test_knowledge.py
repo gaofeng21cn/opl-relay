@@ -33,17 +33,18 @@ exclude = [".obsidian/**", "**/.obsidian/**"]
     source = load_sources_config(config)["personal-vault"]
     index = KnowledgeIndex(tmp_path / "memory.sqlite")
     first = index.index_source(source)
-    results = index.search("Example Consortium")
+    sources = load_sources_config(config)
+    results = index.search("Example Consortium", sources=sources)
 
     assert first["scanned"] == 1
     assert results[0]["source_ref"] == "obsidian://personal-vault/People/example.md"
     assert results[0]["title"] == "Professor Example"
-    assert index.search("should not be indexed") == []
+    assert index.search("should not be indexed", sources=sources) == []
 
     note.unlink()
     second = index.index_source(source)
     assert second["deleted"] == 1
-    assert index.search("Example Consortium") == []
+    assert index.search("Example Consortium", sources=sources) == []
 
 
 def test_missing_sources_config_is_an_empty_optional_provider(tmp_path: Path) -> None:
@@ -76,6 +77,7 @@ include = ["*.md", "People/**/*.md"]
     result = index.index_source(source)
 
     assert result["scanned"] == 2
-    assert index.search("Root note")
-    assert index.search("Person note")
-    assert index.search("Archived note") == []
+    sources = load_sources_config(config)
+    assert index.search("Root note", sources=sources)
+    assert index.search("Person note", sources=sources)
+    assert index.search("Archived note", sources=sources) == []

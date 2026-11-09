@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 ENTITY_KINDS = {"person", "organization", "project"}
@@ -22,7 +22,7 @@ MEMORY_CATEGORIES = {
 }
 MEMORY_STATUSES = {"candidate", "approved", "rejected", "superseded", "forgotten"}
 SENSITIVITIES = {"private", "sensitive", "restricted"}
-SOURCE_KINDS = {"email", "user", "obsidian", "calendar", "contact", "model", "other"}
+SOURCE_KINDS = {"email", "user", "obsidian", "markdown", "calendar", "contact", "model", "other"}
 
 
 def utc_now() -> str:
@@ -444,47 +444,69 @@ class MemoryStore:
                 if str(old["entity_ref"]) != entity_ref:
                     raise ValueError("a memory can only supersede memory for the same entity")
 
-            fingerprint = _memory_fingerprint(entity_ref, category, content)
-            existing = conn.execute(
-                "SELECT memory_ref FROM memories WHERE fingerprint=?", (fingerprint,)
-            ).fetchone()
+            source_items = sorted(({
+                "source_ref": str(source["source_ref"]).strip(),
+                "source_kind": str(source["source_kind"]),
+                "excerpt": str(source.get("excerpt") or "").strip(),
+                "source_sha256": str(source.get("source_sha256") or "").strip(),
+            } for source in source_items), key=lambda source: source["source_ref"])
+            if len({source["source_ref"] for source in source_items}) != len(source_items):
+                raise ValueError("duplicate source_ref in evidence")
+            snapshot = {
+                "sources": source_items, "confidence": float(confidence),
+                "sensitivity": sensitivity, "occurred_at": occurred_at,
+                "valid_from": valid_from, "valid_until": valid_until,
+            }
+            logical_rows = conn.execute(
+                self._memory_select() + """
+                WHERE m.entity_ref=? AND m.category=? AND m.content=?
+                  AND m.status IN ('candidate', 'approved')
+                ORDER BY (m.status='approved') DESC, m.updated_at DESC, m.created_at DESC
+                """, (entity_ref, category, content),
+            ).fetchall()
+            predecessor = next((str(row["memory_ref"]) for row in logical_rows
+                                if row["status"] == "approved"), "")
+            for row in logical_rows:
+                old = self._memory_payload(conn, row)
+                if all(old[key] == value for key, value in snapshot.items()):
+                    if old["status"] == "approved" or old["supersedes_ref"] == (supersedes_ref or predecessor):
+                        return old
+            supersedes_ref = supersedes_ref or predecessor
+            revision = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+            logical_fingerprint = _memory_fingerprint(entity_ref, category, content)
+            fingerprint = hashlib.sha256(
+                (logical_fingerprint + "\0" + revision + "\0" + supersedes_ref).encode()
+            ).hexdigest()
+            # A renewed historical version is a new review, not resurrection.
+            if conn.execute("SELECT 1 FROM memories WHERE fingerprint=?", (fingerprint,)).fetchone():
+                fingerprint = hashlib.sha256((fingerprint + str(uuid.uuid4())).encode()).hexdigest()
             now = utc_now()
-            if existing:
-                memory_ref = str(existing["memory_ref"])
-                conn.execute(
-                    """
-                    UPDATE memories SET confidence=MAX(confidence, ?), updated_at=?
-                    WHERE memory_ref=?
-                    """,
-                    (float(confidence), now, memory_ref),
-                )
-            else:
-                memory_ref = f"mail-memory://fact/{uuid.uuid4()}"
-                conn.execute(
-                    """
-                    INSERT INTO memories (
-                      memory_ref, entity_ref, category, content, status, confidence,
-                      sensitivity, occurred_at, valid_from, valid_until, supersedes_ref,
-                      fingerprint, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'candidate', ?, ?, ?, ?, ?, NULLIF(?, ''),
-                              ?, ?, ?)
-                    """,
-                    (
-                        memory_ref,
-                        entity_ref,
-                        category,
-                        content,
-                        float(confidence),
-                        sensitivity,
-                        occurred_at,
-                        valid_from,
-                        valid_until,
-                        supersedes_ref,
-                        fingerprint,
-                        now,
-                        now,
-                    ),
-                )
+            memory_ref = f"mail-memory://fact/{uuid.uuid4()}"
+            conn.execute(
+                """
+                INSERT INTO memories (
+                  memory_ref, entity_ref, category, content, status, confidence,
+                  sensitivity, occurred_at, valid_from, valid_until, supersedes_ref,
+                  fingerprint, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'candidate', ?, ?, ?, ?, ?, NULLIF(?, ''),
+                          ?, ?, ?)
+                """,
+                (
+                    memory_ref,
+                    entity_ref,
+                    category,
+                    content,
+                    float(confidence),
+                    sensitivity,
+                    occurred_at,
+                    valid_from,
+                    valid_until,
+                    supersedes_ref,
+                    fingerprint,
+                    now,
+                    now,
+                ),
+            )
 
             for source in source_items:
                 conn.execute(
@@ -492,16 +514,6 @@ class MemoryStore:
                     INSERT INTO memory_sources (
                       memory_ref, source_ref, source_kind, excerpt, source_sha256
                     ) VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(memory_ref, source_ref) DO UPDATE SET
-                      source_kind=excluded.source_kind,
-                      excerpt=CASE
-                        WHEN excluded.excerpt='' THEN memory_sources.excerpt
-                        ELSE excluded.excerpt
-                      END,
-                      source_sha256=CASE
-                        WHEN excluded.source_sha256='' THEN memory_sources.source_sha256
-                        ELSE excluded.source_sha256
-                      END
                     """,
                     (
                         memory_ref,
@@ -545,6 +557,7 @@ class MemoryStore:
         statuses: Iterable[str] = ("approved",),
         query: str = "",
         limit: int = 50,
+        is_current: Callable[[dict[str, Any]], bool] | None = None,
     ) -> list[dict[str, Any]]:
         conn = self._connect(create=False)
         if conn is None:
@@ -563,17 +576,28 @@ class MemoryStore:
                 where.append("(lower(m.content) LIKE ? OR lower(e.canonical_name) LIKE ?)")
                 like = f"%{query.lower()}%"
                 params.extend([like, like])
-            params.append(max(1, min(int(limit), 500)))
+            result_limit = max(1, min(int(limit), 500))
+            if is_current is None:
+                params.append(result_limit)
             try:
                 rows = conn.execute(
                     self._memory_select()
                     + f" WHERE {' AND '.join(where)}"
-                    + " ORDER BY m.updated_at DESC, m.created_at DESC LIMIT ?",
+                    + " ORDER BY m.updated_at DESC, m.created_at DESC"
+                    + (" LIMIT ?" if is_current is None else ""),
                     params,
-                ).fetchall()
+                )
             except sqlite3.OperationalError:
                 return []
-            return [self._memory_payload(conn, row) for row in rows]
+            memories = []
+            for row in rows:
+                memory = self._memory_payload(conn, row)
+                if is_current is not None and not is_current(memory):
+                    continue
+                memories.append(memory)
+                if len(memories) >= result_limit:
+                    break
+            return memories
         finally:
             conn.close()
 
@@ -588,8 +612,9 @@ class MemoryStore:
         conn = self._connect(create=True)
         assert conn is not None
         try:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT status, supersedes_ref FROM memories WHERE memory_ref=?",
+                "SELECT status, supersedes_ref, entity_ref, category, content FROM memories WHERE memory_ref=?",
                 (memory_ref,),
             ).fetchone()
             if not row:
@@ -597,6 +622,20 @@ class MemoryStore:
             current = str(row["status"])
             if current not in allowed_from[target]:
                 raise ValueError(f"cannot transition memory from {current} to {target}")
+            if target == "approved" and current == "candidate":
+                accepted = conn.execute(
+                    """SELECT memory_ref FROM memories
+                    WHERE entity_ref=? AND category=? AND content=? AND status='approved'""",
+                    (row["entity_ref"], row["category"], row["content"]),
+                ).fetchall()
+                if any(item["memory_ref"] != row["supersedes_ref"] for item in accepted):
+                    raise ValueError("memory predecessor changed; propose a fresh revision")
+            if target == "approved" and current == "candidate" and row["supersedes_ref"]:
+                predecessor = conn.execute(
+                    "SELECT status FROM memories WHERE memory_ref=?", (row["supersedes_ref"],)
+                ).fetchone()
+                if not predecessor or predecessor["status"] != "approved":
+                    raise ValueError("superseded memory is no longer current; propose a fresh revision")
             now = utc_now()
             conn.execute(
                 "UPDATE memories SET status=?, updated_at=? WHERE memory_ref=?",

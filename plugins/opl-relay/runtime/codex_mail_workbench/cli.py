@@ -25,6 +25,7 @@ from .config import (
 from .context import ContextBuilder
 from .drafts import DraftLedger, DraftService, Recipient
 from .knowledge import KnowledgeIndex, load_sources_config
+from .memory_evidence import MemoryEvidence
 from .mailbox import MailboxMoveFailure, move_messages
 from .memory import (
     MEMORY_CATEGORIES,
@@ -688,6 +689,7 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
         return _app_contribution_collection(
             ref, read_people(
                 memory_store(args),
+                evidence=memory_evidence(args),
                 query=_app_contribution_string(payload.get("query"), "query"),
                 limit=_app_contribution_integer(
                     payload.get("limit"), "limit", default=50, minimum=1, maximum=500
@@ -698,6 +700,7 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
         return _app_contribution_collection(
             ref, read_memory_evidence(
                 memory_store(args),
+                evidence=memory_evidence(args),
                 entity=_app_contribution_string(payload.get("entity"), "entity"),
                 query=_app_contribution_string(payload.get("query"), "query"),
                 limit=_app_contribution_integer(
@@ -831,9 +834,9 @@ def _app_contribution_action(args: argparse.Namespace, ref: str, payload: dict[s
         )
     if ref == "personal.memory.v1#inspect":
         return {
-            "memory": memory_store(args).get_memory(
+            "memory": memory_evidence(args).inspect(memory_store(args).get_memory(
                 _app_contribution_string(payload.get("memory_ref"), "memory_ref", required=True)
-            )
+            ))
         }
     raise ValueError("unsupported action ref")
 
@@ -1360,6 +1363,11 @@ def memory_store(args: argparse.Namespace) -> MemoryStore:
     return MemoryStore(Path(args.memory_db).expanduser())
 
 
+def memory_evidence(args: argparse.Namespace) -> MemoryEvidence:
+    return MemoryEvidence(mail_db_path=Path(args.db).expanduser(),
+                          sources_config_path=Path(args.sources_config).expanduser())
+
+
 def cmd_memory_entity_upsert(args: argparse.Namespace) -> int:
     entity = memory_store(args).upsert_entity(
         kind=args.kind,
@@ -1382,6 +1390,8 @@ def _source_kind(source_ref: str) -> str:
         return "email"
     if source_ref.startswith("obsidian://"):
         return "obsidian"
+    if source_ref.startswith("markdown://"):
+        return "markdown"
     if source_ref.startswith("user://"):
         return "user"
     if source_ref.startswith("calendar://"):
@@ -1399,28 +1409,16 @@ def _memory_sources(args: argparse.Namespace) -> list[dict[str, str]]:
     if excerpts and len(excerpts) != len(source_refs):
         raise ValueError("--source-excerpt must be omitted or supplied once per --source")
 
-    email_meta: dict[str, dict[str, object]] = {}
-    email_refs = [ref for ref in source_refs if ref.startswith("email-store://")]
-    if email_refs:
-        db_path = Path(args.db).expanduser()
-        if not db_path.exists():
-            raise FileNotFoundError(f"mail database not found: {db_path}")
-        conn = connect_email_store(db_path)
-        try:
-            for source_ref in email_refs:
-                meta = get_message_by_storage_ref(conn, source_ref)
-                if not meta:
-                    raise ValueError(f"email evidence not found: {source_ref}")
-                email_meta[source_ref] = meta
-        finally:
-            conn.close()
+    evidence = memory_evidence(args)
 
     return [
         {
             "source_ref": source_ref,
             "source_kind": _source_kind(source_ref),
             "excerpt": excerpts[index] if excerpts else "",
-            "source_sha256": str(email_meta.get(source_ref, {}).get("raw_sha256") or ""),
+            "source_sha256": (evidence.source_digest(source_ref, _source_kind(source_ref))
+                              if _source_kind(source_ref) in {"email", "obsidian", "markdown"}
+                              else ""),
         }
         for index, source_ref in enumerate(source_refs)
     ]
@@ -1457,18 +1455,22 @@ def cmd_memory_candidates(args: argparse.Namespace) -> int:
 
 
 def cmd_memory_search(args: argparse.Namespace) -> int:
+    evidence = memory_evidence(args)
     memories = memory_store(args).list_memories(
         entity=args.entity,
         statuses=args.status or ("approved",),
         query=args.query,
         limit=args.limit,
+        is_current=None if args.include_stale else evidence.current,
     )
+    if args.include_stale:
+        memories = [evidence.inspect(memory) for memory in memories]
     emit({"ok": True, "memories": memories}, as_json=args.json)
     return 0
 
 
 def cmd_memory_inspect(args: argparse.Namespace) -> int:
-    memory = memory_store(args).get_memory(args.memory_ref)
+    memory = memory_evidence(args).inspect(memory_store(args).get_memory(args.memory_ref))
     if memory is None:
         return fail("memory not found", as_json=args.json, code=2)
     emit({"ok": True, "memory": memory}, as_json=args.json)
@@ -1477,6 +1479,13 @@ def cmd_memory_inspect(args: argparse.Namespace) -> int:
 
 def _memory_transition(args: argparse.Namespace, action: str) -> int:
     store = memory_store(args)
+    if action == "approve":
+        candidate = store.get_memory(args.memory_ref)
+        if candidate is None:
+            raise ValueError("memory not found")
+        currentness = memory_evidence(args).check(candidate, approving=True)
+        if currentness["status"] != "current":
+            raise ValueError("memory evidence requires review: " + ", ".join(currentness["reasons"]))
     memory = getattr(store, action)(args.memory_ref)
     emit({"ok": True, "memory": memory}, as_json=args.json)
     return 0
@@ -1537,6 +1546,7 @@ def cmd_sources_index(args: argparse.Namespace) -> int:
 def cmd_sources_search(args: argparse.Namespace) -> int:
     results = KnowledgeIndex(Path(args.memory_db).expanduser()).search(
         args.query,
+        sources=load_sources_config(Path(args.sources_config).expanduser()),
         source_ids=args.source,
         limit=args.limit,
     )
@@ -2051,6 +2061,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     memory_search.add_argument("--limit", type=int, default=50)
+    memory_search.add_argument("--include-stale", action="store_true",
+                               help="查看保留的历史条目及来源复核状态，不作为当前上下文")
     memory_search.set_defaults(func=cmd_memory_search)
 
     memory_inspect = memory_actions.add_parser("inspect", help="查看记忆及其证据")

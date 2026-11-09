@@ -48,9 +48,10 @@ OPL Persona or OPL App.
 - Memory: evidence-backed candidate and approved relationship memory.
 - People: a bounded, read-only projection of that same MemoryStore's entities
   and approved evidence; it owns no contact database or mailbox copy.
-- Knowledge: read-only Obsidian indexing into a rebuildable local index.
-- Context: bounded packages combining approved memory, selected mail evidence,
-  and relevant knowledge excerpts.
+- Knowledge: read-only indexing of user-selected Obsidian or Markdown directories
+  into a rebuildable local index; source bodies remain in their original location.
+- Context: bounded packages combining approved memory whose sources and validity
+  are current, selected mail evidence, and verified knowledge excerpts.
 - Drafts: the shared workbench, synchronized server drafts and Apple Mail, plus a local lifecycle ledger and
   exact approval fingerprint. An approved Persona `mail.draft_context`
   proposal may prepare this review draft, but it never authorizes sending.
@@ -227,32 +228,67 @@ mail-memory://fact/<uuid>
 mail-draft://apple-mail/<account_id>/<apple-mail-uuid>
 ```
 
+## Knowledge And Memory Currentness
+
+User-selected Obsidian and ordinary Markdown directories are equivalent source
+locations. `sources.toml` defines which roots and relative paths Relay can read;
+the SQLite knowledge index is a rebuildable discovery aid. Relay validates each
+selected document against the current enabled-source configuration, include and
+exclude rules, contained real path, and content hash before returning an excerpt.
+A changed, missing, disabled, excluded, or escaping source cannot be recovered
+from an old index as current knowledge. Reindexing updates discovery; it does not
+accept a changed version of a derived memory.
+
+Memory approval and source currentness are separate. The drafting context and
+public People and Memory reads include only approved records within their
+`valid_from` and `valid_until` interval whose required evidence still validates.
+An Obsidian or Markdown-derived memory binds the original source hash when it is
+proposed. Approval checks that version again without silently replacing it with
+the latest source bytes. Source changes require a new review of the affected
+memory. Existing records and evidence remain in the database for inspection;
+read-time filtering does not delete them or rewrite their review history.
+
+Email-derived memory checks the stable mail reference and original-message hash.
+Retained historical mail establishes what the message said at that time, not its
+current server location or a person's present circumstances. An accepted
+`user://` assertion records the user's independent statement and is governed by
+its review lifecycle and validity interval rather than an external file hash.
+Unverifiable external evidence remains available for review and is excluded from
+current drafting context.
+
+Persona and other consumers obtain current approved summaries through Relay's
+public `personal.memory.v1#people` and `personal.memory.v1#search` reads. They do
+not inspect SQLite or treat a previously cached approved result as permanently
+current. Explicit inspection exposes the record and its currentness separately,
+so historical evidence remains reviewable without becoming current context.
+
 ## People And Memory App Projection
 
 The carrier's `app-contribution` JSON ABI exposes
 `personal.memory.v1#people` (`query`, `limit`, default 50, range 1..500) and keeps
-`personal.memory.v1#search` (`entity`, `query`, `limit`) for approved memory
-evidence. Both return `result = {kind: "data", state: "ready", data: {...}}`;
+`personal.memory.v1#search` (`entity`, `query`, `limit`) for approved, currently
+usable memory evidence. Both return `result = {kind: "data", state: "ready", data: {...}}`;
 `data.items` is the returned batch, `data.count` is its length, and
 `data.source_policy` states the read-only, derived-evidence and approved-only
-boundary. Missing storage returns an empty ready result with
+boundary, with `source_currentness_checked` identifying source validation at
+read time. Missing storage returns an empty ready result with
 `store_state="missing"`; neither route initializes a Profile, creates a database,
 ensures a schema, synchronizes mail, or writes a projection cache.
 
 People uses the existing `mail-memory://entity/<uuid>` as both `id` and
 `entity_ref`, with `name`, up to 20 aliases and the existing person, organization,
-or project `kind`. Search matches names, aliases, email selectors and approved
-memory content before applying the entity limit. Email selectors are never
+or project `kind`. Search matches names, aliases, email selectors and currently
+usable approved memory content before applying the entity limit. Email selectors are never
 returned as a copied address book. `has_more` marks a bounded entity batch.
-Each entity includes the complete `approved_memory_count`, up to five newest
-approved memory summaries, and up to ten stable `source_refs`. Each memory has
+Each entity includes the current usable `approved_memory_count`, up to five newest
+usable approved memory summaries, and up to ten stable `source_refs`. Each memory has
 its original `mail-memory://fact/<uuid>`, a summary capped at 280 characters,
 up to ten source references, their count, and explicit truncation flags. Raw
 MIME bodies, evidence excerpts and source hashes are not included in these
 default projections. The existing inspect action resolves full evidence only
 when explicitly requested.
 
-Candidate memories remain available only for explicit review through the
+Candidate and stale memories remain available for explicit review through the
 existing memory lifecycle commands and inspect route. They do not appear in
 People summaries or the evidence timeline, cannot match People content search,
 and are never injected into the default drafting context. This projection adds

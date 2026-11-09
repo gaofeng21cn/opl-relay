@@ -5,9 +5,9 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from .config import load_toml
 
@@ -46,7 +46,7 @@ def load_sources_config(path: Path) -> dict[str, KnowledgeSource]:
             raise ValueError(f"sources[{index}].source_id is required")
         if source_id in sources:
             raise ValueError(f"duplicate source_id: {source_id}")
-        if kind != "obsidian":
+        if kind not in {"obsidian", "markdown"}:
             raise ValueError(f"unsupported knowledge source type: {kind}")
         if not raw_path:
             raise ValueError(f"sources[{index}].path is required")
@@ -102,6 +102,41 @@ def _glob_regex(pattern: str) -> re.Pattern[str]:
 
 def _matches(relative_path: str, patterns: Iterable[str]) -> bool:
     return any(_glob_regex(pattern).match(relative_path) for pattern in patterns)
+
+
+def read_source_document(source: KnowledgeSource, relative: str) -> bytes:
+    """Read the current allowed Markdown source, never an index copy."""
+    ref = PurePosixPath(relative)
+    if (not relative or ref.is_absolute() or "\\" in relative
+            or ref.as_posix() != relative or ".." in ref.parts or ref.suffix != ".md"):
+        raise ValueError("source_path_invalid")
+    if not _matches(relative, source.include) or _matches(relative, source.exclude):
+        raise ValueError("source_scope_denied")
+    root = source.path.resolve(strict=True)
+    current = root
+    for component in ref.parts:
+        current = current / component
+        if current.is_symlink():
+            raise ValueError("source_symlink_denied")
+    resolved = current.resolve(strict=True)
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        raise ValueError("source_path_invalid")
+    with resolved.open("rb") as stream:
+        data = stream.read(source.max_bytes + 1)
+    if len(data) > source.max_bytes:
+        raise ValueError("source_size_exceeded")
+    data.decode("utf-8", errors="strict")
+    return data
+
+
+def resolve_source_ref(source_ref: str, sources: dict[str, KnowledgeSource]) -> bytes:
+    ref = urlsplit(source_ref)
+    if ref.scheme not in {"obsidian", "markdown"} or ref.query or ref.fragment:
+        raise ValueError("source_ref_invalid")
+    source = sources.get(ref.netloc)
+    if source is None or source.kind != ref.scheme:
+        raise ValueError("source_not_enabled")
+    return read_source_document(source, unquote(ref.path.removeprefix("/")))
 
 
 def _title(path: Path, content: str) -> str:
@@ -184,27 +219,28 @@ class KnowledgeIndex:
                     relative, source.exclude
                 ):
                     continue
-                if path.stat().st_size > source.max_bytes:
-                    skipped += 1
-                    continue
                 try:
-                    content = path.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
+                    data = read_source_document(source, relative)
+                    content = data.decode("utf-8")
+                except (OSError, ValueError):
                     skipped += 1
                     continue
-                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                digest = hashlib.sha256(data).hexdigest()
+                source_ref = f"{source.kind}://{source.source_id}/{quote(relative)}"
+                title = _title(path, content)
                 seen.add(relative)
                 existing = conn.execute(
                     """
-                    SELECT content_sha256 FROM knowledge_documents
+                    SELECT content_sha256, source_ref, content, title FROM knowledge_documents
                     WHERE source_id=? AND relative_path=?
                     """,
                     (source.source_id, relative),
                 ).fetchone()
-                if existing and str(existing["content_sha256"]) == digest:
+                if (existing and str(existing["content_sha256"]) == digest
+                        and existing["source_ref"] == source_ref
+                        and existing["content"] == content and existing["title"] == title):
                     unchanged += 1
                     continue
-                source_ref = f"obsidian://{source.source_id}/{quote(relative)}"
                 conn.execute(
                     """
                     INSERT INTO knowledge_documents (
@@ -223,7 +259,7 @@ class KnowledgeIndex:
                         source.source_id,
                         relative,
                         source_ref,
-                        _title(path, content),
+                        title,
                         content,
                         digest,
                         path.stat().st_mtime_ns,
@@ -281,11 +317,12 @@ class KnowledgeIndex:
         self,
         query: str,
         *,
+        sources: dict[str, KnowledgeSource],
         source_ids: Iterable[str] = (),
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         query = " ".join(query.split())
-        if not query:
+        if not query or not sources:
             return []
         conn = self._connect(create=False)
         if conn is None:
@@ -311,8 +348,22 @@ class KnowledgeIndex:
             key = query.casefold()
             matches: list[tuple[int, sqlite3.Row]] = []
             for row in rows:
+                source = sources.get(str(row["source_id"]))
+                if source is None:
+                    continue
+                relative = str(row["relative_path"])
+                if row["source_ref"] != f"{source.kind}://{source.source_id}/{quote(relative)}":
+                    continue
+                try:
+                    data = resolve_source_ref(str(row["source_ref"]), sources)
+                except (OSError, ValueError):
+                    continue
+                if hashlib.sha256(data).hexdigest() != row["content_sha256"]:
+                    continue
                 title = str(row["title"])
                 content = str(row["content"])
+                if content.encode("utf-8") != data or title != _title(Path(relative), content):
+                    continue
                 title_hits = title.casefold().count(key)
                 content_hits = content.casefold().count(key)
                 if not title_hits and not content_hits:
@@ -334,6 +385,7 @@ class KnowledgeIndex:
                     "excerpt": _excerpt(str(row["content"]), query),
                     "content_sha256": str(row["content_sha256"]),
                     "indexed_at": str(row["indexed_at"]),
+                    "source_currentness": {"status": "current", "checked_at": utc_now()},
                 }
                 for _, row in matches[: max(1, min(int(limit), 100))]
             ]

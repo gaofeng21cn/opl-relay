@@ -18,6 +18,9 @@ resolved paths, and runtime state.
 4. Credentials remain in the platform credential store, never in either root.
 5. Codex App, OPL App, and OPL Persona share configured user-owned runtime
    roots without moving those roots into an installed Package or plugin cache.
+6. User knowledge bodies remain in the selected Obsidian or Markdown directory.
+   Relay's index is derived, and a source's removal or changed access scope is
+   respected on subsequent reads without deleting historical memory records.
 
 ## Resolution
 
@@ -46,6 +49,7 @@ Framework's `scripts/materialize-python-support.mjs --module profile_workspace
 | Accounts and credential references | Data root | No |
 | Mail, mailbox-operation receipts, draft, and memory SQLite | Data root | No |
 | Sync cursors and indexes | Data root | No |
+| Editable knowledge bodies | User-selected source directory | User decides |
 | Workbench edits, imported attachments, loopback capability and log | Data root | No |
 | Keychain secrets | Keychain | No |
 | Profile and policies | Workspace | Only in a deliberately private repo |
@@ -56,6 +60,12 @@ Persona proposal bundles are structured, evidence-linked review artifacts. They
 may be stored under the Persona data root, but they are not accepted as a
 website publication, vault write, or mail send until the target adapter
 re-reads the exact proposal and the user approves it.
+
+An approved memory is a reviewed record, not a perpetual claim of currentness.
+Source versions and validity intervals are checked when building current
+context or public approved-memory views; explicit inspection retains access to
+historical review evidence. The implementation boundary is defined in
+[Knowledge And Memory Currentness](architecture.md#knowledge-and-memory-currentness).
 
 ## Host Contract
 
