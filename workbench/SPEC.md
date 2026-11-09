@@ -48,6 +48,14 @@ before another attempt. Selected mail and saved draft identity/revision update
 model context without sending a message or starting an Agent task. Context
 notification failure does not invalidate a completed mail operation.
 
+Opening a focused workbench resolves one account-bound mail, local draft or
+server request through Relay before presenting it. A local draft focus carries
+its owner revision; an explicitly stale revision is rejected with a readback
+action. Reopening without a revision resolves the current saved draft. The
+MCP and browser adapters preserve structured error codes, dispatch disposition
+and exact recovery input. A lost mutation response is reported as uncertain
+and never retried by either adapter.
+
 Local editing records use the existing drafts ledger and optimistic revision
 checks. Browser memory holds unsaved input; changing selection warns before
 discarding it through an in-view dialog that also works in opaque MCP sandboxes.
@@ -66,3 +74,11 @@ per-process capability, checks request origin and content type, and serves only
 bundled resources. The MCP adapter uses the official SDK and the standard App
 bridge. Neither adapter accepts shell commands, arbitrary paths, mailbox
 deletion, or credential values. Both invoke the same bounded Relay CLI actions.
+
+### 已连接邮箱
+
+`relay_connections` 和 `relay_connection_*` 使用同一个 Relay 领域服务。服务启动从自身已安装目录调用 Framework 公共 `activateInstalledPackageConnectionContext`，固定 consumer 为 `opl-relay`；工具及网页输入没有 Package 身份字段。“已连接邮箱”视图复用连接列表、读取授权请求、搜索和原文读取，批准仍在 OPL 的资源与连接中进行。
+
+对应能力为 `mailbox.search`、`mailbox.read`、`draft.create`。已批准 grant 可直接调用；每次调用重新检查授权、连接版本和安装描述符。`connection_reply` 只建立原 owner 的本地审阅草稿，返回原 draft identity，不授予发送。未知结果保留 invocation ID，调用方先回读原 request。
+
+Framework 依赖由既有 `opl packages link-framework --agent-root <installed-opl-relay> --json` 建立；构建仅将该公共导出保留为外部依赖，不复制 Framework。缺少基座或不匹配的安装根返回修复提示。Relay 原有本地邮箱入口继续遵循自己的权限与草稿合同。

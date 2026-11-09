@@ -55,6 +55,7 @@ function iconButton(label, handler, iconName, className = '') {
 }
 const state = { account: '', mode: 'inbox', selected: null, edit: null, dirty: false, attachments: [], request: 0 };
 const initialFocus = Object.fromEntries(new URLSearchParams(location.search));
+if (initialFocus.revision) initialFocus.revision = Number(initialFocus.revision);
 let selection = 0;
 let bridge;
 let capability;
@@ -131,9 +132,9 @@ async function api(action, input = {}) {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${capability}` }, body: JSON.stringify(input),
       });
       result = await response.json();
-      if (!response.ok) throw new Error(result.error || '操作未完成');
+      if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : result.error?.message || '操作未完成');
     }
-    if (result?.ok === false) throw new Error(result.error || '操作未完成');
+    if (result?.ok === false) throw new Error(typeof result.error === 'string' ? result.error : result.error?.message || '操作未完成');
     if (sequence === operationSequence) operation('已读取当前状态');
     return result;
   } catch (error) {
@@ -520,6 +521,7 @@ function showAttachment(item) {
 }
 
 async function boot(focus = {}) {
+  focus = (await api('focus', focus)).focus;
   const result = await api('accounts');
   $('account').replaceChildren(...result.accounts.map((item) => {
     const option = element('option', item.email); option.value = item.account_id; return option;
@@ -529,9 +531,52 @@ async function boot(focus = {}) {
   if (!state.account) { $('freshness').textContent = '尚未配置邮箱'; notice('请先通过 OPL Relay 配置邮箱'); return; }
   await loadList(focus);
   if (focus.storage_ref) await select({ storage_ref: focus.storage_ref });
-  if (focus.draft_id) compose((await api('draft', { account_id: state.account, draft_id: focus.draft_id })).draft);
+  if (focus.draft_id) {
+    const draft = (await api('draft', { account_id: state.account, draft_id: focus.draft_id })).draft;
+    compose(draft);
+    if (draft.revision !== focus.revision) notice('打开期间草稿已更新，现显示 owner 的最新版本，请重新核对。');
+  }
   if (focus.request_id) showServer((await api('inspect', { account_id: state.account, request_id: focus.request_id })).server_draft);
 }
+
+async function showConnections() {
+  const dialog = element('dialog');
+  const title = element('h2', '已连接邮箱'); title.id = 'connections-title';
+  dialog.setAttribute('aria-labelledby', title.id);
+  const status = element('p', '正在读取连接…'); status.setAttribute('role', 'status');
+  const selector = element('select'); selector.setAttribute('aria-label', '选择已连接邮箱');
+  const query = element('input'); query.type = 'search'; query.placeholder = '搜索此连接的邮件'; query.setAttribute('aria-label', '搜索已连接邮箱');
+  const results = element('div');
+  const attempt = async (action) => { try { await action(); } catch (error) { status.textContent = error.message; } };
+  const search = button('查找邮件', () => attempt(async () => {
+    status.textContent = '正在读取…';
+    const value = await api('connection_search', { connection_id: selector.value, query: query.value, limit: 25 });
+    results.replaceChildren();
+    for (const item of value.messages || []) results.append(button(item.subject || item.storage_ref, () => attempt(async () => {
+      const read = await api('connection_read', { connection_id: selector.value, storage_ref: item.storage_ref });
+      results.replaceChildren(element('h3', read.message.subject), element('pre', read.message.body_text, 'message-body'));
+      status.textContent = '已读取当前授权范围内的原邮件。';
+      updateContext({ connection_id: selector.value, storage_ref: item.storage_ref, invocation_id: read.invocation_id });
+    })));
+    status.textContent = `已读取 ${(value.messages || []).length} 封邮件。`;
+  }));
+  const request = button('请求读取授权', () => attempt(async () => {
+    const value = await api('connection_request', { connection_id: selector.value, capability_ids: ['mailbox.search', 'mailbox.read'] });
+    status.textContent = `请求已登记（${value.request.request_id}），请在 OPL 的资源与连接中审核；批准后可直接查找邮件。`;
+  }));
+  search.disabled = request.disabled = true;
+  const actions = element('div', undefined, 'dialog-actions'); actions.append(search, request, button('关闭', () => dialog.close()));
+  dialog.append(title, element('p', '复用 OPL 中已有的邮箱连接。每次读取均按当前授权核验。'), selector, query, status, results, actions);
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal();
+  await attempt(async () => {
+    const value = await api('connections');
+    selector.replaceChildren(...value.connections.map(item => { const option = element('option', item.name); option.value = item.connection_id; return option; }));
+    search.disabled = request.disabled = !value.connections.length;
+    status.textContent = value.connections.length ? '已有授权可直接查找邮件；缺少授权时再提交请求。' : '请先在 OPL 的资源与连接中添加 Relay 邮箱连接。';
+  });
+}
+$('connections').onclick = () => run(showConnections);
 
 $('account').onchange = () => run(async () => {
   if (!await preserveEdits()) { $('account').value = state.account; return; }

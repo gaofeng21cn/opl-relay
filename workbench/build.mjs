@@ -11,7 +11,7 @@ const template = await readFile('index.html', 'utf8');
 const css = await readFile('style.css', 'utf8');
 const logo = await readFile(resolve(output, '../assets/icon.png'));
 await writeFile(resolve(output, 'index.html'), template.replace('/* LOGO */', () => `data:image/png;base64,${logo.toString('base64')}`).replace('/* STYLE */', () => css).replace('/* SCRIPT */', () => script));
-await build({ entryPoints: ['server.mjs'], outfile: resolve(output, 'server.mjs'), bundle: true, platform: 'node', format: 'esm', target: 'node20', minify: true, legalComments: 'inline', banner: { js: 'import { createRequire as _createRequire } from "node:module"; const require = _createRequire(import.meta.url);' } });
+await build({ entryPoints: ['server.mjs'], outfile: resolve(output, 'server.mjs'), bundle: true, external: ['opl-framework/*'], platform: 'node', format: 'esm', target: 'node20', minify: true, legalComments: 'inline', banner: { js: 'import { createRequire as _createRequire } from "node:module"; const require = _createRequire(import.meta.url);' } });
 const lock = JSON.parse(await readFile('package-lock.json', 'utf8'));
 let notices = 'OPL Relay Workbench third-party notices\n\n';
 for (const [path, dependency] of Object.entries(lock.packages)) {

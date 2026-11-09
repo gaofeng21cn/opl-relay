@@ -1848,9 +1848,10 @@ def cmd_workbench(args: argparse.Namespace) -> int:
     if args.workbench_action == "open":
         focus = {key: value for key, value in {
             "account_id": args.account, "storage_ref": args.storage_ref,
-            "draft_id": args.draft_id, "request_id": args.request_id,
-        }.items() if value}
-        emit(open_workbench(focus=focus), as_json=True)
+            "draft_id": args.draft_id, "request_id": args.request_id, "revision": args.revision,
+        }.items() if value is not None and value != ""}
+        workbench = Workbench(config_path=args.config, db_path=args.db, ledger_path=args.draft_db)
+        emit(open_workbench(focus=workbench.focus(**focus)["focus"]), as_json=True)
         return 0
     if args.workbench_action == "mcp":
         import os
@@ -1859,8 +1860,12 @@ def cmd_workbench(args: argparse.Namespace) -> int:
     if not isinstance(request, dict) or set(request) != {"action", "input"}:
         raise ValueError("workbench action expects action and input")
     workbench = Workbench(config_path=args.config, db_path=args.db, ledger_path=args.draft_db)
-    emit(workbench.dispatch(request["action"], request["input"]), as_json=True)
-    return 0
+    try:
+        emit(workbench.dispatch(request["action"], request["input"]), as_json=True)
+        return 0
+    except Exception as exc:
+        emit(workbench.failure(request["action"], request["input"], exc), as_json=True)
+        return 1
 
 
 def cmd_connect(args: argparse.Namespace) -> int:
@@ -1916,6 +1921,7 @@ def build_parser() -> argparse.ArgumentParser:
     workbench_open = workbench_actions.add_parser("open")
     for argument in ("account", "storage-ref", "draft-id", "request-id"):
         workbench_open.add_argument("--" + argument, default="")
+    workbench_open.add_argument("--revision", type=int)
     workbench_open.set_defaults(func=cmd_workbench)
     workbench_connection = workbench_actions.add_parser("connection", help="生成当前宿主的连接配置或 DSH 原生配置包")
     workbench_connection.add_argument("--host", choices=("generic", "codex", "dsh", "opl"), default="generic")

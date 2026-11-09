@@ -102,6 +102,47 @@ def test_save_revision_conflict_preserves_current_user_edits(mailbox):
     assert service.draft(account_id="work", draft_id="reply")["draft"]["body"] == "The user's current edit"
 
 
+def test_focus_binds_one_owner_object_and_reopens_current_revision(mailbox):
+    service, ref = mailbox
+    assert service.focus() == {"focus": {}}
+    assert service.focus(account_id="work", storage_ref=ref)["focus"]["storage_ref"] == ref
+    assert not service.ledger_path.exists()
+    with pytest.raises(wb.WorkbenchError, match="精确对象"):
+        service.focus(storage_ref=ref)
+    with pytest.raises(ValueError, match="不属于"):
+        service.focus(account_id="other", storage_ref=ref)
+    service.reply(account_id="work", storage_ref=ref, request_id="reply")
+    service.save(account_id="work", draft_id="reply", revision=1, body="Human edit", attachment_ids=[])
+    assert service.focus(account_id="work", draft_id="reply")["focus"] == {
+        "account_id": "work", "draft_id": "reply", "revision": 2}
+    with pytest.raises(wb.WorkbenchError) as stale:
+        service.focus(account_id="work", draft_id="reply", revision=1)
+    assert stale.value.code == "revision_conflict"
+    assert stale.value.recovery["action"] == "draft"
+    with pytest.raises(wb.WorkbenchError, match="精确对象"):
+        service.focus(account_id="work", storage_ref=ref, draft_id="reply")
+
+
+def test_workbench_cli_preserves_conflict_and_exact_recovery(mailbox, monkeypatch, capsys):
+    import io
+    import json
+    from codex_mail_workbench import cli
+
+    service, ref = mailbox
+    service.reply(account_id="work", storage_ref=ref, request_id="reply")
+    service.save(account_id="work", draft_id="reply", revision=1, body="Human edit", attachment_ids=[])
+    payload = {"account_id": "work", "draft_id": "reply", "revision": 1, "body": "Stale agent edit", "attachment_ids": []}
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(json.dumps({"action": "save", "input": payload})))
+    code = cli.main(["--json", "--config", str(service.config_path), "--db", str(service.db_path),
+                     "--draft-db", str(service.ledger_path), "workbench", "action"])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert result["disposition"] == "not_dispatched"
+    assert result["error"]["code"] == "revision_conflict"
+    assert result["recovery"] == {"action": "draft", "input": {"account_id": "work", "draft_id": "reply"}}
+    assert service.draft(account_id="work", draft_id="reply")["draft"]["body"] == "Human edit"
+
+
 def test_attachment_import_hash_path_and_tamper_checks(mailbox):
     service, ref = mailbox
     original = service.attachment(account_id="work", storage_ref=ref, index=0)["attachment"]
@@ -159,6 +200,9 @@ def test_unknown_publish_inspects_same_request_without_creating_another(mailbox,
             service.publish(account_id="work", draft_id="reply", revision=1)
     assert calls[0]["request_id"] == calls[1]["request_id"]
     assert calls[0]["apply"] and calls[1]["inspect"] and not calls[1]["apply"]
+    failure = service.failure("publish", {"account_id": "work", "draft_id": "reply"}, TimeoutError("uncertain append"))
+    assert failure["disposition"] == "unknown_after_dispatch"
+    assert failure["recovery"] == {"action": "draft", "input": {"account_id": "work", "draft_id": "reply"}}
 
 
 def test_publish_validation_failure_before_remote_attempt_keeps_editable(mailbox, monkeypatch):

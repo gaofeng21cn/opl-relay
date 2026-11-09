@@ -8,6 +8,7 @@ import { readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { connectionActions, invokeConnectionAction } from './connection-context.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const cli = resolve(directory, '../bin/opl-relay');
@@ -21,9 +22,12 @@ const account = { account_id: z.string().min(1) };
 const source = { ...account, storage_ref: z.string().startsWith('email-store://') };
 const draft = { ...account, draft_id: z.string().min(1) };
 const request = { ...account, request_id: z.string().min(1) };
+const focusSchema = z.object({ account_id: z.string().min(1).optional(), storage_ref: z.string().startsWith('email-store://').optional(), request_id: z.string().min(1).optional(), draft_id: z.string().min(1).optional(), revision: z.number().int().positive().optional() }).strict();
 
 export const actions = {
+  ...connectionActions,
   accounts: { schema: z.object({}).strict(), read: true, title: '列出邮箱' },
+  focus: { schema: focusSchema, read: true, title: '核对工作台对象' },
   messages: { schema: z.object({ ...account, query: z.string().optional(), scope: z.enum(['active', 'history']).optional(), folder: z.string().optional(), limit: z.number().int().min(1).max(100).optional() }).strict(), read: true, title: '查找邮件' },
   read: { schema: z.object(source).strict(), read: true, title: '读取原邮件' },
   sync: { schema: z.object(account).strict(), read: false, title: '同步邮箱' },
@@ -47,9 +51,12 @@ async function callCli(command, payload) {
     }, (error, stdout) => {
       try {
         const result = JSON.parse(stdout);
-        if (error || result.ok === false) reject(new Error(typeof result.error === 'string' ? result.error : '操作未完成，请先核对当前状态'));
+        if (error || result.ok === false) reject(Object.assign(new Error(typeof result.error === 'string' ? result.error : result.error?.message || '操作未完成，请先核对当前状态'), { result }));
         else accept(result);
-      } catch { reject(new Error('操作结果尚未确认，请读取同一草稿状态；不要重复发送')); }
+      } catch {
+        const message = '操作结果尚未确认，请读取同一草稿状态；不要重复发送';
+        reject(Object.assign(new Error(message), { result: { ok: false, disposition: payload && !actions[payload.action]?.read ? 'unknown_after_dispatch' : 'not_dispatched', error: { code: 'owner_response_unavailable', message } } }));
+      }
     });
     child.stdin.end(payload === undefined ? undefined : JSON.stringify(payload));
   });
@@ -58,13 +65,20 @@ async function callCli(command, payload) {
 export async function invoke(action, input) {
   const entry = actions[action];
   if (!entry) throw new Error('不支持的工作台操作');
-  return callCli(['action'], { action, input: entry.schema.parse(input) });
+  const parsed = entry.schema.parse(input);
+  if (Object.hasOwn(connectionActions, action)) return invokeConnectionAction(action, parsed);
+  return callCli(['action'], { action, input: parsed });
+}
+
+function failure(error) {
+  if (error.envelope?.ok === false) return error.envelope;
+  return error.result?.ok === false ? error.result : { ok: false, disposition: 'not_dispatched', error: { code: 'invalid_request', message: error.message } };
 }
 
 function browserPresentation(focus) {
   const command = ['open'];
   for (const [key, value] of Object.entries(focus)) {
-    if (value) command.push('--' + (key === 'account_id' ? 'account' : key.replaceAll('_', '-')), value);
+    if (value) command.push('--' + (key === 'account_id' ? 'account' : key.replaceAll('_', '-')), String(value));
   }
   return callCli(command);
 }
@@ -109,7 +123,7 @@ async function serve() {
       const value = await invoke(path.slice(5), JSON.parse(Buffer.concat(chunks).toString('utf8')));
       res.end(JSON.stringify(value));
     } catch (error) {
-      res.writeHead(400).end(JSON.stringify({ ok: false, error: error.message }));
+      res.writeHead(400).end(JSON.stringify(failure(error)));
     }
   });
   server.requestTimeout = 110000;
@@ -136,16 +150,19 @@ export function createMcpServer() {
   registerAppTool(server, 'open_workbench', {
     title: '打开 OPL Relay 邮件工作台',
     description: 'Open the shared mail UI to read threads, edit Reply All drafts and review attachments. Use this when the user wants to inspect or review mail visually. No mail is sent or changed.',
-    inputSchema: z.object({ account_id: z.string().optional(), storage_ref: z.string().optional(), request_id: z.string().optional(), draft_id: z.string().optional() }).strict(),
+    inputSchema: focusSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     _meta: { ui: { resourceUri: uri }, 'openai/outputTemplate': uri },
-  }, async (focus) => {
-    if (supportsUi()) return { content: [{ type: 'text', text: '邮件工作台已准备就绪。' }], structuredContent: { focus, presentation: { mode: 'mcp-app', resource_uri: uri } } };
-    const presentation = await browserPresentation(focus);
-    return {
-      content: [{ type: 'text', text: '当前宿主使用浏览器工作台。请在同一台电脑的浏览器或宿主浏览器面板打开下方链接；邮件操作仍由 Relay 统一处理。' }, { type: 'resource_link', uri: presentation.url, name: 'OPL Relay 邮件工作台', mimeType: 'text/html' }],
-      structuredContent: { focus, presentation: { mode: 'browser', ...presentation } },
-    };
+  }, async (requestedFocus) => {
+    try {
+      const { focus } = await invoke('focus', requestedFocus);
+      if (supportsUi()) return { content: [{ type: 'text', text: '邮件工作台已准备就绪。' }], structuredContent: { focus, presentation: { mode: 'mcp-app', resource_uri: uri } } };
+      const presentation = await browserPresentation(focus);
+      return {
+        content: [{ type: 'text', text: '当前宿主使用浏览器工作台。请在同一台电脑的浏览器或宿主浏览器面板打开下方链接；邮件操作仍由 Relay 统一处理。' }, { type: 'resource_link', uri: presentation.url, name: 'OPL Relay 邮件工作台', mimeType: 'text/html' }],
+        structuredContent: { focus, presentation: { mode: 'browser', ...presentation } },
+      };
+    } catch (error) { return { isError: true, structuredContent: failure(error), content: [{ type: 'text', text: error.message }] }; }
   });
   const appTools = [];
   for (const [name, entry] of Object.entries(actions)) {
@@ -158,7 +175,7 @@ export function createMcpServer() {
     }, async (input) => {
       if (entry.appOnly && !supportsUi()) return { isError: true, content: [{ type: 'text', text: '此操作需要工作台中的人工交互，请通过 open_workbench 打开浏览器工作台。' }] };
       try { return { structuredContent: await invoke(name, input), content: [{ type: 'text', text: '已完成该工作台操作。' }] }; }
-      catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }] }; }
+      catch (error) { return { isError: true, structuredContent: failure(error), content: [{ type: 'text', text: error.message }] }; }
     });
     if (entry.appOnly) appTools.push(tool);
   }

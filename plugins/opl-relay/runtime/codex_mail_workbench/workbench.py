@@ -34,6 +34,13 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+class WorkbenchError(ValueError):
+    def __init__(self, code, message, *, recovery=None):
+        super().__init__(message)
+        self.code = code
+        self.recovery = recovery
+
+
 class Workbench:
     def __init__(self, *, config_path, db_path, ledger_path, profile_path=None):
         self.config_path = Path(config_path)
@@ -85,6 +92,35 @@ class Workbench:
     def accounts(self, **_):
         return {"accounts": [{"account_id": item.account_id, "email": item.email}
                              for item in self._accounts().values()]}
+
+    def focus(self, *, account_id=None, storage_ref=None, draft_id=None, request_id=None, revision=None):
+        targets = [value for value in (storage_ref, draft_id, request_id) if value is not None]
+        if len(targets) > 1 or (targets and not account_id) or (revision is not None and not draft_id):
+            raise WorkbenchError("invalid_focus", "请选择一个精确对象及其邮箱")
+        if not account_id:
+            return {"focus": {}}
+        self._account(account_id)
+        focus = {"account_id": account_id}
+        if storage_ref:
+            self._source(account_id, storage_ref)
+            focus["storage_ref"] = storage_ref
+        if draft_id:
+            draft = self.draft(account_id=account_id, draft_id=draft_id)["draft"]
+            if revision is not None and (type(revision) is not int or revision != draft["revision"]):
+                raise WorkbenchError("revision_conflict", "草稿版本已改变，请重新读取后打开",
+                                     recovery={"action": "draft", "input": {"account_id": account_id, "draft_id": draft_id}})
+            focus.update(draft_id=draft_id, revision=draft["revision"])
+        if request_id:
+            conn = self._conn(readonly=True)
+            try:
+                row = conn.execute("SELECT request_id FROM server_draft_requests WHERE request_id=? AND account_id=?",
+                                   (request_id, account_id)).fetchone()
+                if row is None:
+                    raise WorkbenchError("request_not_found", "找不到该邮箱的服务器草稿")
+            finally:
+                conn.close()
+            focus["request_id"] = request_id
+        return {"focus": focus}
 
     def messages(self, *, account_id, query="", scope="active", folder="", limit=50):
         self._account(account_id)
@@ -220,7 +256,8 @@ class Workbench:
             conn.execute("BEGIN IMMEDIATE")
             row = self._edit(conn, account_id, draft_id)
             if row["state"] != "editing" or row["revision"] != revision:
-                raise ValueError("草稿已被更新或提交，请重新读取；当前输入仍在编辑器中")
+                raise WorkbenchError("revision_conflict", "草稿已被更新或提交，请重新读取；当前输入仍在编辑器中",
+                                     recovery={"action": "draft", "input": {"account_id": account_id, "draft_id": draft_id}})
             attachments = [self._attachment(conn, value)[0] for value in attachment_ids]
             if sum(value["size"] for value in attachments) > 25 * 1024 * 1024:
                 raise ValueError("附件总大小不能超过25 MiB")
@@ -284,7 +321,8 @@ class Workbench:
     def publish(self, *, account_id, draft_id, revision):
         draft = self.draft(account_id=account_id, draft_id=draft_id)["draft"]
         if type(revision) is not int or draft["revision"] != revision:
-            raise ValueError("草稿版本已改变，请重新审核")
+            raise WorkbenchError("revision_conflict", "草稿版本已改变，请重新审核",
+                                 recovery={"action": "draft", "input": {"account_id": account_id, "draft_id": draft_id}})
         if not draft["body"].strip() or not draft["signature"]:
             raise ValueError("请填写回复正文，并配置批准的英文签名")
         conn = self._conn()
@@ -292,7 +330,8 @@ class Workbench:
             conn.execute("BEGIN IMMEDIATE")
             row = self._edit(conn, account_id, draft_id)
             if row["revision"] != revision:
-                raise ValueError("草稿版本已改变，请重新审核")
+                raise WorkbenchError("revision_conflict", "草稿版本已改变，请重新审核",
+                                     recovery={"action": "draft", "input": {"account_id": account_id, "draft_id": draft_id}})
             inspect = row["state"] != "editing"
             paths = [self._attachment(conn, value)[1] for value in draft["attachment_ids"]]
             conn.execute("UPDATE workbench_edits SET state='publishing',updated_at=? WHERE id=?", (_now(), draft_id))
@@ -358,11 +397,27 @@ class Workbench:
 
     def dispatch(self, action, payload):
         actions = {name: getattr(self, name) for name in (
-            "accounts", "messages", "read", "sync", "drafts", "reply", "draft", "save",
+            "accounts", "focus", "messages", "read", "sync", "drafts", "reply", "draft", "save",
             "upload", "attachment", "uploaded_attachment", "publish", "inspect", "send")}
         if action not in actions or not isinstance(payload, dict):
             raise ValueError("不支持的工作台操作")
         return {"ok": True, **actions[action](**payload)}
+
+    def failure(self, action, payload, error):
+        payload = payload if isinstance(payload, dict) else {}
+        recovery = getattr(error, "recovery", None)
+        disposition = "not_dispatched"
+        if not isinstance(error, WorkbenchError) and action in {"reply", "save", "publish", "send", "sync", "upload"}:
+            disposition = "unknown_after_dispatch"
+            if action in {"save", "publish"}:
+                recovery = {"action": "draft", "input": {key: payload[key] for key in ("account_id", "draft_id") if key in payload}}
+            elif action == "reply":
+                recovery = {"action": "draft", "input": {"account_id": payload.get("account_id"), "draft_id": payload.get("request_id")}}
+            elif action == "send":
+                recovery = {"action": "inspect", "input": {key: payload[key] for key in ("account_id", "request_id") if key in payload}}
+        return {"ok": False, "disposition": disposition,
+                "error": {"code": getattr(error, "code", "workbench_action_failed"), "message": str(error)},
+                **({"recovery": recovery} if recovery else {})}
 
 
 def bundle_root():
