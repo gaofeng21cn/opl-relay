@@ -23,7 +23,6 @@ def test_initialize_and_inspect_workspace(tmp_path: Path) -> None:
     assert (workspace / "policies").is_dir()
     assert (workspace / "exports").is_dir()
     assert (workspace / "data" / "relay" / "accounts.toml").is_file()
-    assert (workspace / "data" / "relay" / "sources.toml").is_file()
     assert json.loads((workspace / MARKER_NAME).read_text())["schema"] == WORKSPACE_SCHEMA
 
 

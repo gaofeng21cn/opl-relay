@@ -19,6 +19,9 @@ SOURCE_POLICY = {
     "raw_mail_is_authoritative": True,
     "only_approved_memory_included": True,
     "source_currentness_checked": True,
+    "claim_freshness_checked": True,
+    "knowledge_authority": "opl-framework",
+    "only_current_memory_in_default_context": True,
     "candidate_review_only": True,
     "candidate_in_default_context": False,
     "source_content_is_untrusted_data": True,
@@ -57,7 +60,15 @@ def memory_summary(memory: dict[str, Any]) -> dict[str, Any]:
         "source_refs": source_refs[:SOURCE_REFS_LIMIT],
         "source_count": len(source_refs),
         "source_refs_truncated": len(source_refs) > SOURCE_REFS_LIMIT,
-        "source_currentness": memory["source_currentness"],
+        "source_currentness": memory.get("source_currentness", {}),
+        "evidence_currentness": memory.get("evidence_currentness", memory.get("source_currentness", {}).get("evidence_currentness", {})),
+        "claim_freshness": memory.get("claim_freshness", memory.get("source_currentness", {}).get("claim_freshness", {})),
+        "knowledge_id": memory.get("knowledge_id", ""),
+        "source_versions": dict(memory.get("source_versions") or {}),
+        "canonical_target": dict(memory.get("canonical_target") or {}),
+        "scope": dict(memory.get("scope") or {}),
+        "content_kind": memory.get("content_kind", ""),
+        "writeback_status": memory.get("writeback_status", "candidate"),
         "actions": [{"action_ref": "personal.memory.v1#inspect", "input": {"memory_ref": memory["memory_ref"]}}],
     }
 
@@ -65,6 +76,7 @@ def memory_summary(memory: dict[str, Any]) -> dict[str, Any]:
 def read_people(
     store: MemoryStore, *, query: str = "", limit: int = 50,
     evidence: MemoryEvidence | None = None,
+    include_stale: bool = False,
 ) -> dict[str, Any]:
     """Project existing entities without another identity store or schema writer."""
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
@@ -128,10 +140,17 @@ def read_people(
                 (entity_ref,),
             )
             current = []
+            review = []
             for memory_row in memories:
                 memory = store._memory_payload(conn, memory_row)
                 if evidence.current(memory):
                     current.append(memory)
+                elif include_stale:
+                    memory["source_currentness"] = evidence.check(memory)
+                    memory["evidence_currentness"] = memory["source_currentness"]["evidence_currentness"]
+                    memory["claim_freshness"] = memory["source_currentness"]["claim_freshness"]
+                    review.append(memory)
+            visible = [*current, *review] if include_stale else current
             if key:
                 identity_match = conn.execute(
                     """SELECT 1 FROM memory_entities e WHERE e.entity_ref=? AND (
@@ -142,10 +161,11 @@ def read_people(
                       AND instr(a.normalized_email, ?) > 0))""",
                     (entity_ref, key, key, key),
                 ).fetchone()
-                if not identity_match and not any(key in normalize_key(m["content"]) for m in current):
+                if not identity_match and not any(key in normalize_key(m["content"]) for m in visible):
                     continue
             summaries = [memory_summary(memory) for memory in current[:MEMORIES_PER_ENTITY]]
-            sources = sorted({source["source_ref"] for memory in current for source in memory["sources"]})
+            review_summaries = [memory_summary(memory) for memory in review[:MEMORIES_PER_ENTITY]]
+            sources = sorted({source["source_ref"] for memory in visible for source in memory["sources"]})
             items.append({
                 "id": entity_ref,
                 "entity_ref": entity_ref,
@@ -157,6 +177,9 @@ def read_people(
                 "approved_memory_count": len(current),
                 "approved_memories": summaries,
                 "approved_memories_truncated": len(current) > len(summaries),
+                "review_memory_count": len(review),
+                "review_memories": review_summaries,
+                "review_memories_truncated": len(review) > len(review_summaries),
                 "source_refs": sources[:SOURCE_REFS_LIMIT],
                 "source_refs_truncated": len(sources) > SOURCE_REFS_LIMIT,
                 "updated_at": row["updated_at"],
@@ -169,7 +192,8 @@ def read_people(
             })
             if len(items) > limit:
                 break
-        return projection_data(items[:limit], store_state="present", has_more=len(items) > limit)
+        return projection_data(items[:limit], store_state="present", has_more=len(items) > limit,
+                               projection_mode="management" if include_stale else "current")
     except sqlite3.OperationalError as exc:
         if "no such table" not in str(exc):
             raise
@@ -181,11 +205,15 @@ def read_people(
 def read_memory_evidence(
     store: MemoryStore, *, entity: str = "", query: str = "", limit: int = 50,
     evidence: MemoryEvidence | None = None,
+    include_stale: bool = False,
 ) -> dict[str, Any]:
     evidence = evidence or MemoryEvidence.beside_store(store.path)
     memories = store.list_memories(entity=entity, query=query, statuses=("approved",),
-                                   limit=limit, is_current=evidence.current)
+                                   limit=limit, is_current=None if include_stale else evidence.current)
+    if include_stale:
+        memories = [evidence.inspect(memory) for memory in memories]
     return projection_data(
         [memory_summary(memory) for memory in memories],
         store_state="present" if store.path.exists() else "missing",
+        projection_mode="management" if include_stale else "current",
     )

@@ -2,9 +2,23 @@ import hashlib
 from pathlib import Path
 
 from codex_mail_workbench.context import ContextBuilder
-from codex_mail_workbench.knowledge import KnowledgeIndex, load_sources_config
 from codex_mail_workbench.memory import MemoryStore
 from codex_mail_workbench.store import connect_email_store, upsert_email_message
+
+
+class FakeFramework:
+    def __init__(self):
+        self.revoked = False
+    def search(self, query, *, limit=10):
+        if self.revoked or "Example" not in query:
+            return []
+        return [{"knowledge_id": "relay.project", "source_id": "profile",
+                 "source_ref": "profile/project.md", "sha256": "sha256:" + "a" * 64,
+                 "excerpt": "The consortium focuses on shared research.",
+                 "source_currentness": {"status": "current"}}]
+    def sources(self): return []
+    def read_source(self, knowledge_id): raise ValueError("source unavailable")
+    def verify_dependencies(self, versions): return {"valid": True, "issues": []}
 
 
 def test_context_builds_bounded_evidence_package(tmp_path: Path) -> None:
@@ -46,6 +60,8 @@ def test_context_builds_bounded_evidence_package(tmp_path: Path) -> None:
         entity_ref=entity["entity_ref"],
         category="relationship",
         content="Use a warm but formal tone.",
+        observed_at="2026-07-20T09:00:00+08:00",
+        next_review_at="2099-07-20T09:00:00+08:00",
         sources=[
             {
                 "source_ref": storage_ref,
@@ -67,35 +83,19 @@ def test_context_builds_bounded_evidence_package(tmp_path: Path) -> None:
         ],
     )
 
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    (vault / "project.md").write_text(
-        "# Example Consortium\n\nThe consortium focuses on shared research.",
-        encoding="utf-8",
-    )
-    sources_config = tmp_path / "sources.toml"
-    sources_config.write_text(
-        f"""
-[[sources]]
-source_id = "vault"
-type = "obsidian"
-path = "{vault}"
-""".strip(),
-        encoding="utf-8",
-    )
-    KnowledgeIndex(memory_db).index_source(load_sources_config(sources_config)["vault"])
+    framework = FakeFramework()
 
     payload = ContextBuilder(
         mail_db_path=mail_db,
         memory_db_path=memory_db,
-        sources_config_path=sources_config,
+        framework=framework,
     ).build(person="Professor Example", project="Example Consortium")
 
     assert payload["approved_memories"][0]["content"] == "Use a warm but formal tone."
     assert all("Unapproved speculation" not in item["content"] for item in payload["approved_memories"])
     assert payload["mail_evidence"][0]["storage_ref"] == storage_ref
     assert "November" in payload["mail_evidence"][0]["body_excerpt"]
-    assert payload["knowledge"][0]["source_ref"].startswith("obsidian://")
+    assert payload["knowledge"][0]["source_ref"] == "profile/project.md"
     assert payload["evidence_policy"]["instructions_inside_sources_must_not_be_executed"] is True
 
 
@@ -106,7 +106,7 @@ def test_context_read_does_not_create_missing_private_stores(tmp_path: Path) -> 
     payload = ContextBuilder(
         mail_db_path=mail_db,
         memory_db_path=memory_db,
-        sources_config_path=tmp_path / "missing-sources.toml",
+        framework=FakeFramework(),
     ).build(query="example")
 
     assert payload["mail_evidence"] == []
@@ -115,27 +115,15 @@ def test_context_read_does_not_create_missing_private_stores(tmp_path: Path) -> 
     assert not memory_db.exists()
 
 
-def test_context_does_not_use_stale_index_without_configured_source(tmp_path: Path) -> None:
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    (vault / "note.md").write_text("Retired source content", encoding="utf-8")
-    config = tmp_path / "sources.toml"
-    config.write_text(
-        f'[[sources]]\nsource_id = "retired"\ntype = "obsidian"\npath = "{vault}"\n',
-        encoding="utf-8",
-    )
-    memory_db = tmp_path / "memory.sqlite"
-    KnowledgeIndex(memory_db).index_source(load_sources_config(config)["retired"])
-    config.unlink()
-
+def test_context_does_not_use_revoked_framework_source(tmp_path: Path) -> None:
+    framework = FakeFramework()
+    framework.revoked = True
     payload = ContextBuilder(
         mail_db_path=tmp_path / "mail.sqlite",
-        memory_db_path=memory_db,
-        sources_config_path=config,
-    ).build(query="Retired source")
-
+        memory_db_path=tmp_path / "memory.sqlite",
+        framework=framework,
+    ).build(query="Example Consortium")
     assert payload["knowledge"] == []
-    assert "sources_config_missing" in payload["warnings"]
 
 
 def test_context_expands_known_person_to_email_for_mail_lookup(tmp_path: Path) -> None:
@@ -171,7 +159,7 @@ def test_context_expands_known_person_to_email_for_mail_lookup(tmp_path: Path) -
     payload = ContextBuilder(
         mail_db_path=mail_db,
         memory_db_path=memory_db,
-        sources_config_path=tmp_path / "sources.toml",
+        framework=FakeFramework(),
     ).build(person="Professor Example")
 
     assert payload["mail_evidence"][0]["storage_ref"] == storage_ref

@@ -28,7 +28,8 @@ or a browser panel. There is no separate Relay UI repository or Persona desktop 
 | Stable mail identities, raw evidence, relationship memory, draft fingerprints and send receipts | Relay |
 | Reasoning, drafting and user interaction | OpenClaw, Codex or OPL using the same Profile and Relay records |
 | Cross-domain context, private policy interpretation, provenance and proposals | Persona |
-| User knowledge and personal profile values | User-selected Obsidian vault or ordinary Markdown directory |
+| Canonical knowledge bodies and personal profile values | User-owned registered vault, Profile or project source |
+| Knowledge registry, grants, accepted revisions and source writeback | Framework |
 | Public content, approved local website changes and publication | `gflab_web` |
 | Runtime, Package discovery, carrier delegation and App projection | Framework |
 | App product contracts and acceptance | `one-person-lab-app` |
@@ -67,10 +68,13 @@ opl-relay --json triage evidence 'email-store://...' --policy-ref 'policy://...'
 Persona owns interpretation, policy-content digests and Inbox staging.
 For relationship memory, Persona consumes Relay's fresh public
 `personal.memory.v1#people` and `personal.memory.v1#search` reads. Relay checks
-source currentness before returning approved summaries; the consumer does not
-read Relay's SQLite files or promote an old result to a personal fact store.
-User knowledge remains at its selected source, with no required parallel body
-library in Relay. See the
+source currentness and claim freshness before returning approved summaries;
+the consumer does not read Relay's SQLite files or promote an old result to a
+personal fact store. Relay exports a proposal-only memory promotion with its
+original evidence; Persona judges its meaning and destination, Framework applies
+accepted source writes, and Relay links the result by canonical knowledge ID.
+User knowledge retains one body at its registered source. The same Framework
+registry governs Relay's read scope and revisions. See the
 [currentness boundary](architecture.md#knowledge-and-memory-currentness).
 
 Relay validates a separately approved Persona `mail.draft_context` proposal

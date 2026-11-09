@@ -38,7 +38,6 @@ def run_app_contribution(
     request: dict[str, object],
     *,
     memory_db: Path | None = None,
-    sources_config: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     root = Path(__file__).resolve().parents[1]
@@ -53,8 +52,6 @@ def run_app_contribution(
     ]
     if memory_db is not None:
         command.extend(["--memory-db", str(memory_db)])
-    if sources_config is not None:
-        command.extend(["--sources-config", str(sources_config)])
     command.append("app-contribution")
     return subprocess.run(
         command,
@@ -520,7 +517,7 @@ def test_cli_doctor_reports_current_private_paths(tmp_path: Path) -> None:
     assert payload["workspace"]["path"]
     assert payload["draft_db_path"].endswith("drafts.sqlite")
     assert payload["memory_db_path"].endswith("memory.sqlite")
-    assert payload["sources_config_path"].endswith("sources.toml")
+    assert payload["knowledge_authority"] == "opl-framework"
 
 
 def test_cli_exposes_workspace_commands() -> None:
@@ -659,6 +656,8 @@ def test_cli_memory_candidate_approval_flow(tmp_path: Path) -> None:
         "We met at the annual consortium meeting.",
         "--source",
         "user://statement/2026-07-27",
+        "--occurred-at",
+        "2026-07-27T00:00:00Z",
     )
     assert proposal.returncode == 0, proposal.stderr
     memory_ref = json.loads(proposal.stdout)["memory"]["memory_ref"]
@@ -676,7 +675,14 @@ def test_cli_memory_candidate_approval_flow(tmp_path: Path) -> None:
 
     assert json.loads(before.stdout)["memories"] == []
     assert json.loads(approved.stdout)["memory"]["status"] == "approved"
-    assert json.loads(after.stdout)["memories"][0]["memory_ref"] == memory_ref
+    assert json.loads(after.stdout)["memories"] == []
+    history = run_cli(db, "--memory-db", str(memory_db), "memory", "search", "--include-stale")
+    assert history.returncode == 0, history.stderr
+    memory = json.loads(history.stdout)["memories"][0]
+    assert memory["memory_ref"] == memory_ref
+    assert memory["evidence_currentness"]["status"] == "current"
+    assert memory["claim_freshness"]["status"] == "historical"
+    assert memory["source_currentness"]["status"] == "historical"
 
 
 def test_cli_exposes_draft_lifecycle() -> None:

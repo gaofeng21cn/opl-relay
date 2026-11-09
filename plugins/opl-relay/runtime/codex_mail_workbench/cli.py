@@ -4,6 +4,7 @@ import argparse
 import copy
 import getpass
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -24,7 +25,7 @@ from .config import (
 )
 from .context import ContextBuilder
 from .drafts import DraftLedger, DraftService, Recipient
-from .knowledge import KnowledgeIndex, load_sources_config
+from .knowledge import FrameworkKnowledge, KnowledgeIndex
 from .memory_evidence import MemoryEvidence
 from .mailbox import MailboxMoveFailure, move_messages
 from .memory import (
@@ -46,7 +47,6 @@ from .paths import (
     default_drafts_db_path,
     default_memory_db_path,
     default_profile_workspace,
-    default_sources_config_path,
     default_state_dir,
     profile_workspace_source,
     state_dir_source,
@@ -123,6 +123,7 @@ APP_CONTRIBUTION_DATA_CONTRACTS = {
             "entity": {"type": "string", "required": False},
             "query": {"type": "string", "required": False},
             "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
+            "include_stale": {"type": "boolean", "required": False, "default": False},
         },
         "result": "personal.memory.v1#search.result",
     },
@@ -131,6 +132,7 @@ APP_CONTRIBUTION_DATA_CONTRACTS = {
         "input": {
             "query": {"type": "string", "required": False},
             "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
+            "include_stale": {"type": "boolean", "required": False, "default": False},
         },
         "result": "personal.memory.v1#people.result",
     },
@@ -694,6 +696,7 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
                 limit=_app_contribution_integer(
                     payload.get("limit"), "limit", default=50, minimum=1, maximum=500
                 ),
+                include_stale=bool(payload.get("include_stale", False)),
             ),
         )
     if ref == "personal.memory.v1#search":
@@ -706,6 +709,7 @@ def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str
                 limit=_app_contribution_integer(
                     payload.get("limit"), "limit", default=50, minimum=1, maximum=500
                 ),
+                include_stale=bool(payload.get("include_stale", False)),
             ),
         )
     raise ValueError("unsupported data ref")
@@ -817,7 +821,7 @@ def _app_contribution_action(args: argparse.Namespace, ref: str, payload: dict[s
         return ContextBuilder(
             mail_db_path=Path(args.db).expanduser(),
             memory_db_path=Path(args.memory_db).expanduser(),
-            sources_config_path=Path(args.sources_config).expanduser(),
+            framework=framework_knowledge(args),
         ).build(
             person=_app_contribution_string(payload.get("person"), "person"),
             project=_app_contribution_string(payload.get("project"), "project"),
@@ -911,24 +915,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     db_path = Path(args.db).expanduser()
     drafts_db_path = Path(args.draft_db).expanduser()
     memory_db_path = Path(args.memory_db).expanduser()
-    sources_config_path = Path(args.sources_config).expanduser()
     workspace = inspect_workspace(default_profile_workspace())
     setup = setup_status(default_profile_workspace())
     accounts = {}
     config_error = ""
-    sources_error = ""
     if config_path.exists():
         try:
             accounts = load_accounts_config(config_path)
         except Exception as exc:
             config_error = str(exc)
-    if sources_config_path.exists():
-        try:
-            load_sources_config(sources_config_path)
-        except Exception as exc:
-            sources_error = str(exc)
     payload = {
-        "ok": not config_error and not sources_error,
+        "ok": not config_error,
         "product": "opl-relay",
         "version": __version__,
         "command": shutil.which("opl-relay"),
@@ -951,9 +948,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "draft_db_exists": drafts_db_path.exists(),
         "memory_db_path": str(memory_db_path),
         "memory_db_exists": memory_db_path.exists(),
-        "sources_config_path": str(sources_config_path),
-        "sources_config_exists": sources_config_path.exists(),
-        "sources_config_error": sources_error,
+        "knowledge_authority": "opl-framework",
+        "knowledge_project": getattr(args, "knowledge_project", ""),
         "apple_mail_available": sys.platform == "darwin" and bool(shutil.which("osascript")),
         "accounts": sorted(accounts.keys()),
         "keychain_services": [KEYCHAIN_SERVICE],
@@ -1363,9 +1359,14 @@ def memory_store(args: argparse.Namespace) -> MemoryStore:
     return MemoryStore(Path(args.memory_db).expanduser())
 
 
+def framework_knowledge(args: argparse.Namespace) -> FrameworkKnowledge:
+    project = getattr(args, "knowledge_project", "")
+    return FrameworkKnowledge(project_root=Path(project) if project else None)
+
+
 def memory_evidence(args: argparse.Namespace) -> MemoryEvidence:
     return MemoryEvidence(mail_db_path=Path(args.db).expanduser(),
-                          sources_config_path=Path(args.sources_config).expanduser())
+                          framework=framework_knowledge(args))
 
 
 def cmd_memory_entity_upsert(args: argparse.Namespace) -> int:
@@ -1388,6 +1389,8 @@ def cmd_memory_entity_list(args: argparse.Namespace) -> int:
 def _source_kind(source_ref: str) -> str:
     if source_ref.startswith("email-store://"):
         return "email"
+    if source_ref.startswith("knowledge://"):
+        return "knowledge"
     if source_ref.startswith("obsidian://"):
         return "obsidian"
     if source_ref.startswith("markdown://"):
@@ -1417,7 +1420,7 @@ def _memory_sources(args: argparse.Namespace) -> list[dict[str, str]]:
             "source_kind": _source_kind(source_ref),
             "excerpt": excerpts[index] if excerpts else "",
             "source_sha256": (evidence.source_digest(source_ref, _source_kind(source_ref))
-                              if _source_kind(source_ref) in {"email", "obsidian", "markdown"}
+                              if _source_kind(source_ref) in {"email", "knowledge", "obsidian", "markdown"}
                               else ""),
         }
         for index, source_ref in enumerate(source_refs)
@@ -1438,6 +1441,9 @@ def cmd_memory_propose(args: argparse.Namespace) -> int:
         valid_from=args.valid_from,
         valid_until=args.valid_until,
         supersedes_ref=args.supersedes,
+        observed_at=args.observed_at,
+        next_review_at=args.next_review_at,
+        content_kind=args.content_kind,
     )
     emit({"ok": True, "memory": memory}, as_json=args.json)
     return 0
@@ -1504,53 +1510,81 @@ def cmd_memory_forget(args: argparse.Namespace) -> int:
 
 
 def cmd_sources_list(args: argparse.Namespace) -> int:
-    config_path = Path(args.sources_config).expanduser()
-    sources = load_sources_config(config_path)
-    counts = KnowledgeIndex(Path(args.memory_db).expanduser()).source_counts()
-    emit(
-        {
-            "ok": True,
-            "config_path": str(config_path),
-            "sources": [
-                {
-                    "source_id": source.source_id,
-                    "type": source.kind,
-                    "path": str(source.path),
-                    "include": list(source.include),
-                    "exclude": list(source.exclude),
-                    "indexed_documents": counts.get(source.source_id, 0),
-                }
-                for source in sources.values()
-            ],
-        },
-        as_json=args.json,
-    )
+    sources = framework_knowledge(args).sources()
+    emit({"ok": True, "authority": "opl-framework", "sources": sources}, as_json=args.json)
     return 0
 
 
 def cmd_sources_index(args: argparse.Namespace) -> int:
-    sources = load_sources_config(Path(args.sources_config).expanduser())
-    selected = (
-        [sources[args.source]]
-        if args.source and args.source in sources
-        else list(sources.values())
-    )
-    if args.source and args.source not in sources:
-        raise KeyError(f"knowledge source not found: {args.source}")
-    index = KnowledgeIndex(Path(args.memory_db).expanduser())
-    results = [index.index_source(source) for source in selected]
-    emit({"ok": True, "results": results}, as_json=args.json)
+    result = KnowledgeIndex(Path(args.memory_db).expanduser()).rebuild(framework_knowledge(args))
+    emit({"ok": True, "result": result}, as_json=args.json)
     return 0
 
 
 def cmd_sources_search(args: argparse.Namespace) -> int:
     results = KnowledgeIndex(Path(args.memory_db).expanduser()).search(
-        args.query,
-        sources=load_sources_config(Path(args.sources_config).expanduser()),
-        source_ids=args.source,
-        limit=args.limit,
-    )
+        args.query, framework=framework_knowledge(args), source_ids=args.source, limit=args.limit)
     emit({"ok": True, "results": results}, as_json=args.json)
+    return 0
+
+
+def cmd_sources_discover(args: argparse.Namespace) -> int:
+    payload = framework_knowledge(args).discover(args.query, limit=args.limit)
+    emit({"ok": True, **payload}, as_json=args.json)
+    return 0
+
+
+def _private_json_output(path: str, payload: object) -> None:
+    target = Path(path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Export never overwrites source notes or an existing review artifact.
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+
+
+def cmd_memory_export(args: argparse.Namespace) -> int:
+    payload = {**memory_store(args).export_memories(entity=args.entity), "authority": "opl-relay"}
+    _private_json_output(args.output, payload)
+    emit({"ok": True, "output": str(Path(args.output).expanduser()),
+          "count": payload["count"]}, as_json=args.json)
+    return 0
+
+
+def cmd_memory_link(args: argparse.Namespace) -> int:
+    framework = framework_knowledge(args)
+    source = framework.read_source(args.knowledge_id)
+    versions = {args.knowledge_id: source["sha256"]}
+    if not framework.verify_dependencies(versions).get("valid"):
+        raise ValueError("canonical_source_not_current")
+    metadata = next((item for item in framework.sources() if item["knowledge_id"] == args.knowledge_id), None)
+    if metadata is None or metadata["body_ref"]["sha256"] != source["sha256"]:
+        raise ValueError("canonical_source_changed")
+    linked = memory_store(args).link_memory(
+        args.memory_ref, knowledge_id=args.knowledge_id, source_versions=versions,
+        canonical_target={"source_id": source["source_id"], "ref": source["source_ref"], "sha256": source["sha256"]},
+        scope=source["scope"], content_kind=source["content_kind"],
+        observed_at=args.observed_at or metadata.get("reviewed_at", ""),
+        next_review_at=args.next_review_at or metadata.get("next_review_at", ""))
+    emit({"ok": True, "memory": memory_evidence(args).inspect(linked)}, as_json=args.json)
+    return 0
+
+
+def cmd_memory_promote(args: argparse.Namespace) -> int:
+    store = memory_store(args)
+    memory = store.get_memory(args.memory_ref)
+    if memory is None:
+        raise ValueError("memory not found")
+    if memory["status"] not in {"candidate", "approved"}:
+        raise ValueError("only candidate or approved memory can be proposed for promotion")
+    payload = {"version": "relay-memory-promotion.v1", "proposal_only": True,
+               "semantic_owner": "persona", "writeback_owner": "opl-framework",
+               "target_knowledge_id": args.knowledge_id, "memory": memory_evidence(args).inspect(memory)}
+    _private_json_output(args.output, payload)
+    store.record_promotion(args.memory_ref, proposal_ref=str(Path(args.output).expanduser().resolve()),
+                           knowledge_id=args.knowledge_id)
+    emit({"ok": True, "proposal_only": True, "output": str(Path(args.output).expanduser())}, as_json=args.json)
     return 0
 
 
@@ -1558,7 +1592,7 @@ def cmd_context_build(args: argparse.Namespace) -> int:
     payload = ContextBuilder(
         mail_db_path=Path(args.db).expanduser(),
         memory_db_path=Path(args.memory_db).expanduser(),
-        sources_config_path=Path(args.sources_config).expanduser(),
+        framework=framework_knowledge(args),
     ).build(
         person=args.person,
         project=args.project,
@@ -1907,9 +1941,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="私有记忆与知识索引 SQLite 路径",
     )
     parser.add_argument(
-        "--sources-config",
-        default=str(default_sources_config_path()),
-        help="外部知识源 sources.toml 路径",
+        "--knowledge-project", default="",
+        help="Framework 知识授权的项目根目录；不是 context 的项目检索词",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -2049,6 +2082,9 @@ def build_parser() -> argparse.ArgumentParser:
     memory_propose.add_argument("--valid-from", default="")
     memory_propose.add_argument("--valid-until", default="")
     memory_propose.add_argument("--supersedes", default="")
+    memory_propose.add_argument("--observed-at", default="")
+    memory_propose.add_argument("--next-review-at", default="")
+    memory_propose.add_argument("--content-kind", choices=["policy", "state", "decision", "mechanism"], default="")
     memory_propose.set_defaults(func=cmd_memory_propose)
 
     memory_candidates = memory_actions.add_parser("candidates", help="列出待审核记忆")
@@ -2083,18 +2119,37 @@ def build_parser() -> argparse.ArgumentParser:
         action.add_argument("memory_ref")
         action.set_defaults(func=handler)
 
-    sources = sub.add_parser("sources", help="预配置并索引外部知识源")
+    export = memory_actions.add_parser("export", help="保留原证据导出私有迁移文件")
+    export.add_argument("--entity", default="")
+    export.add_argument("--output", required=True)
+    export.set_defaults(func=cmd_memory_export)
+    link = memory_actions.add_parser("link", help="关联经 Framework 核验的唯一知识正文")
+    link.add_argument("memory_ref")
+    link.add_argument("--knowledge-id", required=True)
+    link.add_argument("--observed-at", default="")
+    link.add_argument("--next-review-at", default="")
+    link.set_defaults(func=cmd_memory_link)
+    promote = memory_actions.add_parser("promote", help="导出交给 Persona 判断的长期知识晋升提案")
+    promote.add_argument("memory_ref")
+    promote.add_argument("--knowledge-id", required=True)
+    promote.add_argument("--output", required=True)
+    promote.set_defaults(func=cmd_memory_promote)
+
+    sources = sub.add_parser("sources", help="读取 Framework 授权知识")
     source_actions = sources.add_subparsers(dest="sources_action", required=True)
-    source_list = source_actions.add_parser("list", help="列出知识源及索引状态")
+    source_list = source_actions.add_parser("list", help="列出 Framework 已授权接受的知识元信息")
     source_list.set_defaults(func=cmd_sources_list)
-    source_index = source_actions.add_parser("index", help="建立或更新只读知识索引")
-    source_index.add_argument("--source", default="")
+    source_index = source_actions.add_parser("index", help="重建可丢弃的知识元信息目录")
     source_index.set_defaults(func=cmd_sources_index)
-    source_search = source_actions.add_parser("search", help="搜索已建立的知识索引")
+    source_search = source_actions.add_parser("search", help="通过 Framework 检索当前已接受知识")
     source_search.add_argument("query")
     source_search.add_argument("--source", action="append", default=[])
     source_search.add_argument("--limit", type=int, default=10)
     source_search.set_defaults(func=cmd_sources_search)
+    discover = source_actions.add_parser("discover", help="发现来源授权内的未审阅候选；不作为当前事实")
+    discover.add_argument("query")
+    discover.add_argument("--limit", type=int, default=10)
+    discover.set_defaults(func=cmd_sources_discover)
 
     context = sub.add_parser("context", help="组装起草所需的最小证据上下文")
     context_actions = context.add_subparsers(dest="context_action", required=True)

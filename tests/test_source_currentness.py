@@ -1,230 +1,181 @@
 import hashlib
-import json
 import sqlite3
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from codex_mail_workbench import cli
-from codex_mail_workbench.context import ContextBuilder
-from codex_mail_workbench.knowledge import KnowledgeIndex, load_sources_config, resolve_source_ref
 from codex_mail_workbench.memory import MemoryStore
 from codex_mail_workbench.memory_evidence import MemoryEvidence
-from codex_mail_workbench.people import read_memory_evidence, read_people
-from test_app_contribution_cli import invoke
+from codex_mail_workbench.store import connect_email_store, upsert_email_message
 
 
-def seed_source(tmp_path: Path, *, kind="obsidian", source_hash=True, **memory_fields):
-    profile = tmp_path / "profile"
-    state = profile / "data" / "relay"
-    state.mkdir(parents=True)
-    vault = tmp_path / "notes"
-    vault.mkdir()
-    note = vault / "note.md"
-    note.write_bytes(b"# Colleague\r\n\r\nOriginal source evidence.")
-    config = state / "sources.toml"
-    config.write_text(f'[[sources]]\nsource_id="notes"\ntype="{kind}"\npath="{vault}"\n')
-    sources = load_sources_config(config)
-    index = KnowledgeIndex(state / "memory.sqlite")
-    index.index_source(sources["notes"])
-    store = MemoryStore(index.path)
+class FrameworkFixture:
+    """A typed owner response: Relay never opens the source's physical path."""
+
+    def __init__(self):
+        self.body = "# Colleague\n\nReviewed current collaboration."
+        self.accepted_hash = "sha256:" + hashlib.sha256(self.body.encode()).hexdigest()
+        self.active = True
+        self.current = True
+        self.identity = {"source_id": "notes", "source_ref": "people/colleague.md",
+                         "scope": {"kind": "owner", "id": "owner"}, "content_kind": "state"}
+        self.verify_calls = []
+
+    def read_source(self, knowledge_id):
+        if not self.active:
+            raise ValueError("knowledge_source_unauthorized:" + knowledge_id)
+        if not self.current:
+            raise ValueError("knowledge_review_overdue:" + knowledge_id)
+        return {"knowledge_id": knowledge_id, "sha256": self.accepted_hash,
+                "content": self.body, **self.identity}
+
+    def verify_dependencies(self, versions):
+        self.verify_calls.append(dict(versions))
+        if not self.active:
+            return {"valid": False, "issues": ["knowledge_source_unauthorized:owner.colleague"]}
+        if not self.current:
+            return {"valid": False, "issues": ["knowledge_review_overdue:owner.colleague"]}
+        if versions.get("owner.colleague") != self.accepted_hash:
+            return {"valid": False, "issues": ["knowledge_source_revision_changed:owner.colleague"]}
+        return {"valid": True, "issues": []}
+
+
+def seed_memory(tmp_path, *, source_kind="knowledge", canonical=True, **fields):
+    framework = FrameworkFixture()
+    store = MemoryStore(tmp_path / "profile" / "data" / "relay" / "memory.sqlite")
     entity = store.upsert_entity(kind="person", canonical_name="Colleague")
-    memory = store.propose_memory(
-        entity_ref=entity["entity_ref"], category="fact", content="SOURCE-BOUND APPROVED SUMMARY",
-        sources=[{"source_ref": f"{kind}://notes/note.md", "source_kind": kind,
-                  "source_sha256": hashlib.sha256(note.read_bytes()).hexdigest() if source_hash else ""}],
-        **memory_fields,
-    )
-    store.approve(memory["memory_ref"])
-    return profile, state, note, config, store, entity, memory
-
-
-@pytest.mark.parametrize("change", ["edit", "delete", "disable", "exclude", "include", "symlink"])
-def test_source_changes_are_excluded_from_context_and_public_reads_without_deleting_history(tmp_path, change):
-    profile, state, note, config, store, _, memory = seed_source(tmp_path)
-    before = store.path.read_bytes()
-    for ref in ("personal.memory.v1#people", "personal.memory.v1#search"):
-        code, result = invoke(profile, ref)
-        assert code == 0 and "SOURCE-BOUND APPROVED SUMMARY" in json.dumps(result)
-        assert result["result"]["data"]["source_policy"]["source_currentness_checked"] is True
-    if change == "edit":
-        note.write_text("Changed source evidence")
-    elif change == "delete":
-        note.unlink()
-    elif change == "disable":
-        config.write_text(config.read_text() + "enabled=false\n")
-    elif change in {"exclude", "include"}:
-        pattern = "note.md" if change == "exclude" else "other/*.md"
-        config.write_text(config.read_text() + f'{change}=["{pattern}"]\n')
+    if source_kind == "knowledge":
+        source = {"source_ref": "knowledge://owner.colleague", "source_kind": "knowledge",
+                  "source_sha256": framework.accepted_hash.removeprefix("sha256:")}
     else:
-        external = tmp_path / "private.md"
-        external.write_bytes(note.read_bytes())
-        note.unlink()
-        note.symlink_to(external)
-    for ref in ("personal.memory.v1#people", "personal.memory.v1#search"):
-        code, result = invoke(profile, ref)
-        assert code == 0 and "SOURCE-BOUND APPROVED SUMMARY" not in json.dumps(result)
-        code, result = invoke(profile, ref, payload={"query": "SOURCE-BOUND"})
-        assert code == 0 and result["result"]["data"]["items"] == []
-    context = ContextBuilder(mail_db_path=state / "mail.sqlite", memory_db_path=store.path,
-                             sources_config_path=config).build(person="Colleague", query="Original")
-    assert context["approved_memories"] == context["knowledge"] == []
-    code, result = invoke(profile, "personal.memory.v1#inspect", operation="execute",
-                          payload={"memory_ref": memory["memory_ref"]})
-    assert code == 0
-    assert result["result"]["memory"]["source_currentness"]["status"] == "needs_review"
-    assert store.get_memory(memory["memory_ref"])["status"] == "approved"
-    assert store.path.read_bytes() == before
+        source = {"source_ref": "user://statement/colleague", "source_kind": "user"}
+    kwargs = {"category": "fact", "observed_at": "2020-01-01T00:00:00Z",
+              "next_review_at": "2100-01-01T00:00:00Z", **fields}
+    memory = store.propose_memory(entity_ref=entity["entity_ref"], content="Reviewed collaboration",
+                                  sources=[source], **kwargs)
+    store.approve(memory["memory_ref"])
+    if canonical:
+        memory = store.link_memory(
+            memory["memory_ref"], knowledge_id="owner.colleague",
+            source_versions={"owner.colleague": framework.accepted_hash},
+            canonical_target={"source_id": "notes", "ref": "people/colleague.md",
+                              "sha256": framework.accepted_hash},
+            scope=framework.identity["scope"], content_kind=framework.identity["content_kind"],
+            observed_at=kwargs["observed_at"], next_review_at=kwargs["next_review_at"],
+        )
+    else:
+        memory = store.get_memory(memory["memory_ref"])
+    evidence = MemoryEvidence(mail_db_path=store.path.parent / "mail.sqlite", framework=framework)
+    return store, memory, framework, evidence
 
 
-def test_markdown_source_and_raw_byte_revision_are_supported(tmp_path):
-    _, _, note, config, store, _, memory = seed_source(tmp_path, kind="markdown")
-    result = read_memory_evidence(store)
-    assert result["items"][0]["memory_ref"] == memory["memory_ref"]
-    sources = load_sources_config(config)
-    found = KnowledgeIndex(store.path).search("Original", sources=sources)
-    assert found[0]["content_sha256"] == hashlib.sha256(note.read_bytes()).hexdigest()
-    assert found[0]["source_ref"] == "markdown://notes/note.md"
-
-
-def test_index_repairs_source_type_changes_and_does_not_trust_modified_cached_content(tmp_path):
-    _, _, _, config, store, _, _ = seed_source(tmp_path)
-    index = KnowledgeIndex(store.path)
-    config.write_text(config.read_text().replace('type="obsidian"', 'type="markdown"'))
-    sources = load_sources_config(config)
-    assert index.search("Original", sources=sources) == []
-    assert index.index_source(sources["notes"])["indexed"] == 1
-    assert index.search("Original", sources=sources)[0]["source_ref"] == "markdown://notes/note.md"
-    with sqlite3.connect(store.path) as conn:
-        conn.execute("UPDATE knowledge_documents SET content='Injected cached assertion'")
-    assert index.search("Injected", sources=sources) == []
-    assert index.index_source(sources["notes"])["indexed"] == 1
-    assert index.search("Original", sources=sources)
+@pytest.mark.parametrize("change,reason", [
+    ("revoke", "knowledge_source_unauthorized"),
+    ("accepted_revision", "knowledge_source_revision_changed"),
+    ("overdue", "knowledge_review_overdue"),
+    ("identity", "canonical_source_identity_changed"),
+    ("scope", "canonical_source_semantics_changed"),
+])
+def test_framework_changes_exclude_memory_without_changing_history(tmp_path, change, reason):
+    store, memory, framework, evidence = seed_memory(tmp_path, source_kind="user")
+    before = store.export_memories()["memories"]
+    assert evidence.current(memory)
+    if change == "revoke":
+        framework.active = False
+    elif change == "accepted_revision":
+        framework.accepted_hash = "sha256:" + "b" * 64
+    elif change == "overdue":
+        framework.current = False
+    elif change == "identity":
+        framework.identity["source_ref"] = "moved/colleague.md"
+    else:
+        framework.identity["scope"] = {"kind": "project", "id": "another"}
+    assert store.list_memories(is_current=evidence.current) == []
+    inspected = evidence.inspect(store.get_memory(memory["memory_ref"]))
+    assert any(reason in item for item in inspected["source_currentness"]["reasons"])
+    assert inspected["evidence_currentness"]["status"] == "needs_review"
+    assert store.export_memories()["memories"] == before
 
 
 @pytest.mark.parametrize("fields,reason", [
     ({"valid_until": "2000-01-01T00:00:00Z"}, "memory_expired"),
     ({"valid_from": "2100-01-01T00:00:00Z"}, "memory_not_yet_valid"),
     ({"valid_until": "not-a-date"}, "memory_validity_invalid"),
-    ({"source_hash": False}, "source_revision_missing"),
+    ({"observed_at": ""}, "claim_observed_at_missing"),
+    ({"next_review_at": "2001-01-01T00:00:00Z"}, "claim_review_overdue"),
+    ({"next_review_at": ""}, "claim_review_deadline_missing"),
+    ({"observed_at": "2120-01-01T00:00:00Z"}, "claim_observation_in_future"),
 ])
-def test_approved_status_does_not_override_validity_or_missing_source_revision(tmp_path, fields, reason):
-    _, _, _, _, store, _, memory = seed_source(tmp_path, **fields)
-    assert read_memory_evidence(store)["items"] == []
-    check = MemoryEvidence.beside_store(store.path).check(store.get_memory(memory["memory_ref"]))
-    assert reason in check["reasons"]
+def test_current_evidence_does_not_make_an_expired_or_undated_claim_current(tmp_path, fields, reason):
+    store, memory, _, evidence = seed_memory(tmp_path, **fields)
+    result = evidence.check(memory)
+    assert result["evidence_currentness"]["status"] == "current"
+    assert result["claim_freshness"]["status"] == "needs_review"
+    assert reason in result["reasons"]
+    assert not evidence.current(memory)
     assert store.get_memory(memory["memory_ref"])["status"] == "approved"
 
 
-def test_proposal_captures_revision_and_approval_does_not_rebase_changed_evidence(tmp_path, capsys):
-    _, state, note, config, store, entity, original = seed_source(tmp_path)
-    args = SimpleNamespace(db=str(state / "mail.sqlite"), memory_db=str(store.path),
-                           sources_config=str(config), source=["obsidian://notes/note.md"],
-                           source_excerpt=[], memory_ref=original["memory_ref"], json=True)
-    original_hash = original["sources"][0]["source_sha256"]
-    note.write_text("New evidence requiring a separate acceptance")
-    with pytest.raises(ValueError, match="source_revision_changed"):
-        cli.cmd_memory_approve(args)
-    assert store.get_memory(original["memory_ref"])["sources"][0]["source_sha256"] == original_hash
-    sources = cli._memory_sources(args)
-    assert sources[0]["source_sha256"] == hashlib.sha256(note.read_bytes()).hexdigest()
-    proposal = store.propose_memory(entity_ref=entity["entity_ref"], category="fact",
-                                    content=original["content"], sources=sources)
-    assert proposal["memory_ref"] != original["memory_ref"]
-    assert proposal["status"] == "candidate" and proposal["supersedes_ref"] == original["memory_ref"]
-    assert store.get_memory(original["memory_ref"])["sources"][0]["source_sha256"] == original_hash
-    args.memory_ref = proposal["memory_ref"]
-    assert cli.cmd_memory_approve(args) == 0
-    capsys.readouterr()
-    assert store.get_memory(original["memory_ref"])["status"] == "superseded"
+def test_history_is_verifiable_but_not_current_state(tmp_path):
+    _, memory, _, evidence = seed_memory(tmp_path, source_kind="user", canonical=False,
+                                         category="event", occurred_at="2024-06-01T00:00:00Z")
+    result = evidence.check(memory)
+    assert result["status"] == "historical"
+    assert result["evidence_currentness"]["status"] == "current"
+    assert result["claim_freshness"]["status"] == "historical"
+    assert not evidence.current(memory)
+    # Evidence approval does not claim the event is a current role or preference.
+    assert evidence.check(memory, approving=True)["status"] == "current"
 
 
-def test_reviewed_revisions_use_complete_evidence_validity_and_current_predecessor(tmp_path):
-    _, _, _, _, store, entity, original = seed_source(tmp_path)
-    user = {"source_ref": "user://statement/confirmation", "source_kind": "user"}
-    def propose(sources, **kwargs):
-        return store.propose_memory(entity_ref=entity["entity_ref"], category="fact",
-                                    content=original["content"], sources=sources, **kwargs)
-    second = propose([*original["sources"], user])
-    store.approve(second["memory_ref"])
-    removed = propose([user])
-    assert removed["sources"] == [{**user, "excerpt": "", "source_sha256": ""}]
-    assert removed["supersedes_ref"] == second["memory_ref"]
-    store.approve(removed["memory_ref"])
-    dated = propose([user], valid_until="2100-01-01T00:00:00Z")
-    assert dated["memory_ref"] != removed["memory_ref"]
-    assert dated["supersedes_ref"] == removed["memory_ref"]
-    store.approve(dated["memory_ref"])
-    repeated = propose([user], valid_until="2100-01-01T00:00:00Z")
-    assert repeated == store.get_memory(dated["memory_ref"])
-    current = read_memory_evidence(store)["items"]
-    assert [item["memory_ref"] for item in current] == [dated["memory_ref"]]
-    assert store.get_memory(removed["memory_ref"])["valid_until"] == ""
+def test_unlinked_user_claim_can_be_reviewed_but_not_injected_as_personal_truth(tmp_path):
+    _, memory, _, evidence = seed_memory(tmp_path, source_kind="user", canonical=False)
+    assert evidence.check(memory, approving=True)["status"] == "current"
+    result = evidence.check(memory)
+    assert result["status"] == "needs_review"
+    assert "canonical_link_required" in result["reasons"]
+    assert result["repair"]["requires_canonical_link"] is True
 
 
-def test_competing_revision_requires_fresh_review_after_predecessor_changes(tmp_path):
-    _, _, _, _, store, entity, original = seed_source(tmp_path)
-    def propose(excerpt):
-        return store.propose_memory(entity_ref=entity["entity_ref"], category="fact",
-                                    content=original["content"], sources=[{
-                                        "source_ref": "user://statement/confirmed",
-                                        "source_kind": "user", "excerpt": excerpt}])
-    first = propose("First")
-    competing = propose("Competing")
-    store.approve(first["memory_ref"])
-    with pytest.raises(ValueError, match="propose a fresh revision"):
-        store.approve(competing["memory_ref"])
-    fresh = propose("Competing")
-    assert fresh["supersedes_ref"] == first["memory_ref"]
-    assert fresh["memory_ref"] != competing["memory_ref"]
-    store.approve(fresh["memory_ref"])
-    assert [m["memory_ref"] for m in read_memory_evidence(store)["items"]] == [fresh["memory_ref"]]
+def test_registered_knowledge_reads_require_framework_and_exact_evidence_revision(tmp_path):
+    _, memory, framework, evidence = seed_memory(tmp_path)
+    assert evidence.source_digest("knowledge://owner.colleague", "knowledge") == framework.accepted_hash[7:]
+    memory["sources"][0]["source_sha256"] = ""
+    assert "source_revision_missing" in evidence.check(memory)["reasons"]
+    memory["sources"][0]["source_sha256"] = "c" * 64
+    assert "source_revision_changed" in evidence.check(memory)["reasons"]
+    with pytest.raises(ValueError, match="source_requires_framework_registration"):
+        evidence.source_digest("obsidian://notes/people/colleague.md", "obsidian")
+    with pytest.raises(ValueError, match="source_requires_framework_registration"):
+        evidence.source_digest("markdown://notes/people/colleague.md", "markdown")
 
 
-def test_competing_initial_candidates_do_not_create_two_accepted_versions(tmp_path):
-    store = MemoryStore(tmp_path / "memory.sqlite")
-    entity = store.upsert_entity(kind="person", canonical_name="Colleague")
-    def propose(excerpt):
-        return store.propose_memory(entity_ref=entity["entity_ref"], category="fact",
-                                    content="Confirmed assertion", sources=[{
-                                        "source_ref": "user://statement/confirmed",
-                                        "source_kind": "user", "excerpt": excerpt}])
-    first, second = propose("First"), propose("Second")
-    assert first["supersedes_ref"] == second["supersedes_ref"] == ""
-    store.approve(first["memory_ref"])
-    with pytest.raises(ValueError, match="predecessor changed"):
-        store.approve(second["memory_ref"])
-    renewed = propose("Second")
-    store.approve(renewed["memory_ref"])
-    assert [m["memory_ref"] for m in read_memory_evidence(store)["items"]] == [renewed["memory_ref"]]
+def test_local_source_config_cannot_grant_access(tmp_path):
+    config = tmp_path / "sources.toml"
+    config.write_text('[[sources]]\nsource_id="notes"\npath="/"\nenabled=true\n')
+    framework = FrameworkFixture()
+    framework.active = False
+    evidence = MemoryEvidence(mail_db_path=tmp_path / "mail.sqlite",
+                              framework=framework)
+    with pytest.raises(ValueError, match="knowledge_source_unauthorized"):
+        evidence.source_digest("knowledge://owner.colleague", "knowledge")
 
 
-def test_traversal_and_parent_symlinks_cannot_expand_source_scope(tmp_path):
-    _, _, note, config, _, _, _ = seed_source(tmp_path)
-    sources = load_sources_config(config)
-    external = tmp_path / "outside"
-    external.mkdir()
-    (external / "secret.md").write_text("Private")
-    (note.parent / "linked").symlink_to(external, target_is_directory=True)
-    for ref in ("obsidian://notes/../outside/secret.md", "obsidian://notes/%2e%2e/outside/secret.md",
-                "obsidian://notes/linked/secret.md", "obsidian://notes//note.md"):
-        with pytest.raises((ValueError, OSError)):
-            resolve_source_ref(ref, sources)
-
-
-def test_filtering_precedes_result_limits_and_invalid_multisource_memory_is_not_used(tmp_path):
-    _, _, note, _, store, entity, original = seed_source(tmp_path)
-    note.unlink()
-    other = store.upsert_entity(kind="person", canonical_name="Zed")
-    fresh = store.propose_memory(entity_ref=other["entity_ref"], category="fact",
-                                 content=original["content"],
-                                 sources=[{"source_ref": "user://statement/zed", "source_kind": "user"}])
-    store.approve(fresh["memory_ref"])
-    assert read_people(store, query="SOURCE-BOUND", limit=1)["items"][0]["entity_ref"] == other["entity_ref"]
-    assert read_memory_evidence(store, query="SOURCE-BOUND", limit=1)["items"][0]["memory_ref"] == fresh["memory_ref"]
-    mixed = store.propose_memory(entity_ref=entity["entity_ref"], category="fact", content="Mixed assertion",
-                                 sources=[{"source_ref": "user://statement/mixed", "source_kind": "user"},
-                                          *original["sources"]])
-    store.approve(mixed["memory_ref"])
-    assert read_memory_evidence(store, query="Mixed")["items"] == []
+def test_email_source_uses_original_raw_bytes_and_keeps_domain_authority(tmp_path):
+    raw = b"Subject: Historic meeting\r\n\r\nThe meeting happened in 2024."
+    db = tmp_path / "mail.sqlite"
+    conn = connect_email_store(db)
+    try:
+        ref = upsert_email_message(conn, account_id="work", folder="INBOX", folder_slug="INBOX",
+                                   uid=1, uidvalidity=1, message_id="<event@example.test>",
+                                   subject="Historic meeting", sender="person@example.test", recipient="me@example.test",
+                                   date_iso="2024-01-01T00:00:00Z", raw_sha256=hashlib.sha256(raw).hexdigest(),
+                                   raw_eml=raw, attachments=[], ingest_ts="2024-01-02T00:00:00Z")
+    finally:
+        conn.close()
+    evidence = MemoryEvidence(mail_db_path=db, framework=FrameworkFixture())
+    assert evidence.source_digest(ref, "email") == hashlib.sha256(raw).hexdigest()
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE email_blobs SET raw_eml=?", (b"Modified original bytes",))
+    with pytest.raises(ValueError, match="source_integrity_mismatch"):
+        evidence.source_digest(ref, "email")
