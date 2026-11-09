@@ -18,9 +18,12 @@ resolved paths, and runtime state.
 4. Credentials remain in the platform credential store, never in either root.
 5. Codex App, OPL App, and OPL Persona share configured user-owned runtime
    roots without moving those roots into an installed Package or plugin cache.
-6. User knowledge bodies remain in the selected Obsidian or Markdown directory.
-   Relay's index is derived, and a source's removal or changed access scope is
-   respected on subsequent reads without deleting historical memory records.
+6. Each personal knowledge body has one registered source in an Obsidian vault,
+   Profile or project directory. Framework owns grants, scope, accepted revision
+   and source writeback. Relay retains evidence and canonical references.
+7. Relay's knowledge catalog is metadata-only and rebuildable. A stale catalog,
+   retired `sources.toml`, or local memory approval cannot bypass Framework's
+   current authorization and version checks. Historical memory remains retained.
 
 ## Resolution
 
@@ -47,9 +50,10 @@ Framework's `scripts/materialize-python-support.mjs --module profile_workspace
 | Plugin manifest and Skills | Plugin source | Yes |
 | Package contribution manifest | OPL Package source | Yes |
 | Accounts and credential references | Data root | No |
-| Mail, mailbox-operation receipts, draft, and memory SQLite | Data root | No |
-| Sync cursors and indexes | Data root | No |
-| Editable knowledge bodies | User-selected source directory | User decides |
+| Mail, mailbox-operation receipts, draft, and memory evidence SQLite | Data root | No |
+| Sync cursors and derived metadata catalog | Data root | No |
+| Editable knowledge bodies | User-owned registered vault, Profile or project source | User decides |
+| Knowledge registry, grants, accepted revisions and writeback | Framework control plane | User decides |
 | Workbench edits, imported attachments, loopback capability and log | Data root | No |
 | Keychain secrets | Keychain | No |
 | Profile and policies | Workspace | Only in a deliberately private repo |
@@ -61,10 +65,14 @@ may be stored under the Persona data root, but they are not accepted as a
 website publication, vault write, or mail send until the target adapter
 re-reads the exact proposal and the user approves it.
 
-An approved memory is a reviewed record, not a perpetual claim of currentness.
-Source versions and validity intervals are checked when building current
-context or public approved-memory views; explicit inspection retains access to
-historical review evidence. The implementation boundary is defined in
+An approved memory is a reviewed mail-domain record. Shared personal knowledge
+also requires its canonical knowledge link. Context and public approved-memory
+views check source authorization and versions separately from claim freshness;
+historical events retain their historical meaning. Observation and review dates
+limit changing claims. `memory export` and `memory promote` preserve evidence
+for review; Framework applies accepted knowledge writes, and `memory link`
+records the verified canonical source. Explicit inspection retains historical
+review evidence. The implementation boundary is defined in
 [Knowledge And Memory Currentness](architecture.md#knowledge-and-memory-currentness).
 
 ## Host Contract
@@ -79,7 +87,8 @@ A host integrates Relay by providing:
 
 Relay continues to own mail identities, memory evidence rules, draft
 fingerprints, controlled mailbox-operation receipts, and send receipts. Persona
-owns cross-domain provenance and proposal state. A host may visualize these
+owns cross-domain semantic judgment and proposal state. Framework owns the
+shared knowledge registry, grants, accepted revisions and source writeback. A host may visualize these
 contracts but must not recreate them as a second source of truth. Mailbox
 movement remains limited to exact references, existing Archive/Trash/Bill folders,
 fresh raw-message and `Message-ID` verification, explicit `--apply`, and

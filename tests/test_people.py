@@ -6,6 +6,7 @@ import pytest
 
 from codex_mail_workbench.context import ContextBuilder
 from codex_mail_workbench.memory import MemoryStore
+from codex_mail_workbench.memory_evidence import MemoryEvidence
 from codex_mail_workbench.people import (
     ALIASES_LIMIT,
     MEMORIES_PER_ENTITY,
@@ -34,15 +35,16 @@ def test_people_reuses_entity_identity_and_approved_evidence(tmp_path: Path):
     )
     memory = propose(store, renamed["entity_ref"], "Prefers a concise update.")
     store.approve(memory["memory_ref"])
-    result = read_people(store)
+    result = read_people(store, include_stale=True)
     assert result["count"] == 1
     person = result["items"][0]
     assert person["id"] == person["entity_ref"] == original["entity_ref"] == renamed["entity_ref"]
     assert person["name"] == "Current Name"
     assert set(person["aliases"]) == {"Original Name", "Current Name", "Colleague"}
     assert person["kind"] == "person"
-    assert person["approved_memory_count"] == 1
-    assert person["approved_memories"][0]["memory_ref"] == memory["memory_ref"]
+    assert person["approved_memory_count"] == 0
+    assert person["review_memory_count"] == 1
+    assert person["review_memories"][0]["memory_ref"] == memory["memory_ref"]
     assert person["source_refs"] == ["user://statement/colleague"]
     assert "emails" not in person
     assert "person@example.test" not in json.dumps(result)
@@ -64,10 +66,13 @@ def test_only_approved_memory_is_projected_or_matches_people_search(tmp_path: Pa
     store.approve(superseded["memory_ref"])
     current = propose(store, entity["entity_ref"], "current approved marker", supersedes_ref=superseded["memory_ref"])
     store.approve(current["memory_ref"])
-    result = read_people(store)
-    assert result["items"][0]["approved_memory_count"] == 1
-    assert [item["memory_ref"] for item in result["items"][0]["approved_memories"]] == [current["memory_ref"]]
-    assert [item["memory_ref"] for item in read_memory_evidence(store)["items"]] == [current["memory_ref"]]
+    result = read_people(store, include_stale=True)
+    assert result["items"][0]["approved_memory_count"] == 0
+    assert result["items"][0]["review_memory_count"] == 1
+    assert result["items"][0]["approved_memories"] == []
+    assert [item["memory_ref"] for item in result["items"][0]["review_memories"]] == [current["memory_ref"]]
+    assert read_memory_evidence(store)["items"] == []
+    assert [item["memory_ref"] for item in read_memory_evidence(store, include_stale=True)["items"]] == [current["memory_ref"]]
     for marker in ("candidate-only", "rejected-only", "forgotten-only", "superseded-only"):
         assert read_people(store, query=marker)["count"] == 0
         assert marker not in json.dumps(result)
@@ -75,9 +80,9 @@ def test_only_approved_memory_is_projected_or_matches_people_search(tmp_path: Pa
 
     context = ContextBuilder(
         memory_db_path=store.path, mail_db_path=tmp_path / "mail.sqlite",
-        sources_config_path=tmp_path / "sources.toml",
+        framework=MemoryEvidence.beside_store(store.path).framework,
     ).build(person="Colleague")
-    assert [item["memory_ref"] for item in context["approved_memories"]] == [current["memory_ref"]]
+    assert context["approved_memories"] == []
 
 
 def test_people_filters_before_limit_and_searches_all_existing_entities(tmp_path: Path):
@@ -91,7 +96,7 @@ def test_people_filters_before_limit_and_searches_all_existing_entities(tmp_path
     memory = propose(store, last["entity_ref"], "Approved collaboration topic")
     store.approve(memory["memory_ref"])
     for query in ("Z institute", "STRASSE", "institute@example.test", "collaboration", "_%"):
-        result = read_people(store, query=query, limit=1)
+        result = read_people(store, query=query, limit=1, include_stale=True)
         assert [item["entity_ref"] for item in result["items"]] == [last["entity_ref"]]
         assert result["has_more"] is False
     assert read_people(store, query="unknown")["count"] == 0
@@ -125,17 +130,18 @@ def test_people_and_evidence_bound_output_without_exporting_source_content(tmp_p
     for index in range(7):
         memory = propose(store, entity["entity_ref"], f"Fact {index} " + "x" * 400, sources=sources)
         store.approve(memory["memory_ref"])
-    person = read_people(store)["items"][0]
-    assert person["approved_memory_count"] == 7
-    assert len(person["approved_memories"]) == MEMORIES_PER_ENTITY
-    assert person["approved_memories_truncated"] is True
+    person = read_people(store, include_stale=True)["items"][0]
+    assert person["approved_memory_count"] == 0
+    assert person["review_memory_count"] == 7
+    assert len(person["review_memories"]) == MEMORIES_PER_ENTITY
+    assert person["review_memories_truncated"] is True
     assert len(person["aliases"]) == ALIASES_LIMIT
     assert person["aliases_truncated"] is True
     assert len(person["source_refs"]) == SOURCE_REFS_LIMIT
     assert person["source_refs_truncated"] is True
-    evidence = read_memory_evidence(store, entity=entity["entity_ref"], limit=2)
+    evidence = read_memory_evidence(store, entity=entity["entity_ref"], limit=2, include_stale=True)
     assert evidence["count"] == 2
-    for item in evidence["items"] + person["approved_memories"]:
+    for item in evidence["items"] + person["review_memories"]:
         assert len(item["summary"]) == SUMMARY_CHARS
         assert item["summary_truncated"] is True
         assert item["source_count"] == 12
@@ -145,7 +151,7 @@ def test_people_and_evidence_bound_output_without_exporting_source_content(tmp_p
     serialized = json.dumps({"person": person, "evidence": evidence})
     assert "PRIVATE SOURCE EXCERPT" not in serialized
     assert "f" * 64 not in serialized
-    assert "content" not in person["approved_memories"][0]
+    assert "content" not in person["review_memories"][0]
 
 
 def test_missing_store_does_not_create_files_or_directories(tmp_path: Path):
@@ -199,8 +205,10 @@ def test_projection_reads_committed_wal_and_connection_rejects_writes(tmp_path: 
         writer.commit()
         assert Path(str(store.path) + "-wal").stat().st_size > 0
         before = store.path.read_bytes()
-        assert read_people(store)["items"][0]["approved_memory_count"] == 1
-        assert read_memory_evidence(store)["items"][0]["memory_ref"] == memory["memory_ref"]
+        assert read_people(store, include_stale=True)["items"][0]["approved_memory_count"] == 0
+        assert read_people(store, include_stale=True)["items"][0]["review_memory_count"] == 1
+        assert read_memory_evidence(store)["items"] == []
+        assert read_memory_evidence(store, include_stale=True)["items"][0]["memory_ref"] == memory["memory_ref"]
         readonly = store._connect(create=False)
         try:
             with pytest.raises(sqlite3.OperationalError, match="readonly"):
@@ -218,3 +226,40 @@ def test_people_rejects_invalid_limits_before_opening_store(tmp_path: Path, limi
     with pytest.raises(ValueError, match="limit must be"):
         read_people(MemoryStore(path), limit=limit)
     assert not path.parent.exists()
+
+
+def test_people_exposes_verified_canonical_link_and_distinct_freshness(tmp_path: Path):
+    from test_source_currentness import seed_memory
+
+    store, memory, framework, evidence = seed_memory(tmp_path, source_kind="user")
+    person = read_people(store, evidence=evidence)["items"][0]
+    summary = person["approved_memories"][0]
+    assert summary["knowledge_id"] == "owner.colleague"
+    assert summary["canonical_target"]["source_id"] == "notes"
+    assert summary["source_versions"] == {"owner.colleague": framework.accepted_hash}
+    assert summary["writeback_status"] == "applied"
+    assert summary["evidence_currentness"]["status"] == "current"
+    assert summary["claim_freshness"]["status"] == "current"
+    assert read_memory_evidence(store, evidence=evidence)["items"][0]["memory_ref"] == memory["memory_ref"]
+    framework.active = False
+    assert read_memory_evidence(store, evidence=evidence)["items"] == []
+    management = read_people(store, evidence=evidence, include_stale=True)
+    assert management["projection_mode"] == "management"
+    person = management["items"][0]
+    assert person["approved_memories"] == []
+    assert person["review_memory_count"] == 1
+    assert person["review_memories"][0]["evidence_currentness"]["status"] == "needs_review"
+    assert person["review_memories"][0]["knowledge_id"] == "owner.colleague"
+
+
+def test_default_people_filtering_precedes_limit_for_unlinked_personal_claims(tmp_path: Path):
+    from test_source_currentness import seed_memory
+
+    store, memory, _, evidence = seed_memory(tmp_path, source_kind="user")
+    earlier = store.upsert_entity(kind="person", canonical_name="A stale person")
+    unlinked = propose(store, earlier["entity_ref"], "Reviewed collaboration")
+    store.approve(unlinked["memory_ref"])
+    result = read_people(store, evidence=evidence, query="Reviewed collaboration", limit=1)
+    assert [item["entity_ref"] for item in result["items"]] == [memory["entity_ref"]]
+    result = read_memory_evidence(store, evidence=evidence, query="Reviewed collaboration", limit=1)
+    assert [item["memory_ref"] for item in result["items"]] == [memory["memory_ref"]]

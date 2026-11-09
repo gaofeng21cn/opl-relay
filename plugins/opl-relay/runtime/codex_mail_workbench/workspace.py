@@ -21,7 +21,6 @@ PRIVATE_STATE_NAMES = {
     "drafts.sqlite",
     "mail.sqlite",
     "memory.sqlite",
-    "sources.toml",
     "sync-state",
 }
 
@@ -65,11 +64,7 @@ the authority for its own content and publication state.
 # Add an account with: opl-relay --json account add ...
 accounts = []
 """,
-    "data/relay/sources.toml": """version = 1
 
-# Add an Obsidian source only after its path has been reviewed.
-sources = []
-""",
 }
 
 
@@ -122,7 +117,7 @@ def setup_status(path: Path) -> dict[str, Any]:
     root = _resolve(path)
     workspace = inspect_workspace(root)
     config = root / "data" / "relay" / "accounts.toml"
-    sources = root / "data" / "relay" / "sources.toml"
+    sources = root / "shared" / "memory" / "knowledge-bindings.json"
     steps = [
         {
             "id": "workspace",
@@ -135,7 +130,7 @@ def setup_status(path: Path) -> dict[str, Any]:
             "path": str(config),
         },
         {
-            "id": "relay.sources",
+            "id": "knowledge.bindings",
             "status": "ready" if sources.is_file() else "optional",
             "path": str(sources),
         },

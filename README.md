@@ -24,7 +24,8 @@ drafts and Apple Mail. Every send requires separate approval.
 
 OPL Relay is a standalone communication product. It can be installed and used
 on its own, and it collaborates with OPL Persona through explicit, reviewed
-handoffs.
+handoffs. Shared personal knowledge access uses the Framework knowledge CLI;
+mailbox and draft operations remain Relay capabilities.
 
 Relay has one public product, Package, Plugin, Skill, and CLI identity:
 `opl-relay`. The internal Python module name is not another user-facing mail
@@ -82,15 +83,21 @@ Hotmail/Outlook.com uses OAuth with Keychain token renewal; see
 
 **Relationship context with approval**
 
-Long-lived memory is proposed with source evidence. It becomes active drafting
-context after explicit approval while its evidence and validity remain current.
+Relay keeps evidence-backed memory candidates and review history. Approved
+records support current drafting only while their evidence and claims remain
+valid. Personal knowledge shared across Agents links to its canonical knowledge
+ID; Persona reviews promotion proposals and Framework applies accepted changes
+to the original source.
 
 **Read-only knowledge context**
 
-Selected Obsidian or ordinary Markdown paths can be indexed as a read-only
-source, with the editable bodies maintained in place. Relay checks the current
-source scope and version before use. Stale memories remain available for review
-and are excluded from current context. See [knowledge source setup](docs/local-profile.md#obsidian-and-markdown-sources).
+Relay reads accepted knowledge through Framework's shared source registry,
+permissions and revision checks. `sources discover` finds unreviewed documents
+within a granted source scope as candidates for review. The editable body stays in its registered
+Obsidian vault, Profile or project directory. Relay's rebuildable catalog holds
+metadata only; it is not a second knowledge library. Revoked, changed and expired
+sources cannot be recovered from a local cache. See
+[knowledge source setup](docs/local-profile.md#obsidian-and-markdown-sources).
 
 **Apple Mail review**
 
@@ -109,9 +116,11 @@ still owns the account, recipients, Apple Mail draft, and separate send gate.
 | Git repository | Source code, tests, Plugin files, Skills, and Package descriptor | Git / maintainers |
 | Codex Plugin snapshot | Installed communication instructions and carrier metadata | Codex |
 | Relay engine | The `opl-relay` CLI and local mail implementation | Embedded in the Codex Plugin native carrier; Relay keeps mail semantics and the carrier keeps physical installed state |
-| Profile Workspace | Mail databases, account references, approved memory, policies, and Persona state | The user |
+| Profile Workspace | Mail databases, account references, memory evidence, canonical knowledge links, and Persona state | The user |
+| Registered knowledge sources | One editable body per knowledge item, in a vault, Profile or project directory | User owns content; Framework owns source authorization and accepted revisions |
 
-The selected Profile Workspace is the only user-data root:
+The selected Profile Workspace is the only runtime root. Registered knowledge
+bodies may stay in an existing vault or project directory:
 
 ```text
 ~/OPL/profiles/<profile>/

@@ -48,10 +48,11 @@ OPL Persona or OPL App.
 - Memory: evidence-backed candidate and approved relationship memory.
 - People: a bounded, read-only projection of that same MemoryStore's entities
   and approved evidence; it owns no contact database or mailbox copy.
-- Knowledge: read-only indexing of user-selected Obsidian or Markdown directories
-  into a rebuildable local index; source bodies remain in their original location.
-- Context: bounded packages combining approved memory whose sources and validity
-  are current, selected mail evidence, and verified knowledge excerpts.
+- Knowledge: Framework-authorized reads of registered sources, plus a rebuildable
+  metadata catalog. Source bodies remain in their canonical vault, Profile or
+  project location.
+- Context: bounded packages combining approved memory whose evidence and claims
+  are current, selected mail evidence, and accepted knowledge excerpts.
 - Drafts: the shared workbench, synchronized server drafts and Apple Mail, plus a local lifecycle ledger and
   exact approval fingerprint. An approved Persona `mail.draft_context`
   proposal may prepare this review draft, but it never authorizes sending.
@@ -230,37 +231,66 @@ mail-draft://apple-mail/<account_id>/<apple-mail-uuid>
 
 ## Knowledge And Memory Currentness
 
-User-selected Obsidian and ordinary Markdown directories are equivalent source
-locations. `sources.toml` defines which roots and relative paths Relay can read;
-the SQLite knowledge index is a rebuildable discovery aid. Relay validates each
-selected document against the current enabled-source configuration, include and
-exclude rules, contained real path, and content hash before returning an excerpt.
-A changed, missing, disabled, excluded, or escaping source cannot be recovered
-from an old index as current knowledge. Reindexing updates discovery; it does not
-accept a changed version of a derived memory.
+Framework owns source registration, grants, domain and project scope, accepted
+revisions and source validity. Relay uses Framework's source discovery, accepted
+source search, source reads and dependency checks through that owner.
+The selected `OPL_PROFILE_WORKSPACE` and `relay` domain accompany each call;
+`--knowledge-project` supplies an optional absolute project root. The
+`context build --project` selector remains a person-facing search term, not a
+project authorization boundary.
 
-Memory approval and source currentness are separate. The drafting context and
-public People and Memory reads include only approved records within their
-`valid_from` and `valid_until` interval whose required evidence still validates.
-An Obsidian or Markdown-derived memory binds the original source hash when it is
-proposed. Approval checks that version again without silently replacing it with
-the latest source bytes. Source changes require a new review of the affected
-memory. Existing records and evidence remain in the database for inspection;
-read-time filtering does not delete them or rewrite their review history.
+Obsidian, Profile and project Markdown are physical source locations. Each
+knowledge item has one registered body and canonical `knowledge_id`. Relay no
+longer reads `sources.toml` to grant itself access. `sources index` rebuilds a
+metadata-only catalog and removes the old derived `knowledge_documents` cache;
+`sources search` obtains accepted results directly from Framework, so indexing
+is optional. A catalog entry cannot authorize a read or supply an old body after
+revocation, drift or expiry.
 
-Email-derived memory checks the stable mail reference and original-message hash.
-Retained historical mail establishes what the message said at that time, not its
-current server location or a person's present circumstances. An accepted
-`user://` assertion records the user's independent statement and is governed by
-its review lifecycle and validity interval rather than an external file hash.
-Unverifiable external evidence remains available for review and is excluded from
-current drafting context.
+`sources discover` delegates unreviewed document discovery to Framework. Source
+grants, include/exclude paths and size limits bound that scan; returned records
+are marked `candidate=true` and `accepted=false`. Discovery lets a large existing
+library remain searchable for review without mechanically accepting every file.
+A discovered candidate becomes current knowledge only through the source review
+and registration path, never through discovery or catalog rebuilding alone.
 
-Persona and other consumers obtain current approved summaries through Relay's
+Relay retains original mail evidence, entity identities, memory candidates and
+review history in `data/relay`. A cross-Agent personal fact records
+`knowledge_id`, `source_versions`, `scope`, `content_kind`, `canonical_target`
+and `writeback_status`. These fields link the candidate to the accepted source;
+they do not create another editable personal knowledge body. `memory link`
+verifies the accepted source before recording that reference. `memory export`
+preserves the evidence and history for migration or review. `memory promote`
+exports a `relay-memory-promotion.v1` proposal for Persona's semantic review and
+Framework's `propose → review → apply` writeback. Relay does not apply the
+proposal to an Obsidian or project document.
+
+Memory approval, evidence currentness and claim freshness are separate:
+
+- `evidence_currentness` verifies original-message hashes or Framework source
+  revisions and current authorization.
+- `claim_freshness` checks whether the claim is usable now. `observed_at`,
+  `next_review_at`, `valid_from` and `valid_until` describe observation and review
+  boundaries; a historical event remains historical even when its email can
+  still be verified.
+- Default context includes only approved, currently usable records. Revoked,
+  drifted or expired sources, historical events, and unlinked `user://` personal
+  facts remain inspectable but are excluded from current drafting context.
+
+Email-derived memory checks the stable `email-store://` reference and original
+message hash. Retained mail establishes what was said at that time; its ongoing
+availability alone does not establish a person's current role, an active
+commitment or a continuing relationship. A local memory approval reviews the
+mail-domain record. It does not promote that record into shared personal
+knowledge or authorize a source write.
+
+Persona and other consumers obtain fresh approved summaries through Relay's
 public `personal.memory.v1#people` and `personal.memory.v1#search` reads. They do
-not inspect SQLite or treat a previously cached approved result as permanently
-current. Explicit inspection exposes the record and its currentness separately,
-so historical evidence remains reviewable without becoming current context.
+not inspect SQLite or treat a cached result as permanently current. Explicit
+inspection and `memory search --include-stale` expose retained evidence and
+repair status without injecting it into current context. Source changes require
+a new semantic review; read-time filtering never deletes historical records or
+silently replaces their accepted source versions.
 
 ## People And Memory App Projection
 

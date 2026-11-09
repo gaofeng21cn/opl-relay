@@ -1,83 +1,56 @@
 from pathlib import Path
 
-from codex_mail_workbench.knowledge import KnowledgeIndex, load_sources_config
+from codex_mail_workbench.knowledge import FrameworkKnowledge, KnowledgeIndex
 
 
-def test_obsidian_source_indexes_searches_and_removes_documents(tmp_path: Path) -> None:
-    vault = tmp_path / "vault"
-    (vault / "People").mkdir(parents=True)
-    (vault / ".obsidian").mkdir()
-    note = vault / "People" / "example.md"
-    note.write_text(
-        "# Professor Example\n\nWorks with the Example Consortium.",
-        encoding="utf-8",
-    )
-    (vault / ".obsidian" / "private.md").write_text(
-        "This should not be indexed.",
-        encoding="utf-8",
-    )
-    config = tmp_path / "sources.toml"
-    config.write_text(
-        f"""
-version = 1
-[[sources]]
-source_id = "personal-vault"
-type = "obsidian"
-path = "{vault}"
-include = ["*.md", "**/*.md"]
-exclude = [".obsidian/**", "**/.obsidian/**"]
-""".strip(),
-        encoding="utf-8",
-    )
+class FakeFramework:
+    def __init__(self):
+        self.items = [{
+            "knowledge_id": "relay.project",
+            "title": "Professor Example",
+            "source_id": "profile",
+            "source_ref": "profile/people/example.md",
+            "sha256": "sha256:" + "a" * 64,
+            "body_ref": {"source_id": "profile", "ref": "people/example.md", "sha256": "sha256:" + "a" * 64},
+            "scope": {"kind": "owner", "id": "gaofeng"},
+            "content_kind": "state", "status": "accepted",
+        }]
+        self.revoked = False
 
-    source = load_sources_config(config)["personal-vault"]
+    def sources(self):
+        return [] if self.revoked else self.items
+
+    def search(self, query, *, limit=10):
+        if self.revoked:
+            return []
+        return [{**self.items[0], "excerpt": "Works with the Example Consortium."}] if "Example" in query else []
+
+
+def test_metadata_catalog_rebuilds_without_source_bodies(tmp_path: Path):
+    framework = FakeFramework()
     index = KnowledgeIndex(tmp_path / "memory.sqlite")
-    first = index.index_source(source)
-    sources = load_sources_config(config)
-    results = index.search("Example Consortium", sources=sources)
-
-    assert first["scanned"] == 1
-    assert results[0]["source_ref"] == "obsidian://personal-vault/People/example.md"
-    assert results[0]["title"] == "Professor Example"
-    assert index.search("should not be indexed", sources=sources) == []
-
-    note.unlink()
-    second = index.index_source(source)
-    assert second["deleted"] == 1
-    assert index.search("Example Consortium", sources=sources) == []
+    result = index.rebuild(framework)
+    assert result == {"indexed": 1, "authority": "opl-framework", "derived": True, "contains_source_bodies": False}
+    assert index.source_counts() == {"profile": 1}
+    found = index.search("Example Consortium", framework=framework)
+    assert found[0]["knowledge_id"] == "relay.project"
+    with index.path.open("rb") as stream:
+        assert b"Example Consortium" not in stream.read()
 
 
-def test_missing_sources_config_is_an_empty_optional_provider(tmp_path: Path) -> None:
-    assert load_sources_config(tmp_path / "missing.toml") == {}
-
-
-def test_source_include_patterns_do_not_cross_directories_without_double_star(
-    tmp_path: Path,
-) -> None:
-    vault = tmp_path / "vault"
-    (vault / "People").mkdir(parents=True)
-    (vault / "Archive").mkdir()
-    (vault / "root.md").write_text("Root note", encoding="utf-8")
-    (vault / "People" / "person.md").write_text("Person note", encoding="utf-8")
-    (vault / "Archive" / "old.md").write_text("Archived note", encoding="utf-8")
-    config = tmp_path / "sources.toml"
-    config.write_text(
-        f"""
-[[sources]]
-source_id = "scoped"
-type = "obsidian"
-path = "{vault}"
-include = ["*.md", "People/**/*.md"]
-""".strip(),
-        encoding="utf-8",
-    )
-
-    source = load_sources_config(config)["scoped"]
+def test_framework_search_rechecks_revocation_and_ignores_catalog_cache(tmp_path: Path):
+    framework = FakeFramework()
     index = KnowledgeIndex(tmp_path / "memory.sqlite")
-    result = index.index_source(source)
+    index.rebuild(framework)
+    framework.revoked = True
+    assert index.search("Example Consortium", framework=framework) == []
 
-    assert result["scanned"] == 2
-    sources = load_sources_config(config)
-    assert index.search("Root note", sources=sources)
-    assert index.search("Person note", sources=sources)
-    assert index.search("Archived note", sources=sources) == []
+
+def test_framework_adapter_fails_closed_for_invalid_command(tmp_path: Path):
+    framework = FrameworkKnowledge(tmp_path, command=[str(tmp_path / "missing-opl")])
+    try:
+        framework.sources()
+    except ValueError as exc:
+        assert str(exc) == "framework_knowledge_unavailable"
+    else:
+        raise AssertionError("missing Framework command must fail closed")

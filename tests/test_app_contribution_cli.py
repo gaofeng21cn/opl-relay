@@ -85,29 +85,39 @@ def test_ui_entries_discover_people_and_evidence_from_descriptor(tmp_path: Path)
         assert code == 0
         result = response["result"]
         assert result["kind"] == "data" and result["state"] == "ready"
-        assert result["data"]["count"] == 1
-        item = result["data"]["items"][0]
-        assert item["entity_ref"] == entity["entity_ref"]
         allowed_refs = {commands[identifier]["action_ref"] for identifier in view["command_ids"]}
         assert set(result["data"]["command_inputs"]) == allowed_refs
-        for action in item["actions"]:
-            assert action["action_ref"] in allowed_refs
-            assert action["input"]
+        if view["data_ref"] == "personal.memory.v1#people":
+            assert result["data"]["count"] == 1
+            item = result["data"]["items"][0]
+            assert item["entity_ref"] == entity["entity_ref"]
+            assert item["approved_memory_count"] == 0
+            assert item["approved_memories"] == []
+            for action in item["actions"]:
+                assert action["action_ref"] in allowed_refs
+                assert action["input"]
+        else:
+            assert result["data"]["count"] == 0
+            assert result["data"]["items"] == []
+        assert "APPROVED FACT" not in json.dumps(result)
         assert "CANDIDATE FACT" not in json.dumps(result)
         assert "SOURCE EXCERPT" not in json.dumps(result)
         assert result["data"]["source_policy"]["only_approved_memory_included"] is True
+        assert result["data"]["source_policy"]["only_current_memory_in_default_context"] is True
     assert store.path.read_bytes() == before
 
     code, result = invoke(profile, "personal.memory.v1#search", payload={"entity": entity["entity_ref"]})
     assert code == 0
-    item = result["result"]["data"]["items"][0]
-    assert item["memory_ref"] == memories[0]["memory_ref"]
+    assert result["result"]["data"]["items"] == []
     code, inspected = invoke(
         profile, commands["relay.memory.inspect"]["action_ref"],
-        operation="execute", payload=item["actions"][0]["input"],
+        operation="execute", payload={"memory_ref": memories[0]["memory_ref"]},
     )
     assert code == 0
     assert inspected["result"]["memory"]["sources"][0]["excerpt"] == "SOURCE EXCERPT"
+    assert inspected["result"]["memory"]["evidence_currentness"]["status"] == "current"
+    assert inspected["result"]["memory"]["claim_freshness"]["status"] == "needs_review"
+    assert "canonical_link_required" in inspected["result"]["memory"]["source_currentness"]["reasons"]
     assert not (profile / "data" / "relay" / "mail.sqlite").exists()
 
 
@@ -303,7 +313,13 @@ def test_plain_memory_search_cli_keeps_its_non_app_interface(tmp_path: Path):
     assert process.returncode == 0, process.stderr
     payload = json.loads(process.stdout)
     assert payload["ok"] is True
-    assert [memory["memory_ref"] for memory in payload["memories"]] == [memories[0]["memory_ref"]]
+    assert payload["memories"] == []
+    process = subprocess.run([str(PLUGIN_ROOT / "bin" / "opl-relay"), "--json", "memory", "search", "--include-stale"],
+                             input="", capture_output=True, text=True, check=False, env=env)
+    assert process.returncode == 0
+    inspected = json.loads(process.stdout)["memories"]
+    assert [memory["memory_ref"] for memory in inspected] == [memories[0]["memory_ref"]]
+    assert inspected[0]["claim_freshness"]["status"] == "needs_review"
 
 
 def test_declared_reply_all_abi_uses_only_supplied_native_mail_identity(monkeypatch, capsys):
@@ -525,3 +541,37 @@ def test_collection_commands_are_explicit_even_without_rows(tmp_path: Path):
     assert code == 0
     assert response["result"]["data"]["collection_actions"][0]["input"] == {"account": "work"}
     assert not (tmp_path / "missing").exists()
+
+
+def test_fresh_management_view_retains_unlinked_and_historical_approved_memory(tmp_path: Path):
+    profile = tmp_path / "profile"
+    store, entity, memories = seed(profile)
+    historical = store.propose_memory(
+        entity_ref=entity["entity_ref"], category="event", content="Met at the 2024 workshop.",
+        occurred_at="2024-06-01T00:00:00Z",
+        sources=[{"source_ref": "user://history/workshop", "source_kind": "user"}],
+    )
+    store.approve(historical["memory_ref"])
+    before = store.path.read_bytes()
+    code, default = invoke(profile, "personal.memory.v1#search")
+    assert code == 0 and default["result"]["data"]["items"] == []
+    code, response = invoke(profile, "personal.memory.v1#search", payload={"include_stale": True})
+    assert code == 0
+    data = response["result"]["data"]
+    assert data["projection_mode"] == "management"
+    by_ref = {item["memory_ref"]: item for item in data["items"]}
+    assert set(by_ref) == {memories[0]["memory_ref"], historical["memory_ref"]}
+    assert by_ref[memories[0]["memory_ref"]]["claim_freshness"]["status"] == "needs_review"
+    assert by_ref[memories[0]["memory_ref"]]["knowledge_id"] == ""
+    assert by_ref[memories[0]["memory_ref"]]["writeback_status"] == "candidate"
+    assert by_ref[historical["memory_ref"]]["claim_freshness"]["status"] == "historical"
+    assert all(item["evidence_currentness"]["status"] == "current" for item in by_ref.values())
+    code, response = invoke(profile, "personal.memory.v1#people", payload={"include_stale": True})
+    assert code == 0
+    person = response["result"]["data"]["items"][0]
+    assert person["approved_memory_count"] == 0
+    assert person["approved_memories"] == []
+    assert person["review_memory_count"] == 2
+    assert {item["memory_ref"] for item in person["review_memories"]} == set(by_ref)
+    assert "CANDIDATE FACT" not in json.dumps(response)
+    assert store.path.read_bytes() == before

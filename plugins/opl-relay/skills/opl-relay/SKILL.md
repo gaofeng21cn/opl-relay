@@ -82,8 +82,8 @@ The OPL Package exports four stable capability contracts:
   Archive/Trash/Bill movement, and review-gated Apple Mail drafts;
 - `personal.context.v1`: bounded drafting context assembled from evidence;
 - `personal.memory.v1`: proposed and explicitly approved relationship memory;
-- `knowledge.obsidian.v1`: read-only indexing and retrieval from configured
-  Obsidian sources.
+- `knowledge.obsidian.v1`: read-only retrieval from Framework-authorized
+  registered knowledge sources, including Obsidian, Profile and project Markdown.
 
 These identifiers describe available contracts. They do not move private data
 into the plugin or authorize a mailbox write by themselves.
@@ -141,10 +141,12 @@ source references. It does not create a contact database or copy mail. Missing
 storage returns an empty result without creating a Profile or database; do not
 run `setup init` just to read these views.
 
-Default projections include only approved memory. Candidates are for explicit
-review through `memory candidates` and `memory inspect`, never default context
-injection. Inspect a selected memory for full evidence rather than treating a
-truncated summary as the source. Collection `command_inputs[action_ref]`
+Default projections include only approved, currently usable memory. Candidates,
+historical events, expired claims and unlinked personal assertions remain for
+explicit review through `memory candidates`, `memory inspect` and
+`memory search --include-stale`. Inspect full evidence before judging a record;
+a truncated summary is not the source. Evidence currentness and claim freshness
+are separate: a retained email does not make an old role or commitment current. Collection `command_inputs[action_ref]`
 supplies action-derived `input_schema` and empty `defaults`; item `actions`
 binds declared actions to exact owner inputs, never approval. The descriptor's explicit
 `app_contributions.ui[]` entries let Framework mount People (`list_detail`)
@@ -200,6 +202,34 @@ moves without deleting evidence. `read` preserves old references and reports
 `present=false` for historical locations; locate a fresh current reference
 before proposing a mailbox operation. Snapshot counts are timestamped, not
 live counts. A sync failure cannot justify reporting "no new mail".
+
+## Shared Knowledge And Promotion
+
+Use `sources discover` to find unreviewed documents within Framework's granted
+source scope, include/exclude paths and size limits. These results are explicitly
+`candidate=true`, `accepted=false`; inspect them for review rather than injecting
+them as accepted current context. Discovery does not require blanket acceptance
+of an existing library.
+
+Read accepted knowledge with `sources list` and `sources search`. Framework
+owns source grants, accepted revisions and validity; `sources.toml` no longer
+controls access. `sources index` only rebuilds metadata and removes the old
+derived document cache. It is optional for search and cannot accept source edits.
+
+Use the global `--knowledge-project /absolute/project/root` when knowledge is
+project-scoped. `context build --project <name>` is a search selector and does
+not supply that authorization scope. Keep one body in its registered vault,
+Profile or project location rather than copying it into Relay storage.
+
+Relay memory records preserve source evidence and canonical knowledge links.
+Use `memory export --output <private-json>` for migration/review, and
+`memory promote <memory-ref> --knowledge-id <id> --output <private-json>` to
+prepare a proposal-only handoff. Persona judges whether the claim is a current
+state, historical event, policy or other reusable knowledge. Framework performs
+accepted `propose → review → apply` writes. Then `memory link <memory-ref>
+--knowledge-id <id>` verifies the accepted source and records its canonical
+reference. These commands do not send mail or delete evidence; Relay never
+writes a knowledge body itself.
 
 ## Controlled Mailbox Movement
 

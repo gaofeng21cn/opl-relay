@@ -20,7 +20,7 @@ OPL Relay 帮助 Codex 处理学术和工作邮件，同时把程序安装、插
 服务器草稿和 Apple Mail 审核入口；发送需要单独、明确的批准。
 
 OPL Relay 是可以独立安装、独立使用的通信产品。它与 OPL Persona 并列协作，双方只
-通过明确、经过审核的交接传递上下文。
+通过明确、经过审核的交接传递上下文。共享个人知识读取使用 Framework 知识 CLI；邮箱与草稿操作仍由 Relay 提供。
 
 产品、Package、插件、Skill 和命令行工具统一使用 `opl-relay` 这一公开身份；内部
 Python 模块名不再作为第二个邮件入口。
@@ -70,11 +70,11 @@ Hotmail/Outlook.com 通过 OAuth 接入，令牌保存在钥匙串并自动续�
 
 **经审核的关系记忆**
 
-长期记忆提供来源证据，经用户明确批准后，在证据和有效期仍满足要求时进入后续起草上下文。
+Relay 保存带证据的记忆候选和审核历史。已批准的记录只有在来源与事实本身仍有效时，才进入当前起草上下文。跨智能体复用的个人知识关联到唯一的知识 ID；Persona 判断是否应晋升为长期知识，Framework 将获批变更写回原正文。
 
 **只读使用个人知识**
 
-可以为已有 Obsidian 资料库或普通 Markdown 目录的指定路径建立只读索引，正文继续在原处维护。Relay 在使用前核对当前来源范围和版本；过期或失效的记忆保留供复核，不进入当前上下文。配置见[个人知识来源](docs/local-profile.md#obsidian-and-markdown-sources)。
+Relay 通过 Framework 统一的来源登记、授权和版本检查读取已接受的知识。`sources discover` 可在获授权的来源范围内发现尚未审阅的候选文档，候选不自动进入当前上下文。正文继续保存在已登记的 Obsidian、Profile 或项目目录；Relay 的可重建目录只保留元数据。来源撤权、变更或到期后，旧缓存不能继续提供当前知识。配置见[个人知识来源](docs/local-profile.md#obsidian-and-markdown-sources)。
 
 **在 Apple Mail 中完成审核**
 
@@ -86,16 +86,17 @@ Relay 建立真实的 Apple Mail 草稿，随后重新读取草稿，并把批�
 OPL Persona 可以把已批准、带证据的邮件上下文交给 Relay。邮箱账号、收件人、
 Apple Mail 草稿和最终发送门仍由 Relay 单独负责。
 
-## 四个边界
+## 各层的分工
 
 | 层次 | 保存什么 | 由谁管理 |
 | --- | --- | --- |
 | Git 仓库 | 源码、测试、插件文件、Skill 和 Package 描述 | Git 与维护者 |
 | Codex 插件快照 | 已安装的通信工作流和载体元数据 | Codex |
 | Relay 引擎 | `opl-relay` 命令行工具和本机邮件实现 | 随 Codex Plugin 原生 carrier 提供；Relay 持有邮件语义，carrier 持有物理 installed state |
-| 数字分身工作空间 | 邮件数据库、账号引用、已批准记忆、个人规则和 Persona 状态 | 用户 |
+| 数字分身工作空间 | 邮件数据库、账号引用、记忆证据、唯一知识引用和 Persona 状态 | 用户 |
+| 已登记知识来源 | 每条知识唯一的可编辑正文，可位于资料库、Profile 或项目目录 | 用户维护内容；Framework 管理来源授权和已接受版本 |
 
-用户只需要选择一个数字分身工作空间：
+用户只需要选择一个数字分身运行工作空间；已登记的知识正文可以继续留在现有资料库或项目目录：
 
 ```text
 ~/OPL/profiles/<profile>/

@@ -196,39 +196,64 @@ source; source cleanup remains an explicit, separately verified operation.
 
 ## Obsidian And Markdown Sources
 
-Configure user-owned source roots in the data root's `sources.toml`. Use
-`type = "obsidian"` for an existing vault or `type = "markdown"` for an ordinary
-directory. Both are read-only sources; the editable originals stay in that
-directory. Relay writes a rebuildable discovery index into `memory.sqlite`.
-Select narrow include paths rather than copying a second knowledge library into
-the Profile:
-
-```toml
-[[sources]]
-source_id = "research-notes"
-type = "markdown"
-path = "/path/to/notes"
-enabled = true
-include = ["research/**/*.md"]
-exclude = ["research/private/**"]
-```
+Register the user's existing vault, Profile or project sources through
+Framework's knowledge source registry, with grants for the `relay` domain and
+any required project scope. Relay consumes that registration; it has no separate
+source-root configuration. The original Markdown body remains in its registered
+location. Framework checks grants, accepted revision and validity before reads.
+The Framework `opl` knowledge CLI must be available to the Relay process.
 
 ```bash
+opl-relay --json sources discover "<person or project>"
 opl-relay --json sources list
-opl-relay --json sources index
 opl-relay --json sources search "<person or project>"
+opl-relay --json sources index
+opl-relay --json --knowledge-project /absolute/path/to/project \
+  context build --project "<project name>" --query "<topic>"
 ```
 
-Search and context reads check the current source configuration and source
-version before returning an indexed excerpt. If a file changes, reindex it for
-discovery and review affected derived memories before using them again. Disabling
-a source or narrowing its paths takes effect on subsequent reads; old indexed
-content is not a fallback. Existing memory records remain inspectable for review.
-Use `opl-relay --json memory search --include-stale` for a management view with
-the source review status attached. Evidence or validity changes create a new
-candidate; approving it replaces the latest accepted version. Approval refuses
-a proposal whose accepted predecessor has changed in the meantime.
-The exact lifecycle is defined in
+`--knowledge-project` is the Framework project root used for authorization.
+`context build --project` is a search selector; the name alone does not grant
+project access. `sources discover` finds unreviewed documents within Framework's
+granted source roots, include/exclude paths and size limits. Its results are
+`candidate=true`, `accepted=false`; they are review inputs and do not enter
+current context. You do not need to register every file as accepted knowledge
+merely to discover it. `sources list` exposes accepted metadata and
+`sources search` queries accepted knowledge through Framework directly.
+`sources index` is optional: it rebuilds a local
+metadata catalog in `memory.sqlite` and removes the old derived document cache.
+It neither accepts an edited source nor changes grants. Existing `sources.toml`
+files are retired configuration and are not read as authorization.
+
+### Memory review and promotion
+
+Use `memory candidates` and `memory inspect` to review exact evidence.
+`memory search --include-stale` also shows historical, unlinked or stale records
+with their current review status. Approval retains a mail-domain review record;
+shared personal knowledge uses the canonical source's identity and accepted
+revision.
+
+```bash
+opl-relay --json memory export --output /private/path/relay-memory.json
+opl-relay --json memory promote 'mail-memory://fact/...' \
+  --knowledge-id '<registered-knowledge-id>' \
+  --output /private/path/memory-promotion.json
+opl-relay --json memory link 'mail-memory://fact/...' \
+  --knowledge-id '<registered-knowledge-id>'
+```
+
+`memory promote` creates a proposal-only handoff for Persona, including the
+original evidence; it does not write a knowledge body. Persona decides its
+meaning, scope and destination, and Framework performs the accepted source
+writeback. After that writeback, `memory link` reads and verifies the accepted
+source before storing its canonical reference. An export or link never deletes
+the original memory or mail evidence.
+
+Observation dates and review deadlines distinguish current facts from historical
+events. A still-verifiable email does not automatically refresh a role,
+commitment or other changing fact. An unlinked `user://` personal fact can be
+reviewed in Relay but is not shared as current long-term knowledge. The full
+read and write boundary is defined in
 [Knowledge And Memory Currentness](architecture.md#knowledge-and-memory-currentness).
 
 ## Publication Check

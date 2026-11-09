@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -22,7 +23,26 @@ MEMORY_CATEGORIES = {
 }
 MEMORY_STATUSES = {"candidate", "approved", "rejected", "superseded", "forgotten"}
 SENSITIVITIES = {"private", "sensitive", "restricted"}
-SOURCE_KINDS = {"email", "user", "obsidian", "markdown", "calendar", "contact", "model", "other"}
+SOURCE_KINDS = {"email", "user", "knowledge", "obsidian", "markdown", "calendar", "contact", "model", "other"}
+CONTENT_KINDS = {"policy", "state", "decision", "mechanism"}
+WRITEBACK_STATUSES = {"candidate", "proposed", "accepted", "applied", "not_applicable"}
+
+
+def _default_content_kind(category: str) -> str:
+    return {"event": "decision", "preference": "policy", "style": "policy"}.get(category, "state")
+
+
+def _validate_scope(scope: dict[str, str]) -> dict[str, str]:
+    if scope.get("kind") not in {"owner", "topic", "project"} or not str(scope.get("id", "")).strip():
+        raise ValueError("private knowledge scope requires an owner, topic, or project id")
+    return {"kind": str(scope["kind"]), "id": str(scope["id"]).strip()}
+
+
+def _normalized_digest(value: str) -> str:
+    digest = str(value).removeprefix("sha256:")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("knowledge source version requires a SHA-256 digest")
+    return "sha256:" + digest
 
 
 def utc_now() -> str:
@@ -115,6 +135,28 @@ class MemoryStore:
             CREATE INDEX IF NOT EXISTS idx_memories_entity_status
             ON memories(entity_ref, status, updated_at);
 
+            CREATE TABLE IF NOT EXISTS memory_semantics (
+              memory_ref TEXT PRIMARY KEY REFERENCES memories(memory_ref),
+              observed_at TEXT NOT NULL DEFAULT '',
+              next_review_at TEXT NOT NULL DEFAULT '',
+              content_kind TEXT NOT NULL DEFAULT 'state',
+              scope_json TEXT NOT NULL DEFAULT '{}',
+              knowledge_id TEXT NOT NULL DEFAULT '',
+              source_versions_json TEXT NOT NULL DEFAULT '{}',
+              canonical_target_json TEXT NOT NULL DEFAULT '{}',
+              writeback_status TEXT NOT NULL DEFAULT 'candidate',
+              proposal_ref TEXT NOT NULL DEFAULT '',
+              promotion_target_id TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS memory_semantic_events (
+              event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              memory_ref TEXT NOT NULL REFERENCES memories(memory_ref),
+              event_kind TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              recorded_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS memory_sources (
               memory_ref TEXT NOT NULL REFERENCES memories(memory_ref) ON DELETE CASCADE,
               source_ref TEXT NOT NULL,
@@ -125,6 +167,9 @@ class MemoryStore:
             );
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_semantics)")}
+        if "promotion_target_id" not in columns:
+            conn.execute("ALTER TABLE memory_semantics ADD COLUMN promotion_target_id TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
     @staticmethod
@@ -364,7 +409,37 @@ class MemoryStore:
                 (row["memory_ref"],),
             ).fetchall()
         ]
+        semantics: dict[str, Any] = {
+            "observed_at": "", "next_review_at": "",
+            "content_kind": _default_content_kind(str(row["category"])),
+            "scope": {}, "knowledge_id": "", "source_versions": {},
+            "canonical_target": {}, "writeback_status": "candidate", "proposal_ref": "", "promotion_target_id": "",
+        }
+        # A read of an older store remains read-only. The next explicit mutation
+        # creates the additive metadata table without rewriting evidence history.
+        try:
+            metadata = conn.execute("SELECT * FROM memory_semantics WHERE memory_ref=?",
+                                    (row["memory_ref"],)).fetchone()
+        except sqlite3.OperationalError:
+            metadata = None
+        if metadata is not None:
+            for key in ("observed_at", "next_review_at", "content_kind", "knowledge_id",
+                        "writeback_status", "proposal_ref", "promotion_target_id"):
+                if key in metadata.keys():
+                    semantics[key] = str(metadata[key])
+            for key in ("scope", "source_versions", "canonical_target"):
+                semantics[key] = json.loads(metadata[key + "_json"])
+        try:
+            events = [{"event_kind": event["event_kind"], "payload": json.loads(event["payload_json"]),
+                       "recorded_at": event["recorded_at"]}
+                      for event in conn.execute(
+                          "SELECT * FROM memory_semantic_events WHERE memory_ref=? ORDER BY event_id",
+                          (row["memory_ref"],))]
+        except sqlite3.OperationalError:
+            events = []
         return {
+            **semantics,
+            "knowledge_events": events,
             "memory_ref": str(row["memory_ref"]),
             "entity_ref": str(row["entity_ref"]),
             "entity_name": str(row["entity_name"]),
@@ -404,11 +479,19 @@ class MemoryStore:
         valid_from: str = "",
         valid_until: str = "",
         supersedes_ref: str = "",
+        observed_at: str = "",
+        next_review_at: str = "",
+        content_kind: str = "",
+        scope: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         category = category.strip().lower()
         content = " ".join(content.split())
         sensitivity = sensitivity.strip().lower()
         source_items = list(sources)
+        content_kind = content_kind or _default_content_kind(category)
+        if content_kind not in CONTENT_KINDS:
+            raise ValueError(f"unsupported knowledge content kind: {content_kind}")
+        scope = _validate_scope(scope) if scope else {}
         if category not in MEMORY_CATEGORIES:
             raise ValueError(f"unsupported memory category: {category}")
         if not content:
@@ -456,6 +539,8 @@ class MemoryStore:
                 "sources": source_items, "confidence": float(confidence),
                 "sensitivity": sensitivity, "occurred_at": occurred_at,
                 "valid_from": valid_from, "valid_until": valid_until,
+                "observed_at": observed_at, "next_review_at": next_review_at,
+                "content_kind": content_kind, "scope": scope,
             }
             logical_rows = conn.execute(
                 self._memory_select() + """
@@ -508,6 +593,13 @@ class MemoryStore:
                 ),
             )
 
+            conn.execute(
+                """INSERT INTO memory_semantics
+                (memory_ref, observed_at, next_review_at, content_kind, scope_json)
+                VALUES (?, ?, ?, ?, ?)""",
+                (memory_ref, observed_at, next_review_at, content_kind,
+                 json.dumps(scope, ensure_ascii=False, sort_keys=True)),
+            )
             for source in source_items:
                 conn.execute(
                     """
@@ -534,6 +626,118 @@ class MemoryStore:
             raise
         finally:
             conn.close()
+
+    def link_memory(
+        self, memory_ref: str, *, knowledge_id: str,
+        source_versions: dict[str, str], canonical_target: dict[str, str],
+        scope: dict[str, str], content_kind: str,
+        observed_at: str = "", next_review_at: str = "",
+        writeback_status: str = "applied",
+    ) -> dict[str, Any]:
+        """Attach a Framework-verified source; retain original claim and evidence.
+
+        The caller verifies accepted source metadata through Framework before
+        invoking this local linkage mutation. This method never writes a body.
+        """
+        if not knowledge_id.strip() or knowledge_id not in source_versions:
+            raise ValueError("canonical knowledge_id must have an accepted source version")
+        versions = {str(key): _normalized_digest(value) for key, value in source_versions.items()}
+        target = dict(canonical_target)
+        target["sha256"] = _normalized_digest(target.get("sha256", ""))
+        if not target.get("source_id") or not target.get("ref"):
+            raise ValueError("canonical target requires source_id and ref")
+        if target["sha256"] != versions[knowledge_id]:
+            raise ValueError("canonical target must match the accepted source version")
+        if content_kind not in CONTENT_KINDS:
+            raise ValueError(f"unsupported knowledge content kind: {content_kind}")
+        if writeback_status not in {"accepted", "applied"}:
+            raise ValueError("canonical linkage requires an accepted or applied source")
+        scope = _validate_scope(scope)
+        return self._update_semantics(memory_ref, "canonical_link", {
+            "knowledge_id": knowledge_id, "source_versions_json": json.dumps(versions, sort_keys=True),
+            "canonical_target_json": json.dumps(target, ensure_ascii=False, sort_keys=True),
+            "scope_json": json.dumps(scope, ensure_ascii=False, sort_keys=True),
+            "content_kind": content_kind, "observed_at": observed_at,
+            "next_review_at": next_review_at, "writeback_status": writeback_status,
+        })
+
+    def record_promotion(
+        self, memory_ref: str, *, proposal_ref: str, knowledge_id: str = "",
+        writeback_status: str = "proposed",
+    ) -> dict[str, Any]:
+        """Record an external proposal receipt, never accept or apply its body."""
+        if not proposal_ref.strip() or writeback_status not in {"candidate", "proposed", "accepted"}:
+            raise ValueError("promotion requires a proposal reference and non-applied status")
+        return self._update_semantics(memory_ref, "promotion_receipt", {
+            "proposal_ref": proposal_ref, "writeback_status": writeback_status,
+            "promotion_target_id": knowledge_id,
+        })
+
+    def _update_semantics(self, memory_ref: str, event_kind: str, values: dict[str, str]) -> dict[str, Any]:
+        allowed = {"observed_at", "next_review_at", "content_kind", "scope_json", "knowledge_id",
+                   "source_versions_json", "canonical_target_json", "writeback_status", "proposal_ref", "promotion_target_id"}
+        if not values or not set(values) <= allowed:
+            raise ValueError("invalid memory semantic fields")
+        conn = self._connect(create=True)
+        assert conn is not None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT category FROM memories WHERE memory_ref=?", (memory_ref,)).fetchone()
+            if row is None:
+                raise KeyError(f"memory not found: {memory_ref}")
+            conn.execute("INSERT OR IGNORE INTO memory_semantics (memory_ref, content_kind) VALUES (?, ?)",
+                         (memory_ref, _default_content_kind(str(row["category"]))))
+            conn.execute("UPDATE memory_semantics SET " + ", ".join(f"{key}=?" for key in values)
+                         + " WHERE memory_ref=?", (*values.values(), memory_ref))
+            now = utc_now()
+            conn.execute("UPDATE memories SET updated_at=? WHERE memory_ref=?", (now, memory_ref))
+            conn.execute("INSERT INTO memory_semantic_events (memory_ref, event_kind, payload_json, recorded_at) "
+                         "VALUES (?, ?, ?, ?)",
+                         (memory_ref, event_kind, json.dumps(values, ensure_ascii=False, sort_keys=True), now))
+            conn.commit()
+            result = conn.execute(self._memory_select() + " WHERE m.memory_ref=?", (memory_ref,)).fetchone()
+            assert result is not None
+            return self._memory_payload(conn, result)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def export_memories(
+        self, *, entity: str = "", statuses: Iterable[str] = tuple(sorted(MEMORY_STATUSES)),
+    ) -> dict[str, Any]:
+        """Export complete evidence and lifecycle history without an implicit limit."""
+        conn = self._connect(create=False)
+        items: list[dict[str, Any]] = []
+        entities: list[dict[str, Any]] = []
+        if conn is not None:
+            try:
+                states = tuple(dict.fromkeys(statuses))
+                if not states or any(state not in MEMORY_STATUSES for state in states):
+                    raise ValueError("invalid memory status filter")
+                where = [f"m.status IN ({','.join('?' for _ in states)})"]
+                params: list[Any] = list(states)
+                if entity:
+                    where.append("m.entity_ref=?")
+                    params.append(self.resolve_entity(entity)["entity_ref"])
+                try:
+                    rows = conn.execute(self._memory_select() + " WHERE " + " AND ".join(where)
+                                        + " ORDER BY m.created_at, m.memory_ref", params)
+                    items = [self._memory_payload(conn, row) for row in rows]
+                    if entity:
+                        rows = conn.execute("SELECT * FROM memory_entities WHERE entity_ref=?",
+                                            (self.resolve_entity(entity)["entity_ref"],))
+                    else:
+                        rows = conn.execute("SELECT * FROM memory_entities ORDER BY canonical_name, entity_ref")
+                    entities = [self._entity_payload(conn, row) for row in rows]
+                except sqlite3.OperationalError:
+                    pass
+            finally:
+                conn.close()
+        return {"version": "relay-memory-export.v1", "exported_at": utc_now(),
+                "memories": items, "entities": entities, "count": len(items),
+                "body_authority": "framework_sources"}
 
     def get_memory(self, memory_ref: str) -> dict[str, Any] | None:
         conn = self._connect(create=False)
