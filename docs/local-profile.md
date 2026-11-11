@@ -196,12 +196,23 @@ source; source cleanup remains an explicit, separately verified operation.
 
 ## Obsidian And Markdown Sources
 
-Register the user's existing vault, Profile or project sources through
+Prefer the user's existing Obsidian or other knowledge library for personal
+knowledge bodies. Keep Profile registration, grants and role bindings separate
+from those bodies; local Profile Markdown is a fallback when no library is
+selected. Project deliverables and original mail remain with their owners.
+Register those existing sources through
 Framework's knowledge source registry, with grants for the `relay` domain and
 any required project scope. Relay consumes that registration; it has no separate
 source-root configuration. The original Markdown body remains in its registered
 location. Framework checks grants, accepted revision and validity before reads.
 The Framework `opl` knowledge CLI must be available to the Relay process.
+
+When moving existing personal sources, update registered locators and consumers'
+knowledge-ID selections, then verify source hashes and fresh Persona/Relay reads.
+Remove superseded body copies only after that readback and a recoverable backup.
+Keep dated snapshots as historical evidence; migration does not make their claims
+current. Update active policy references and assistant guidance as part of the
+same move, leaving historical receipts unchanged.
 
 ```bash
 opl-relay --json sources discover "<person or project>"

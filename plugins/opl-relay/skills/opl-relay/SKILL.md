@@ -222,6 +222,20 @@ not supply that authorization scope. Keep one body in its registered vault,
 Profile or project location rather than copying it into Relay storage.
 
 Relay memory records preserve source evidence and canonical knowledge links.
+When the user asks to retain lessons from correspondence, separate personal
+communication policies, people/relationship facts, project decisions, and dated
+state before promotion. Keep evidence refs and observation dates; source hash
+validation does not refresh an old claim. Create or revise the single canonical
+Markdown body through Framework's accepted source workflow. Prefer the user's
+existing Obsidian or other knowledge library; Profile storage is a fallback for
+users without a selected library, not a second personal knowledge corpus.
+Select its knowledge ID in Persona's appropriate role, and retain exact
+source-version dependencies in derived people/memory. Verify Persona's next
+context actually recalls the accepted knowledge. File creation or an empty role
+mapping is not completion.
+Keep raw mail, attachments and credentials with their existing owners. Put
+reusable tool procedures in this Skill instead of personal relationship memory.
+
 Use `memory export --output <private-json>` for migration/review, and
 `memory promote <memory-ref> --knowledge-id <id> --output <private-json>` to
 prepare a proposal-only handoff. Persona judges whether the claim is a current
@@ -308,7 +322,8 @@ or other external website:
    as a deterministic DOM-inspection or UI-debugging fallback, not as a second
    independent session.
 3. Inspect the complete form before submitting. Required fields may include
-   author comments, editor notes, ethics answers, reviewer counts, signatures,
+   author comments (check MDPI's Comments for Authors requirement), editor notes,
+   ethics answers, reviewer counts, signatures,
    or an explicit decision radio. A selected option or successful click is not
    submission evidence.
 4. Handle confirmation dialogs explicitly. Treat the operation as pending until
@@ -350,6 +365,11 @@ manual attachments or UI diagnosis, read [Apple Mail drafts](references/apple-ma
    when wording or routing still needs review. A prepared, unsaved preview can
    be revised under the same request ID; an existing server draft is never
    overwritten. Use a new request ID for a different source message.
+   A malformed recipient header is a repairable source/provider error; preserve
+   the exact source and proposed text. Do not substitute `server-create`,
+   guessed recipients or pasted quotes for a verified threaded reply. A native
+   Mail.app Reply All is an alternative only after full routing and thread
+   readback succeeds.
 4. Stop at the requested review surface. Saving a draft never grants permission
    to send. If the user approves sending this exact content, call `draft
    server-send --account <id> --request-id <stable-id> --approval <reviewed-fingerprint>`.
