@@ -25,13 +25,21 @@ signature and immutable quoted history. The editor preserves plain-text line
 breaks; incoming HTML is sanitized with DOMPurify in a sandboxed document.
 
 The interface uses a compact top chrome, a left workbench
-navigation, a card-based message list and a dedicated reading surface. Wide
+navigation, a compact message list and a dedicated reading surface. Wide
 screens keep source and reply side by side; intermediate screens switch between
 them; narrow host panels use horizontal navigation and one content pane.
 Switching between a source and its draft preserves unsaved input. The editing
 state and pinned save actions remain visible, with distinct keyboard focus and
 readable body, heading and metadata sizes. Layout follows viewport width; it
 does not shrink typography to keep every column on screen.
+
+The host manages this as one MiniApp surface; mail folders, connections and
+drafts are internal views. Navigation and toolbars expose only implemented mail
+operations. Folder scope is a label, not an inactive filter. Refresh status comes
+from the owner result rather than a permanent success label. Narrow panels keep
+visible navigation text, access to connected mailboxes and 44px touch targets.
+Closing the host UI releases its display session; saved drafts and mailbox
+connections remain owned by Relay.
 
 The shared interaction model is defined by the Framework's
 [MCP Apps specification](https://github.com/gaofeng21cn/one-person-lab/blob/main/docs/mcp-apps/SPEC.md).

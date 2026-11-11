@@ -290,7 +290,6 @@ function renderMessage(message) {
   for (const attachment of message.attachments || []) {
     attachments.append(button(`${attachment.name} · ${bytes(attachment.size)}`, () => preview(message, attachment), 'attachment'));
   }
-  const unsupported = (label) => () => notice(`${label}暂未接入 Relay，当前不会修改邮件。`);
   if (state.edit) toolbar.append(actionButton('返回草稿', () => {
     document.querySelector('.workspace').classList.remove('view-source');
     $('reply-body').focus();
@@ -303,14 +302,6 @@ function renderMessage(message) {
     const result = await api('reply', { account_id: accountId, storage_ref: message.storage_ref, request_id });
     if (current === selection) compose(result.draft);
   }, 'reply', 'primary'));
-  toolbar.append(
-    iconButton('归档', unsupported('归档'), 'archive'),
-    iconButton('移入文件夹', unsupported('移入文件夹'), 'folder'),
-    iconButton('删除', unsupported('删除'), 'trash'),
-    element('span', undefined, 'toolbar-spacer'),
-    actionButton('加入待处理', unsupported('加入待处理'), 'pending', 'soft-action'),
-    actionButton('更多操作', unsupported('更多操作'), 'more', 'soft-action'),
-  );
   const controls = element('div', undefined, 'reader-actions');
   controls.append(button('返回列表', async () => {
     if (!await preserveEdits()) return;
@@ -598,10 +589,6 @@ $('sync').onclick = () => run(async () => {
   try { const result = await api('sync', { account_id: state.account }); if (!result.ok) throw new Error('同步未完整结束，请核对覆盖范围'); await loadList(); notice('同步已完成'); }
   finally { $('sync').disabled = false; $('sync').removeAttribute('aria-busy'); $('sync').title = '同步邮件'; }
 });
-$('folder-filter').onclick = () => notice('文件夹下拉选择尚未接入，当前按 Relay 的活动范围读取。');
-for (const node of document.querySelectorAll('.unsupported-action')) {
-  node.onclick = () => notice(`${node.textContent.trim() || node.getAttribute('aria-label') || '该操作'}尚未接入当前 Relay。`);
-}
 window.addEventListener('beforeunload', (event) => { if (state.dirty) { event.preventDefault(); event.returnValue = ''; } });
 $('fullscreen').onclick = () => run(async () => {
   if (bridge) await bridge.requestDisplayMode({ mode: bridge.getHostContext()?.displayMode === 'fullscreen' ? 'inline' : 'fullscreen' });
