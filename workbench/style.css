@@ -15,7 +15,7 @@
   --black: var(--color-text-primary, var(--palette-text));
   --inverse: var(--color-text-inverse, var(--palette-surface));
   --blue: var(--color-text-info, var(--palette-blue));
-  --blue-soft: var(--color-background-info, var(--palette-soft));
+  --blue-soft: var(--color-background-info, var(--palette-blue-soft));
   --green: var(--color-text-success, #28bd6a);
   --danger: var(--color-text-danger, var(--palette-danger));
   --danger-bg: var(--color-background-danger, var(--palette-danger-bg));
@@ -31,14 +31,17 @@
   --palette-line: #e1e1e1;
   --palette-muted: #666;
   --palette-text: #171717;
-  --palette-blue: #0064b5;
+  --palette-blue: #1769d1;
+  --palette-blue-soft: #e8f1ff;
   --palette-danger: #8a1c1c;
   --palette-danger-bg: #fff7f7;
   --palette-warning: #7b4a00;
   --palette-warning-bg: #fff0cd;
 }
 
+:root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --palette-canvas: #17191c;
   --palette-surface: #202328;
   --palette-soft: #292d33;
@@ -46,7 +49,8 @@
   --palette-line: #454b55;
   --palette-muted: #b3bac5;
   --palette-text: #edf0f5;
-  --palette-blue: #86c3ff;
+  --palette-blue: #8bbcff;
+  --palette-blue-soft: #203b5f;
   --palette-danger: #ffb4b4;
   --palette-danger-bg: #442b30;
   --palette-warning: #f5d28e;
@@ -76,7 +80,7 @@ button:disabled { cursor: default; opacity: .55; }
 .window-title strong { font-size: 16px; font-weight: 550; letter-spacing: -.2px; }
 .family-label { color: var(--blue); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .title-divider { color: var(--muted); }
-.window-logo { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; color: #168bff; background: var(--surface); box-shadow: 0 2px 7px rgba(0,0,0,.08); }
+.window-logo { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; color: var(--blue); background: var(--surface); box-shadow: 0 2px 7px rgba(0,0,0,.08); }
 .window-logo svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .live-status { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; color: var(--blue); font-size: 14px; }
 .live-status i { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
@@ -95,7 +99,7 @@ button:disabled { cursor: default; opacity: .55; }
 .primary-nav { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .nav-button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 0 12px; border: 0; border-radius: 12px; color: var(--muted); background: transparent; text-align: left; font-size: 14px; font-weight: 500; }
 .nav-button:hover { color: var(--black); background: var(--soft); }
-.nav-button.active { color: var(--black); background: var(--soft-strong); font-weight: 650; }
+.nav-button.active { color: var(--blue); background: var(--blue-soft); font-weight: 650; }
 .nav-button .icon { width: 21px; height: 21px; stroke-width: 1.55; }
 
 .mail-list { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); background: var(--surface); }
@@ -257,7 +261,10 @@ dialog a { display: inline-flex; align-items: center; min-height: 40px; padding:
   .workspace.view-source:has(.composer:not([hidden])) .reader { display: flex; }
   .workspace.view-source:has(.composer:not([hidden])) .composer { display: none; }
   .reader-content { min-height: 0; }
-  .window-title strong { display: none; }
+  .window-title, :root[data-embedded="true"] .window-title { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; padding: 2px 8px; }
+  .window-title strong { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .window-title .title-divider { display: none; }
+  .window-title .live-status { grid-column: 1 / -1; margin-left: 0; }
   .live-status { display: inline-flex; }
   .notice { top: calc(var(--chrome-height) + 8px); right: 12px; bottom: auto; max-width: calc(100vw - 24px); }
 }

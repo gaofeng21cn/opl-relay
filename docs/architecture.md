@@ -495,3 +495,7 @@ Mail after verifying an identical raw message there. A successful command
 response alone is insufficient: the target copy and source absence must be
 verified before recording the operation. Permanent delete and mark remain
 unavailable.
+
+### MiniApp family appearance
+
+The mail workbench uses the OPL Apps family palette and host theme, with “OPL Apps” and “Relay · 邮箱工作台” visible in its chrome. Selected navigation and keyboard focus share the family blue accent. The family visual contract is owned by One Person Lab App.
