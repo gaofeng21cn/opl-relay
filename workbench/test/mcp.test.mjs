@@ -35,7 +35,7 @@ test('opaque App sandboxes initialize without browser session storage', async ()
   const context = {
     App: class { async connect() { connected = true; } getHostContext() { return {}; } }, DOMPurify: {},
     applyDocumentTheme() {}, applyHostStyleVariables() {},
-    document: { documentElement: { dataset: {}, style: {} }, getElementById: () => ({ setAttribute() {} }), querySelectorAll: () => [] },
+    document: { body: { toggleAttribute() {} }, documentElement: { dataset: {}, style: {} }, getElementById: () => ({ setAttribute() {} }), querySelectorAll: () => [] },
     window: { self: surface, top: {}, addEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }) },
     location: { search: '', hash: '' }, URLSearchParams,
   };

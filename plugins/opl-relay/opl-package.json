@@ -80,7 +80,7 @@
       "skills/opl-relay/references/apple-mail.md",
       "runtime/codex_mail_workbench/_opl_profile_workspace.py"
     ],
-    "digest": "sha256:54d5769c4262b1f6ed727290501311eddcee41d0300b005919bf9522511d00e6"
+    "digest": "sha256:f5cd22e16bbb93a9ad60a117aa9ac9fd28f47c800b83e1b5ac46d34a20299fd4"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",

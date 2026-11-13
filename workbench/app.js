@@ -6,10 +6,11 @@ const element = (tag, text, className) => {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
   if (className) node.className = className;
+  if (['input', 'select', 'textarea'].includes(tag)) node.classList.add('dsh-input');
   return node;
 };
 const button = (text, handler, className) => {
-  const node = element('button', text, className);
+  const node = element('button', text, /nav-button|message-row/.test(className || '') ? className : `dsh-button ${className || ''}`.trim());
   node.type = 'button';
   node.onclick = () => run(handler);
   return node;
@@ -64,6 +65,7 @@ const embedded = window.self !== window.top;
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
 function applyHostContext(context = {}) {
   applyDocumentTheme(context.theme || (systemTheme.matches ? 'dark' : 'light'));
+  document.body.toggleAttribute('data-ds-dark-theme', document.documentElement.dataset.theme === 'dark');
   if (context.styles?.variables) applyHostStyleVariables(context.styles.variables);
   const root = document.documentElement;
   root.dataset.embedded = String(embedded);

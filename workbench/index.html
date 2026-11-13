@@ -10,7 +10,7 @@
   <div class="app-frame" data-opl-family="opl-apps">
     <header class="chrome-bar">
       <div class="chrome-left">
-        <button id="sync" class="chrome-button" type="button" aria-label="同步邮件" title="同步邮件">
+        <button id="sync" class="dsh-button chrome-button" type="button" aria-label="同步邮件" title="同步邮件">
           <svg class="chrome-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4.3L3 9m0 0V4m0 5h5M4 13a8 8 0 0 0 14.7 4.3L21 15m0 0v5m0-5h-5"/></svg>
         </button>
       </div>
@@ -20,7 +20,7 @@
         <span id="operation-status" class="live-status" role="status" aria-live="polite">正在连接…</span>
       </div>
       <div class="chrome-right">
-        <button id="fullscreen" class="chrome-button" type="button" aria-label="全屏" title="全屏">
+        <button id="fullscreen" class="dsh-button chrome-button" type="button" aria-label="全屏" title="全屏">
           <svg class="chrome-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3m13 5h3a2 2 0 0 0 2-2v-3"/></svg>
         </button>
       </div>
@@ -54,16 +54,16 @@
           <div class="account-select">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 7 8 6 8-6"/></svg>
             <label class="sr-only" for="account">邮箱账号</label>
-            <select id="account"></select>
+            <select id="account" class="dsh-input"></select>
           </div>
           <div class="refresh-state"><span id="freshness">正在连接工作台</span></div>
         </div>
         <div class="list-heading"><h1 id="list-title">收件箱</h1></div>
         <form id="search-form" role="search">
           <label class="sr-only" for="search">搜索邮件</label>
-          <input id="search" placeholder="搜索此文件夹..." type="search">
+          <input id="search" placeholder="搜索此文件夹..." type="search" class="dsh-input">
           <svg class="icon search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>
-          <button class="sr-only" type="submit">搜索</button>
+          <button class="dsh-button sr-only" type="submit">搜索</button>
         </form>
         <div class="list-controls">
           <span id="folder-label" class="folder-scope">收件箱 · INBOX</span>

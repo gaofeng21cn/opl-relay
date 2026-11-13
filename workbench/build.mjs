@@ -9,7 +9,7 @@ await mkdir(output, { recursive: true });
 const ui = await build({ entryPoints: ['app.js'], bundle: true, format: 'esm', platform: 'browser', write: false, minify: true, legalComments: 'inline', metafile: true });
 const script = stripTrailingWhitespace(ui.outputFiles[0].text.replace(/<\/script/gi, '<\\/script'));
 const template = await readFile('index.html', 'utf8');
-const css = await readFile('style.css', 'utf8');
+const css = '/*\n' + await readFile('DSH-LICENSE.txt', 'utf8') + '\n*/\n' + await readFile('dsh-theme.css', 'utf8') + '\n' + await readFile('style.css', 'utf8');
 const logo = await readFile(resolve(output, '../assets/icon.png'));
 await writeFile(resolve(output, 'index.html'), template.replace('/* LOGO */', () => `data:image/png;base64,${logo.toString('base64')}`).replace('/* STYLE */', () => css).replace('/* SCRIPT */', () => script));
 await build({ entryPoints: ['server.mjs'], outfile: resolve(output, 'server.mjs'), bundle: true, external: ['opl-framework/*'], platform: 'node', format: 'esm', target: 'node20', minify: true, legalComments: 'inline', banner: { js: 'import { createRequire as _createRequire } from "node:module"; const require = _createRequire(import.meta.url);' } });
