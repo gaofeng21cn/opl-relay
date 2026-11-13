@@ -85,7 +85,10 @@ applyHostContext();
 systemTheme.addEventListener('change', () => { if (!embedded) applyHostContext(); });
 
 function updateContext(identity) {
-  if (bridge) bridge.updateModelContext({ content: [{ type: 'text', text: JSON.stringify({ account_id: state.account, ...identity }) }] }).catch(() => {});
+  const navigation = Object.fromEntries(['account_id', 'storage_ref', 'draft_id', 'revision', 'request_id']
+    .map(key => [key, key === 'account_id' ? state.account : identity[key]]).filter(([, value]) => value !== undefined));
+  if (bridge) bridge.updateModelContext({ content: [{ type: 'text', text: JSON.stringify({ account_id: state.account, ...identity }) }],
+    ...(identity.connection_id ? {} : { structuredContent: { navigation } }) }).catch(() => {});
 }
 
 function operation(text, status = 'idle') {
@@ -225,7 +228,13 @@ async function loadList(focus = {}) {
   $('freshness').textContent = result.freshness || '草稿已读取';
   $('unread-summary').textContent = result.freshness || '当前快照';
   $('message-list').replaceChildren();
-  if (!items.length) $('message-list').append(element('div', '当前范围没有邮件', 'empty-state'));
+  if (!items.length) {
+    const empty = element('div', undefined, 'empty-state');
+    empty.append(element('strong', $('search').value ? '没有匹配的邮件' : '当前文件夹没有邮件'),
+      element('p', $('search').value ? '换个关键词，或清空搜索查看全部邮件。' : '可以切换文件夹；如需获取最新邮件，点击左上角同步。'));
+    if ($('search').value) empty.append(button('清空搜索', () => { $('search').value = ''; return loadList(); }));
+    $('message-list').append(empty);
+  }
   for (const item of items) {
     const row = button('', () => select(item), 'message-row');
     row.dataset.ref = item.storage_ref || item.id;
@@ -519,7 +528,13 @@ async function boot(focus = {}) {
   }));
   if (focus.account_id) $('account').value = focus.account_id;
   state.account = $('account').value;
-  if (!state.account) { $('freshness').textContent = '尚未配置邮箱'; notice('请先通过 OPL Relay 配置邮箱'); return; }
+  if (!state.account) {
+    $('freshness').textContent = '尚未连接邮箱';
+    const empty = element('div', undefined, 'empty-state');
+    empty.append(element('strong', '先连接一个邮箱'), element('p', '连接后即可阅读邮件、核对附件和编辑回复。可查看 OPL 已连接的邮箱，或在应用管理中配置 Relay。'), button('查看已连接邮箱', showConnections));
+    $('message-list').replaceChildren(empty); operation('尚未连接邮箱'); return;
+  }
+  state.mode = focus.draft_id || focus.request_id ? 'drafts' : state.mode;
   await loadList(focus);
   if (focus.storage_ref) await select({ storage_ref: focus.storage_ref });
   if (focus.draft_id) {

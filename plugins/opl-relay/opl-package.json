@@ -80,7 +80,7 @@
       "skills/opl-relay/references/apple-mail.md",
       "runtime/codex_mail_workbench/_opl_profile_workspace.py"
     ],
-    "digest": "sha256:a50c9d0a1ab7441ba58c767995d0380932fdd2f42999cf073d5eadd4ebf93496"
+    "digest": "sha256:54d5769c4262b1f6ed727290501311eddcee41d0300b005919bf9522511d00e6"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
@@ -374,5 +374,27 @@
         "action_ref": "personal.memory.v1#inspect"
       }
     ]
+  },
+  "presentation": {
+    "display_name_i18n": {
+      "zh-CN": "OPL Relay",
+      "en-US": "OPL Relay"
+    },
+    "description_i18n": {
+      "zh-CN": "阅读邮件、核对附件和编辑回复草稿。",
+      "en-US": "Read mail, review attachments, and edit reply drafts."
+    },
+    "miniapp": {
+      "presentation_mode": "dedicated_app",
+      "entry_kind": "product_entry",
+      "direct_entry": true,
+      "entry_view_id": "relay.inbox",
+      "dedicated_resource_uri": "ui://opl-relay/mail-workbench.html"
+    },
+    "home_shortcuts": [],
+    "session_routing_summary_i18n": {
+      "zh-CN": "阅读邮件、核对附件和编辑回复草稿。",
+      "en-US": "Read mail, review attachments, and edit reply drafts."
+    }
   }
 }

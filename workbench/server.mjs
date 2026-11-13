@@ -148,8 +148,8 @@ export function createMcpServer() {
     contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { prefersBorder: true, csp: { connectDomains: [], resourceDomains: [] } } } }],
   }));
   registerAppTool(server, 'open_workbench', {
-    title: '打开 OPL Relay 邮件工作台',
-    description: 'Open the shared mail UI to read threads, edit Reply All drafts and review attachments. Use this when the user wants to inspect or review mail visually. No mail is sent or changed.',
+    title: 'Relay · 邮箱工作台',
+    description: '阅读邮件、查看附件并编辑回复草稿。打开后选择邮箱和邮件；发送前会单独核对。',
     inputSchema: focusSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     _meta: { ui: { resourceUri: uri }, 'openai/outputTemplate': uri },
