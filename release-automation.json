@@ -22,6 +22,10 @@
     {
       "path": "pyproject.toml",
       "kind": "toml_project"
+    },
+    {
+      "path": "plugins/opl-relay/runtime/codex_mail_workbench/__init__.py",
+      "kind": "python_version"
     }
   ]
 }
