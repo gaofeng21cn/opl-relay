@@ -1,0 +1,27 @@
+{
+  "strategy": "daily_patch",
+  "prepare": [
+    [
+      "npm",
+      "ci",
+      "--prefix",
+      "workbench",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund"
+    ],
+    [
+      "node",
+      "--input-type=module",
+      "-e",
+      "process.chdir('workbench'); await import(process.cwd()+'/build.mjs')"
+    ]
+  ],
+  "verify": [],
+  "version_files": [
+    {
+      "path": "pyproject.toml",
+      "kind": "toml_project"
+    }
+  ]
+}
