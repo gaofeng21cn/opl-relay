@@ -3,7 +3,7 @@
   "package_id": "opl-relay",
   "display_name": "OPL Relay",
   "publisher": "one-person-lab",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "source": "first_party",
   "package_role": "capability_package",
   "source_repo": "https://github.com/gaofeng21cn/opl-relay",
@@ -80,7 +80,7 @@
       "skills/opl-relay/references/apple-mail.md",
       "runtime/codex_mail_workbench/_opl_profile_workspace.py"
     ],
-    "digest": "sha256:162c25c1f4a9779f289d483f4ff51fa4b89fd9de37b0adaafe95ed6aeb1b10b2"
+    "digest": "sha256:ee9b3f0dcec476021f303efc831340c7f2c1cd1cfa2ceef122dd2d05e0b57879"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
@@ -395,6 +395,7 @@
     "session_routing_summary_i18n": {
       "zh-CN": "阅读邮件、核对附件和编辑回复草稿。",
       "en-US": "Read mail, review attachments, and edit reply drafts."
-    }
+    },
+    "icon_ref": "assets/icon.png"
   }
 }

@@ -1,10 +1,8 @@
 <p align="center">
-  <img src="assets/branding/opl-relay-logo.png" alt="OPL Relay 标志" width="132" />
+  <img src="assets/branding/opl-relay-logo.png" alt="OPL Relay logo" width="132" />
 </p>
 
-<p align="center">
-  <a href="./README.md">English</a> | <a href="./README.zh-CN.md"><strong>中文</strong></a>
-</p>
+<p align="center"><a href="./README.md">English</a> | <strong>中文</strong></p>
 
 <h1 align="center">OPL Relay</h1>
 

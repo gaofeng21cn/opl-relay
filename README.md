@@ -2,9 +2,7 @@
   <img src="assets/branding/opl-relay-logo.png" alt="OPL Relay logo" width="132" />
 </p>
 
-<p align="center">
-  <a href="./README.md"><strong>English</strong></a> | <a href="./README.zh-CN.md">中文</a>
-</p>
+<p align="center"><strong>English</strong> | <a href="./README.zh-CN.md">中文</a></p>
 
 <h1 align="center">OPL Relay</h1>
 
