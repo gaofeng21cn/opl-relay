@@ -2,7 +2,6 @@ import hashlib
 import json
 import os
 import subprocess
-import struct
 import tomllib
 from pathlib import Path
 
@@ -124,7 +123,7 @@ def test_plugin_default_prompts_fit_codex_limits() -> None:
     assert all(isinstance(prompt, str) and 0 < len(prompt) <= 128 for prompt in prompts)
 
 
-def test_plugin_uses_a_dedicated_small_format_icon() -> None:
+def test_plugin_uses_family_brand_artwork() -> None:
     plugin = load_json(PLUGIN_PATH)
     interface = plugin["interface"]
     icon = ICON_PATH.read_bytes()
@@ -134,8 +133,7 @@ def test_plugin_uses_a_dedicated_small_format_icon() -> None:
     assert interface["websiteURL"] == "https://github.com/gaofeng21cn/opl-relay"
     assert interface["brandColor"] == "#1260E8"
     assert icon.startswith(b"\x89PNG\r\n\x1a\n")
-    assert struct.unpack(">II", icon[16:24]) == (512, 512)
-    assert icon[25] in {4, 6} or (icon[25] == 3 and b"tRNS" in icon)
+    assert icon == (ROOT / "assets/branding/opl-relay-logo.png").read_bytes()
     assert "assets/icon.png" in load_json(PACKAGE_PATH)["content_lock"]["paths"]
 
 
