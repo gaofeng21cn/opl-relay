@@ -436,9 +436,54 @@ def _ledger(path):
     return conn
 
 
+def prepare_request(conn, *, db_path, accounts, account_id, request_id, row=None,
+                    body="", signature="", source_ref=None, to=(), cc=(), subject="",
+                    attachments=(), self_aliases=()):
+    """Stage exact MIME on the caller's ledger transaction, without a mailbox write."""
+    source_raw = None
+    if source_ref:
+        store = connect_email_store(db_path)
+        try:
+            meta = get_message_by_storage_ref(store, source_ref)
+            source_raw = fetch_raw_email_by_storage_ref(store, source_ref)
+        finally:
+            store.close()
+        if not meta or meta["account_id"] != account_id or not source_raw:
+            raise ValueError("Reply source does not belong to the selected account")
+        if hashlib.sha256(source_raw).hexdigest() != meta["raw_sha256"]:
+            raise ValueError("Reply source evidence hash mismatch")
+    raw = build_message(sender=accounts[account_id].email,
+                        self_addresses=[a.email for a in accounts.values()] + list(self_aliases),
+                        body=body, signature=signature, source_raw=source_raw,
+                        to=to, cc=cc, subject=subject,
+                        attachments=[Path(p).expanduser() for p in attachments])
+    snapshot = content_snapshot(raw)
+    snapshot["headers"].pop("Message-ID")
+    identity = {"content": snapshot, "source_ref": source_ref}
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    if row is None:
+        conn.execute("INSERT INTO server_draft_requests VALUES (?,?,?,?,?,?)",
+                     (request_id, account_id, digest, raw, "prepared", ""))
+    elif row["input_hash"] == digest:
+        return row
+    elif row["state"] == "prepared" and not _is_workbench_request(conn, request_id):
+        conn.execute("UPDATE server_draft_requests SET input_hash=?,raw=? WHERE request_id=?",
+                     (digest, raw, request_id))
+    else:
+        raise ValueError("Request ID already binds different content; do not replace a mobile draft")
+    return conn.execute("SELECT * FROM server_draft_requests WHERE request_id=?", (request_id,)).fetchone()
+
+
+def _is_workbench_request(conn, request_id):
+    table = conn.execute("SELECT 1 FROM sqlite_master WHERE name='workbench_edits' AND type='table'").fetchone()
+    return table is not None and conn.execute(
+        "SELECT 1 FROM workbench_edits WHERE server_request_id=?", (request_id,),
+    ).fetchone() is not None
+
+
 def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
                  body="", signature="", source_ref=None, to=(), cc=(), subject="",
-                 attachments=(), apply=False, inspect=False, self_aliases=()):
+                 attachments=(), apply=False, inspect=False, self_aliases=(), use_prepared=False):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", request_id):
         raise ValueError("Use a stable, non-sensitive request ID (letters, digits, . _ -)")
     accounts = load_accounts_config(config_path)
@@ -460,44 +505,20 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
                 return delivery
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM server_draft_requests WHERE request_id=?", (request_id,)).fetchone()
-        if inspect:
+        if inspect or use_prepared:
             if not row:
                 raise ValueError("Unknown draft request")
-            raw = bytes(row["raw"])
+            if use_prepared:
+                message = BytesParser(policy=policy.default).parsebytes(bytes(row["raw"]))
+                senders = [address.addr_spec.casefold() for address in addresses(message, "From")]
+                if senders != [account.email.casefold()]:
+                    raise ValueError("Prepared draft sender no longer matches the selected account")
         else:
-            source_raw = None
-            if source_ref:
-                store = connect_email_store(db_path)
-                try:
-                    meta = get_message_by_storage_ref(store, source_ref)
-                    source_raw = fetch_raw_email_by_storage_ref(store, source_ref)
-                finally:
-                    store.close()
-                if not meta or meta["account_id"] != account_id or not source_raw:
-                    raise ValueError("Reply source does not belong to the selected account")
-                if hashlib.sha256(source_raw).hexdigest() != meta["raw_sha256"]:
-                    raise ValueError("Reply source evidence hash mismatch")
-            attachment_paths = [Path(p).expanduser() for p in attachments]
-            raw = build_message(sender=account.email,
-                                self_addresses=[a.email for a in accounts.values()] + list(self_aliases),
-                                body=body, signature=signature, source_raw=source_raw,
-                                to=to, cc=cc, subject=subject, attachments=attachment_paths)
-            snapshot = content_snapshot(raw)
-            snapshot["headers"].pop("Message-ID")
-            identity = {"content": snapshot, "source_ref": source_ref}
-            digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-            if row:
-                if row["input_hash"] != digest:
-                    if row["state"] != "prepared":
-                        raise ValueError("Request ID already binds different content; do not replace a mobile draft")
-                    conn.execute("UPDATE server_draft_requests SET input_hash=?,raw=? WHERE request_id=?",
-                                 (digest, raw, request_id))
-                    row = conn.execute("SELECT * FROM server_draft_requests WHERE request_id=?", (request_id,)).fetchone()
-                raw = bytes(row["raw"])
-            else:
-                conn.execute("INSERT INTO server_draft_requests VALUES (?,?,?,?,?,?)",
-                             (request_id, account_id, digest, raw, "prepared", ""))
-                row = conn.execute("SELECT * FROM server_draft_requests WHERE request_id=?", (request_id,)).fetchone()
+            row = prepare_request(conn, db_path=db_path, accounts=accounts, account_id=account_id,
+                                  request_id=request_id, row=row, body=body, signature=signature,
+                                  source_ref=source_ref, to=to, cc=cc, subject=subject,
+                                  attachments=attachments, self_aliases=self_aliases)
+        raw = bytes(row["raw"])
         if not apply and not inspect:
             conn.commit()
             msg = BytesParser(policy=policy.default).parsebytes(raw)

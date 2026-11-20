@@ -38,7 +38,7 @@ export const actions = {
   upload: { schema: z.object({ name: z.string().min(1).max(200), data: z.string().max(14 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), read: false, title: '添加本地附件', appOnly: true },
   attachment: { schema: z.object({ ...source, index: z.number().int().min(0) }).strict(), read: true, title: '预览邮件附件', appOnly: true },
   uploaded_attachment: { schema: z.object({ attachment_id: z.string().min(1) }).strict(), read: true, title: '预览草稿附件', appOnly: true },
-  publish: { schema: z.object({ ...draft, revision: z.number().int().positive() }).strict(), read: false, title: '保存到邮箱草稿箱' },
+  publish: { schema: z.object({ ...draft, revision: z.number().int().positive(), resume: z.boolean().optional() }).strict(), read: false, title: '保存到邮箱草稿箱' },
   inspect: { schema: z.object(request).strict(), read: true, title: '核对当前服务器草稿' },
   send: { schema: z.object({ ...request, approval: z.string().startsWith('sha256:'), confirmed: z.literal(true) }).strict(), read: false, title: '发送已审核邮件', appOnly: true },
 };

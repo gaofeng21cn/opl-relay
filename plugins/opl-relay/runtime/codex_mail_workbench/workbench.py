@@ -17,13 +17,13 @@ from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 from urllib.request import Request, urlopen
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from .config import load_accounts_config
 from .message import extract_text_body
 from .paths import default_profile_workspace
 from .reply_context import reply_context
-from .server_drafts import _ledger, content_snapshot, server_draft
+from .server_drafts import _ledger, content_snapshot, prepare_request, review_payload, server_draft
 from .store import (
     connect_email_store_readonly, fetch_raw_email_by_storage_ref,
     get_message_by_storage_ref, list_messages, search_messages,
@@ -213,6 +213,16 @@ class Workbench:
             raise ValueError("找不到该邮箱的编辑草稿")
         return dict(row)
 
+    def _server_request(self, conn, edit, *, preview=False):
+        content = ", CASE WHEN state='prepared' THEN raw END AS prepared_raw" if preview else ""
+        row = conn.execute(
+            f"SELECT account_id,state{content} FROM server_draft_requests WHERE request_id=?",
+            (edit["server_request_id"],),
+        ).fetchone()
+        if row is not None and row["account_id"] != edit["account_id"]:
+            raise ValueError("服务器请求与当前邮箱不一致")
+        return row
+
     def _attachment(self, conn, attachment_id):
         row = conn.execute("SELECT * FROM workbench_attachments WHERE id=?", (attachment_id,)).fetchone()
         if row is None:
@@ -232,6 +242,13 @@ class Workbench:
             edit = self._edit(conn, account_id, draft_id)
             edit["attachment_ids"] = json.loads(edit["attachment_ids"])
             edit["attachments"] = [self._attachment(conn, value)[0] for value in edit["attachment_ids"]]
+            if edit["state"] == "publishing":
+                request = self._server_request(conn, edit, preview=True)
+                edit["save_recovery"] = (
+                    "continue_save" if request is None or request["state"] == "prepared" else "inspect_server"
+                )
+                if request is not None and request["prepared_raw"] is not None:
+                    edit["prepared_snapshot"] = review_payload(bytes(request["prepared_raw"]))
         finally:
             conn.close()
         context = reply_context(config_path=self.config_path, db_path=self.db_path,
@@ -241,6 +258,10 @@ class Workbench:
         edit.update(to=context["reply_to"], cc=context["reply_cc"],
                     subject=context["headers"]["Subject"], quote=context["body_text"],
                     signature=signature, from_address=self._account(account_id).email)
+        edit["writing_sample"] = {
+            "ref": f"relay-draft://{quote(account_id, safe='')}/{draft_id}?revision={edit['revision']}",
+            "fingerprint": "sha256:" + hashlib.sha256(edit["body"].encode("utf-8")).hexdigest(),
+        }
         return {"draft": edit}
 
     def save(self, *, account_id, draft_id, revision, body, attachment_ids):
@@ -318,51 +339,54 @@ class Workbench:
         finally:
             conn.close()
 
-    def publish(self, *, account_id, draft_id, revision):
-        draft = self.draft(account_id=account_id, draft_id=draft_id)["draft"]
-        if type(revision) is not int or draft["revision"] != revision:
-            raise WorkbenchError("revision_conflict", "草稿版本已改变，请重新审核",
-                                 recovery={"action": "draft", "input": {"account_id": account_id, "draft_id": draft_id}})
-        if not draft["body"].strip() or not draft["signature"]:
-            raise ValueError("请填写回复正文，并配置批准的英文签名")
+    def publish(self, *, account_id, draft_id, revision, resume=False):
+        accounts = self._accounts()
+        if account_id not in accounts:
+            raise ValueError("请选择已配置的邮箱")
+        if type(resume) is not bool:
+            raise ValueError("无效的草稿恢复选项")
         conn = self._conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = self._edit(conn, account_id, draft_id)
-            if row["revision"] != revision:
+            if type(revision) is not int or row["revision"] != revision:
                 raise WorkbenchError("revision_conflict", "草稿版本已改变，请重新审核",
                                      recovery={"action": "draft", "input": {"account_id": account_id, "draft_id": draft_id}})
-            inspect = row["state"] != "editing"
-            paths = [self._attachment(conn, value)[1] for value in draft["attachment_ids"]]
-            conn.execute("UPDATE workbench_edits SET state='publishing',updated_at=? WHERE id=?", (_now(), draft_id))
+            request_id = row["server_request_id"]
+            request = self._server_request(conn, row)
+            server_state = request["state"] if request is not None else None
+            start = row["state"] == "editing" and not resume
+            resume_save = resume and row["state"] == "publishing" and server_state in {None, "prepared"}
+            if start or (resume_save and server_state is None):
+                signature_path = self.profile / "templates" / "mail-signature.txt"
+                signature = signature_path.read_text(encoding="utf-8").strip() if signature_path.exists() else ""
+                if not row["body"].strip() or not signature:
+                    raise ValueError("请填写回复正文，并配置批准的英文签名")
+                if server_state is not None:
+                    raise WorkbenchError("draft_request_already_prepared", "请先核对原服务器请求")
+                paths = [self._attachment(conn, value)[1] for value in json.loads(row["attachment_ids"])]
+                prepare_request(conn, db_path=self.db_path, accounts=accounts, account_id=account_id,
+                                request_id=request_id, source_ref=row["source_ref"], body=row["body"],
+                                signature=signature, attachments=paths)
+                conn.execute("UPDATE workbench_edits SET state='publishing',updated_at=? WHERE id=?", (_now(), draft_id))
+            apply = start or resume_save
             conn.commit()
         finally:
             conn.close()
-        try:
-            result = server_draft(config_path=self.config_path, db_path=self.db_path,
-                                  ledger_path=self.ledger_path, account_id=account_id,
-                                  request_id=draft["server_request_id"], source_ref=draft["source_ref"],
-                                  body=draft["body"], signature=draft["signature"], attachments=paths,
-                                  apply=not inspect, inspect=inspect)
-        except ValueError:
-            conn = self._conn()
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                remote = conn.execute("SELECT state FROM server_draft_requests WHERE request_id=?",
-                                      (draft["server_request_id"],)).fetchone()
-                if not inspect and (remote is None or remote["state"] == "prepared"):
-                    conn.execute("UPDATE workbench_edits SET state='editing' WHERE id=?", (draft_id,))
-                    conn.commit()
-            finally:
-                conn.close()
-            raise
+        result = server_draft(config_path=self.config_path, db_path=self.db_path,
+                              ledger_path=self.ledger_path, account_id=account_id,
+                              request_id=request_id, apply=apply, inspect=not apply, use_prepared=apply)
+        return {"server_draft": self._server_result(account_id, request_id, result)}
+
+    def _record_saved(self, account_id, request_id):
         conn = self._conn()
         try:
-            conn.execute("UPDATE workbench_edits SET state='published',updated_at=? WHERE id=?", (_now(), draft_id))
+            conn.execute("UPDATE workbench_edits SET state='published',updated_at=? "
+                         "WHERE account_id=? AND server_request_id=? AND state='publishing'",
+                         (_now(), account_id, request_id))
             conn.commit()
         finally:
             conn.close()
-        return {"server_draft": self._server_result(account_id, draft["server_request_id"], result)}
 
     def _server_result(self, account_id, request_id, result):
         conn = _ledger(self.ledger_path)
@@ -375,9 +399,15 @@ class Workbench:
             attachments = [{"name": part.get_filename() or "attachment",
                             "size": len(part.get_payload(decode=True) or b"")}
                            for part in message.iter_attachments()]
-            return {**result, "attachments": attachments}
         finally:
             conn.close()
+        if result.get("server_verified") and result.get("state") == "draft":
+            self._record_saved(account_id, request_id)
+            result = {**result, "writing_sample": {
+                "ref": f"relay-draft://{quote(account_id, safe='')}/server/{request_id}",
+                "fingerprint": result["approval_fingerprint"],
+            }}
+        return {**result, "attachments": attachments}
 
     def inspect(self, *, account_id, request_id):
         self._account(account_id)

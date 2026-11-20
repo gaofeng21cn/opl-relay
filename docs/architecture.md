@@ -113,12 +113,18 @@ under `data/relay/workbench-attachments`, with size, path and hash checks. Reads
 do not create the draft ledger. Existing published drafts are inspected rather
 than overwritten; to change one, start a new reply from its exact source.
 
-Publishing claims one stable server request before the remote operation. A
-validation failure before a durable remote attempt can return to editing;
-unknown outcomes remain locked for inspection. Final review includes all
-recipients, complete body and attachment names/sizes. Only an explicit send
-confirmation supplies the current approval fingerprint to the existing send
-owner. UI visibility metadata is not authorization.
+Saving to the mailbox freezes the MIME and claims one stable request in the
+same local transaction as the edit revision. Before a remote attempt,
+the workbench reopens the frozen draft and can explicitly continue that
+request. Once Relay records the attempt, recovery inspects that request's
+server identity. A verified read also reconciles the local edit state.
+Final review includes recipients, body and attachment names and sizes.
+Explicit send confirmation supplies the current fingerprint to the send owner.
+
+Workbench edits expose a `writing_sample` reference and body fingerprint for
+the current revision. Verified server drafts expose a reference and their MIME
+review fingerprint. Persona can cite the versions the user has reviewed when
+proposing a change to the user's communication policy.
 
 The loopback adapter uses a per-process capability in the initial URL fragment,
 then session storage and authenticated requests. It checks Host, Origin, JSON

@@ -106,6 +106,9 @@ test('packaged MCP server exposes a standard App without mailbox side effects', 
     const send = tools.find((item) => item.name === 'relay_send');
     assert.deepEqual(send._meta.ui.visibility, ['app']);
     assert.equal(send.inputSchema.properties.confirmed.const, true);
+    const publish = tools.find((item) => item.name === 'relay_publish');
+    assert.equal(publish.inputSchema.properties.resume.type, 'boolean');
+    assert.ok(!publish.inputSchema.required.includes('resume'));
     const resource = await client.readResource({ uri: open._meta.ui.resourceUri });
     assert.equal(resource.contents[0].mimeType, 'text/html;profile=mcp-app');
     assert.match(resource.contents[0].text, /回复所有人/);
