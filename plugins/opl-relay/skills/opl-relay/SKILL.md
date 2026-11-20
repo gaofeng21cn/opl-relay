@@ -357,6 +357,10 @@ manual attachments or UI diagnosis, read [Apple Mail drafts](references/apple-ma
    request, including attachments, travel information or speaker material.
    Preserve all Reply All participants and the quoted chain. New prose and
    the approved signature are separate inputs.
+   When Persona is available, read its `personal.context.v1#contexts` with
+   `purpose=mail-drafting` and the verified Persona person ID when available.
+   Apply the accepted policy and relationship context to the prose. Relay
+   supplies the current message, thread and recipient evidence.
 3. Run `draft server-reply-all --account <id> --storage-ref <selected-ref>
    --request-id <stable-id> --body-file <private-file> --signature-file
    <private-file> --apply`. Its verified result already contains complete
@@ -400,6 +404,20 @@ maintenance while completing a routine approved email. If a tool returns a
 running session, wait on that same session; an empty output is not evidence
 that the operation failed. Reconcile unknown external writes read-only before
 considering any retry.
+
+For the workbench, reopen the same account and draft ID after an interruption.
+If the owner reports `save_recovery=continue_save`, review the staged snapshot
+and explicitly continue with the same revision. If it reports
+`inspect_server`, keep the exact request ID and inspect the server draft.
+When learning from a user correction, read the original and final edit
+`writing_sample` refs and fingerprints. Send them to Persona only as evidence
+for a policy proposal when the correction is meant to inform future drafts.
+
+Use the owner API or the workbench for draft recovery. When a task genuinely
+requires Mail.app input, confirm the selected account and foreground window
+before acting. Perform one foreground interaction at a time. On lock screen,
+focus change, or uncertain delivery, pause and reacquire the exact object and
+read its owner state before further input.
 
 ## Persona Draft Handoff
 

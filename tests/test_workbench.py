@@ -88,6 +88,11 @@ def test_reply_all_uses_source_headers_and_idempotent_request(mailbox):
     assert first["source_ref"] == ref
     assert first["signature"] == "Best regards,\nTest Owner"
     assert "Previous context" in first["quote"]
+    final = service.save(account_id="work", draft_id="test-reply", revision=1,
+                         body="Thank you for arranging the session.", attachment_ids=[])["draft"]
+    assert first["writing_sample"]["ref"].endswith("?revision=1")
+    assert final["writing_sample"]["ref"].endswith("?revision=2")
+    assert final["writing_sample"]["fingerprint"] != first["writing_sample"]["fingerprint"]
 
 
 def test_save_revision_conflict_preserves_current_user_edits(mailbox):
@@ -176,11 +181,17 @@ def test_publish_uses_existing_server_draft_owner_and_never_sends(mailbox, monke
         calls.append(arguments)
         return {"state": "draft", "server_verified": True, "send_allowed": False}
     monkeypatch.setattr(wb, "server_draft", server_draft)
-    monkeypatch.setattr(service, "_server_result", lambda account, request, result: result)
-    result = service.publish(account_id="work", draft_id="reply", revision=1)
-    assert result["server_draft"]["send_allowed"] is False
-    assert calls[0]["source_ref"] == ref and calls[0]["signature"] == draft["signature"]
-    assert calls[0]["apply"] is True and calls[0]["inspect"] is False
+    signature = draft["signature"]
+    def readback(account, request, result):
+        service._record_saved(account, request)
+        return result
+    monkeypatch.setattr(service, "_server_result", readback)
+    assert service.publish(account_id="work", draft_id="reply", revision=1)["server_draft"]["send_allowed"] is False
+    with service._conn(readonly=True) as conn:
+        staged = conn.execute("SELECT raw,state FROM server_draft_requests").fetchone()
+    assert staged["state"] == "prepared" and signature.splitlines()[0].encode() in staged["raw"]
+    assert b"<conference-source@example.test>" in staged["raw"]
+    assert calls[0]["apply"] is True and calls[0]["inspect"] is False and calls[0]["use_prepared"] is True
     service.publish(account_id="work", draft_id="reply", revision=1)
     assert calls[1]["apply"] is False and calls[1]["inspect"] is True
     with pytest.raises(ValueError, match="提交"):
@@ -193,6 +204,10 @@ def test_unknown_publish_inspects_same_request_without_creating_another(mailbox,
     calls = []
     def server_draft(**arguments):
         calls.append(arguments)
+        if arguments["apply"]:
+            with service._conn() as conn:
+                conn.execute("UPDATE server_draft_requests SET state='attempted' WHERE request_id=?",
+                             (arguments["request_id"],))
         raise TimeoutError("uncertain append")
     monkeypatch.setattr(wb, "server_draft", server_draft)
     for _ in range(2):
@@ -200,6 +215,10 @@ def test_unknown_publish_inspects_same_request_without_creating_another(mailbox,
             service.publish(account_id="work", draft_id="reply", revision=1)
     assert calls[0]["request_id"] == calls[1]["request_id"]
     assert calls[0]["apply"] and calls[1]["inspect"] and not calls[1]["apply"]
+    assert service.draft(account_id="work", draft_id="reply")["draft"]["save_recovery"] == "inspect_server"
+    with pytest.raises(TimeoutError):
+        service.publish(account_id="work", draft_id="reply", revision=1, resume=True)
+    assert not calls[2]["apply"]
     failure = service.failure("publish", {"account_id": "work", "draft_id": "reply"}, TimeoutError("uncertain append"))
     assert failure["disposition"] == "unknown_after_dispatch"
     assert failure["recovery"] == {"action": "draft", "input": {"account_id": "work", "draft_id": "reply"}}
@@ -208,9 +227,9 @@ def test_unknown_publish_inspects_same_request_without_creating_another(mailbox,
 def test_publish_validation_failure_before_remote_attempt_keeps_editable(mailbox, monkeypatch):
     service, ref = mailbox
     service.reply(account_id="work", storage_ref=ref, body="Approved reply.", request_id="reply")
-    def invalid_draft(**arguments):
+    def invalid_draft(*args, **arguments):
         raise ValueError("invalid reply headers")
-    monkeypatch.setattr(wb, "server_draft", invalid_draft)
+    monkeypatch.setattr(wb, "prepare_request", invalid_draft)
     with pytest.raises(ValueError, match="invalid reply headers"):
         service.publish(account_id="work", draft_id="reply", revision=1)
     assert service.draft(account_id="work", draft_id="reply")["draft"]["state"] == "editing"
@@ -221,8 +240,8 @@ def test_publish_value_error_after_durable_attempt_stays_locked(mailbox, monkeyp
     service.reply(account_id="work", storage_ref=ref, body="Approved reply.", request_id="reply")
     def uncertain_draft(**arguments):
         conn = wb._ledger(service.ledger_path)
-        conn.execute("INSERT INTO server_draft_requests VALUES (?,?,?,?,?,?)",
-                     (arguments["request_id"], "work", "hash", b"raw", "attempted", "Drafts"))
+        conn.execute("UPDATE server_draft_requests SET state='attempted' WHERE request_id=?",
+                     (arguments["request_id"],))
         conn.commit()
         conn.close()
         raise ValueError("APPEND result unknown")
@@ -230,6 +249,46 @@ def test_publish_value_error_after_durable_attempt_stays_locked(mailbox, monkeyp
     with pytest.raises(ValueError, match="unknown"):
         service.publish(account_id="work", draft_id="reply", revision=1)
     assert service.draft(account_id="work", draft_id="reply")["draft"]["state"] == "publishing"
+
+
+def test_reopen_prepared_workbench_draft_saves_original_mime_at_most_once(mailbox, monkeypatch):
+    from codex_mail_workbench import server_drafts
+    from test_server_drafts import FakeImap
+
+    service, ref = mailbox
+    client = FakeImap()
+    monkeypatch.setattr(server_drafts, "Himalaya", lambda account: client)
+    original = service.reply(account_id="work", storage_ref=ref, body="Reviewed wording.", request_id="reply")["draft"]
+
+    def interrupted_before_dispatch(**arguments):
+        raise TimeoutError("worker stopped")
+
+    monkeypatch.setattr(wb, "server_draft", interrupted_before_dispatch)
+    with pytest.raises(TimeoutError):
+        service.publish(account_id="work", draft_id="reply", revision=1)
+    restarted = wb.Workbench(config_path=service.config_path, db_path=service.db_path,
+                             ledger_path=service.ledger_path, profile_path=service.profile)
+    staged = restarted.draft(account_id="work", draft_id="reply")["draft"]
+    assert staged["save_recovery"] == "continue_save"
+    assert "Test Owner" in staged["prepared_snapshot"]["body_text"]
+    assert client.appends == 0
+    (service.profile / "templates" / "mail-signature.txt").write_text("A later signature", encoding="utf-8")
+    monkeypatch.setattr(wb, "server_draft", server_drafts.server_draft)
+    with pytest.raises(ValueError, match="different content"):
+        server_drafts.server_draft(config_path=service.config_path, db_path=service.db_path, ledger_path=service.ledger_path,
+            account_id="work", request_id=original["server_request_id"], source_ref=ref, body="Different wording.",
+            signature="A later signature")
+    client.timeout_after_append = True
+    with pytest.raises(TimeoutError):
+        restarted.publish(account_id="work", draft_id="reply", revision=1, resume=True)
+    assert restarted.draft(account_id="work", draft_id="reply")["draft"]["save_recovery"] == "inspect_server"
+    verified = restarted.inspect(account_id="work", request_id=original["server_request_id"])["server_draft"]
+    assert verified["server_verified"] is True and verified["send_allowed"] is False
+    assert "Reviewed wording." in verified["body_text"] and "Test Owner" in verified["body_text"]
+    assert "A later signature" not in verified["body_text"]
+    assert verified["writing_sample"]["fingerprint"] == verified["approval_fingerprint"]
+    assert restarted.draft(account_id="work", draft_id="reply")["draft"]["state"] == "published"
+    assert client.appends == 1
 
 
 def test_send_requires_new_explicit_confirmation(mailbox, monkeypatch):

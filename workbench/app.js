@@ -241,13 +241,16 @@ async function loadList(focus = {}) {
     const row = button('', () => select(item), 'message-row');
     row.dataset.ref = item.storage_ref || item.id;
     const top = element('div', undefined, 'row-top');
-    const from = item.from || (item.state === 'editing' ? '正在编辑' : '已保存草稿');
+    const draftLabel = { editing: '正在编辑', publishing: '待核对保存', published: '已保存草稿' };
+    const from = item.from || draftLabel[item.state] || '邮箱草稿';
     const sender = element('span', from.replace(/\s*<[^>]+>\s*$/, '').replace(/^"(.*)"$/, '$1') || from, 'sender');
     sender.title = from;
     const date = element('time', formatDate(item.date || item.updated_at));
     date.title = fullDate(item.date || item.updated_at);
     top.append(sender, date);
-    row.setAttribute('aria-pressed', 'false');
+    const active = !item.storage_ref && item.id === state.edit?.id;
+    row.classList.toggle('active', active);
+    row.setAttribute('aria-pressed', String(active));
     row.setAttribute('aria-label', `${from}：${item.subject || '回复草稿'}`);
     row.append(top, element('div', item.subject || '回复草稿', 'row-subject'));
     if (item.attachments?.length) row.append(element('div', `${item.attachments.length} 个附件`, 'row-footer'));
@@ -357,20 +360,23 @@ function compose(draft) {
   composer.replaceChildren();
   const top = element('div', undefined, 'composer-top');
   const tools = element('div', undefined, 'composer-tools');
-  const status = element('span', { editing: '本地编辑', publishing: '待核对保存结果', published: '已提交邮箱' }[draft.state], 'edit-status');
+  const canResume = draft.state === 'publishing' && draft.save_recovery === 'continue_save';
+  const status = element('span', canResume ? '草稿已准备，等待继续保存' :
+    { editing: '本地编辑', publishing: '待核对保存结果', published: '已保存到草稿箱' }[draft.state], 'edit-status');
   status.id = 'edit-status'; status.setAttribute('role', 'status');
   tools.append(status, actionButton('查看原邮件', showSource, 'source', 'source-toggle quiet'));
   top.append(element('h2', '回复所有人'), tools);
   const headers = element('div', undefined, 'headers');
-  header(headers, '发件人', draft.from_address);
-  header(headers, '收件人', draft.to);
-  header(headers, '抄送', draft.cc);
-  header(headers, '主题', draft.subject);
-  const label = element('label', '本次回复正文');
+  const prepared = draft.prepared_snapshot;
+  header(headers, '发件人', prepared?.headers.From ?? draft.from_address);
+  header(headers, '收件人', prepared?.headers.To ?? draft.to);
+  header(headers, '抄送', prepared?.headers.Cc ?? draft.cc);
+  header(headers, '主题', prepared?.headers.Subject ?? draft.subject);
+  const label = element('label', prepared ? '待保存的完整草稿' : '本次回复正文');
   label.htmlFor = 'reply-body';
   const editor = element('textarea', undefined, 'reply-editor');
-  editor.id = 'reply-body'; editor.value = draft.body;
-  editor.placeholder = '写下本次回复，原签名和引用历史将保留在下方。';
+  editor.id = 'reply-body'; editor.value = prepared?.body_text ?? draft.body;
+  if (!prepared) editor.placeholder = '写下本次回复，原签名和引用历史将保留在下方。';
   editor.readOnly = draft.state !== 'editing';
   editor.oninput = () => setDirty(true);
   const signature = element('div', draft.signature || '请先配置批准的签名模板', 'signature');
@@ -393,12 +399,28 @@ function compose(draft) {
   });
   if (draft.state === 'editing') {
     const save = button('保存编辑', saveEdit); save.id = 'save-edit';
-    actions.append(actionButton('添加附件', () => picker.click(), 'attachment', 'quiet'), save, button('保存到邮箱草稿箱', publish, 'primary'));
+    actions.append(actionButton('添加附件', () => picker.click(), 'attachment', 'quiet'), save, button('保存到邮箱草稿箱', () => publish(), 'primary'));
+  } else if (canResume) {
+    actions.append(button('继续保存同一份草稿', () => publish({ resume: true }), 'primary'));
+  } else {
+    const inspect = button('核对邮箱草稿', async () => {
+      const accountId = state.account;
+      const current = selection;
+      inspect.disabled = true;
+      try {
+        const result = await api('inspect', { account_id: accountId, request_id: draft.server_request_id });
+        if (current === selection && state.account === accountId && state.edit?.id === draft.id) {
+          reviewSavedDraft(result.server_draft);
+        }
+      } finally {
+        inspect.disabled = false;
+      }
+    }, 'primary');
+    actions.append(inspect);
   }
-  else actions.append(button('核对邮箱草稿', async () => showServer((await api('inspect', { account_id: state.account, request_id: draft.server_request_id })).server_draft), 'primary'));
   const quoted = element('div', undefined, 'quoted');
   const details = element('details'); details.append(element('summary', '原邮件上下文（保留）'), element('pre', draft.quote)); quoted.append(details);
-  composer.append(top, headers, label, editor, signature, attachments, picker, quoted, actions);
+  composer.append(top, headers, label, editor, ...(prepared ? [] : [signature, quoted]), attachments, picker, actions);
   renderEditAttachments();
   updateContext({ draft_id: draft.id, revision: draft.revision, state: draft.state });
 }
@@ -444,30 +466,45 @@ async function saveEdit() {
   }
 }
 
-async function publish() {
+async function publish({ resume = false } = {}) {
   const editingId = state.edit.id;
   const accountId = state.account;
+  const current = selection;
+  const stillSelected = () => current === selection && state.edit?.id === editingId && state.account === accountId;
   if (state.dirty) await saveEdit();
-  if (state.edit?.id !== editingId || state.account !== accountId) return;
+  if (!stillSelected()) return;
   if (state.dirty) throw new Error('保存期间正文发生变化，请再次保存后审核');
   const draft = state.edit;
   $('reply-body').readOnly = true;
   document.querySelectorAll('#composer button').forEach((node) => { node.disabled = true; });
   notice('正在保存并核对邮箱草稿…');
   try {
-    const result = await api('publish', { account_id: accountId, draft_id: draft.id, revision: draft.revision });
-    if (state.edit?.id !== draft.id || state.account !== accountId) return;
-    state.edit.state = 'published';
-    compose(state.edit);
-    showServer(result.server_draft);
-    notice('已保存到邮箱草稿箱，尚未发送');
+    const result = await api('publish', { account_id: accountId, draft_id: draft.id, revision: draft.revision, ...(resume ? { resume } : {}) });
+    if (stillSelected()) reviewSavedDraft(result.server_draft);
   } catch (error) {
-    if (state.edit?.id === draft.id && state.account === accountId) {
-      try { compose((await api('draft', { account_id: accountId, draft_id: draft.id })).draft); }
-      catch { state.edit.state = 'publishing'; compose(state.edit); }
+    if (stillSelected()) {
+      try {
+        const { draft: refreshed } = await api('draft', { account_id: accountId, draft_id: draft.id });
+        if (stillSelected()) compose(refreshed);
+      } catch {
+        if (stillSelected()) {
+          const { prepared_snapshot, ...current } = state.edit;
+          compose({ ...current, state: 'publishing', save_recovery: 'inspect_server' });
+        }
+      }
     }
     throw error;
   }
+}
+
+function reviewSavedDraft(draft) {
+  const verified = draft.state === 'draft' && draft.server_verified;
+  if (verified && state.edit.state !== 'published') {
+    compose({ ...state.edit, state: 'published', prepared_snapshot: undefined, save_recovery: undefined });
+    notice('已保存到邮箱草稿箱，尚未发送');
+    if (state.mode === 'drafts') run(loadList);
+  }
+  showServer(draft);
 }
 
 function showServer(draft) {
