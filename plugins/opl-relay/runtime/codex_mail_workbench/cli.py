@@ -1739,6 +1739,8 @@ def cmd_server_draft(args: argparse.Namespace) -> int:
         source_ref=getattr(args, "storage_ref", None),
         to=getattr(args, "to", []), cc=getattr(args, "cc", []),
         subject=getattr(args, "subject", ""), attachments=getattr(args, "attach", []),
+        thread_source_ref=getattr(args, "thread_source", None),
+        in_reply_to=getattr(args, "in_reply_to", None), references=getattr(args, "references", []),
         self_aliases=getattr(args, "self_address", []), apply=getattr(args, "apply", False),
     )
     emit({"ok": True, "draft": payload}, as_json=args.json)
@@ -2294,6 +2296,11 @@ def build_parser() -> argparse.ArgumentParser:
                 command.add_argument("--to", action="append", required=True)
                 command.add_argument("--cc", action="append", default=[])
                 command.add_argument("--subject", required=True)
+                thread = command.add_mutually_exclusive_group()
+                thread.add_argument("--in-reply-to", metavar="MESSAGE_ID", help="被回复原信的 Message-ID，包含尖括号")
+                thread.add_argument("--thread-source", metavar="STORAGE_REF", help="从本账号原信提取线程头，保留显式收件人和正文")
+                command.add_argument("--references", action="append", default=[], metavar="MESSAGE_IDS",
+                                     help="已有线程 Message-ID（空格分隔或重复传入）；与 --in-reply-to 配用")
         command.set_defaults(func=cmd_server_draft)
 
     reconcile = draft_actions.add_parser(

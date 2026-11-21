@@ -338,8 +338,9 @@ external-site content into public skill files.
 
 ## Draft Approval
 
-Use server Drafts for normal replies and revisions; use `server-create` only
-for new correspondence. Mail servers own the saved draft. Apple Mail supplies
+Use server Drafts for normal replies and revisions. Use `server-create` for
+new correspondence or a reply with explicitly authorized recipients.
+Mail servers own the saved draft. Apple Mail supplies
 the existing fingerprint-gated delivery adapter when Codex is asked to send;
 server drafting does not require Apple Mail. For desktop-local composition,
 manual attachments or UI diagnosis, read [Apple Mail drafts](references/apple-mail.md).
@@ -370,8 +371,8 @@ manual attachments or UI diagnosis, read [Apple Mail drafts](references/apple-ma
    be revised under the same request ID; an existing server draft is never
    overwritten. Use a new request ID for a different source message.
    A malformed recipient header is a repairable source/provider error; preserve
-   the exact source and proposed text. Do not substitute `server-create`,
-   guessed recipients or pasted quotes for a verified threaded reply. A native
+   the exact source and proposed text. Do not guess recipients or thread
+   identifiers to repair a Reply All. A native
    Mail.app Reply All is an alternative only after full routing and thread
    readback succeeds.
 4. Stop at the requested review surface. Saving a draft never grants permission
@@ -387,6 +388,14 @@ manual attachments or UI diagnosis, read [Apple Mail drafts](references/apple-ma
    A verified Sent result completes sending even if cleanup is pending; never
    send again to repair cleanup. Use `server-inspect` after an unknown result.
    It reconciles the same handoff and never re-enables an already claimed send.
+
+For an explicitly routed reply, use `draft server-create --to <address>
+--cc <address> --subject <subject> --in-reply-to '<original-id@example.test>'
+--references '<ancestor-id@example.test>'` with the same account, request,
+body, signature and optional `--apply` arguments. Use the original message's
+verified ID, or replace both header arguments with `--thread-source <original-ref>`
+when it is in the same account's Relay store. The body file supplies any
+quoted context that should appear in the draft.
 
 For independent user sending or pending cleanup, run `draft server-reconcile
 --account <id> --request-id <stable-id> --sent-message-id <sent-id>` to preview
