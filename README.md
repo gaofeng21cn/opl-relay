@@ -259,8 +259,11 @@ opl-relay --json draft server-reply-all \
 ```
 
 Check the preview, then repeat with `--apply` to save only to server Drafts.
-The user reviews and sends in their mail app. For new correspondence use
-`server-create` with `--to`, optional `--cc`, and `--subject`. After interruption,
+The user reviews and sends in their mail app. Use `server-create` with `--to`,
+optional `--cc`, and `--subject` for new mail or a reply with explicitly
+chosen recipients. [Set the reply thread](docs/architecture.md#server-drafts-for-mobile-review)
+with `--in-reply-to` and optional `--references`, or with `--thread-source`.
+After interruption,
 use `draft server-inspect --account work --request-id reply-unique-id`; never
 change IDs just to retry. The route preserves Reply All recipients, thread
 headers, quoted history and a single new signature in UTF-8 plain text/HTML.

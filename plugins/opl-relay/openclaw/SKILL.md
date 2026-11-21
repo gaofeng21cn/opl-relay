@@ -82,7 +82,13 @@ For a continuing thread, use `draft server-reply-all` with the exact source
 reference, a stable request ID, new prose in a private body file, and the
 approved signature in a separate file. Relay derives the Reply All route and
 thread headers from raw mail; do not rebuild recipients from a flattened
-summary. Use `draft server-create` only for new correspondence.
+summary. When the user explicitly specifies a different route, such as a
+reply to the original author of a forwarded message, use `draft server-create`
+with `--to`, optional `--cc`, `--subject` and the verified original
+`--in-reply-to` plus optional `--references`. For an original in the same
+account's Relay store, `--thread-source <original-ref>` supplies both headers.
+Use the original message's ID for its conversation and include any desired
+quoted context in the body file.
 
 For a follow-up, resolve the source once before drafting:
 

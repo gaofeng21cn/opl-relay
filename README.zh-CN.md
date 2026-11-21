@@ -221,7 +221,9 @@ opl-relay --json draft server-reply-all \
 ```
 
 先核对预览，再用同一命令加 `--apply` 保存到服务器 Drafts；由用户在自己的邮件 App
-审核并发送。新邮件使用 `server-create`，提供 `--to`、可选 `--cc` 和 `--subject`。
+审核并发送。新邮件或需要指定收件人的回复使用 `server-create`，提供 `--to`、
+可选 `--cc` 和 `--subject`。回复可用 `--in-reply-to` 和可选的 `--references`，
+或用 `--thread-source` [指定线程](docs/architecture.md#server-drafts-for-mobile-review)。
 中断后使用 `draft server-inspect --account work --request-id reply-unique-id` 回读，
 不要换请求 ID 盲目重建。回复保留完整收件人路由、线程标头和引用历史，以 UTF-8
 纯文本/HTML 输出，并在新正文后添加一次指定签名。不会覆盖手机上的现有草稿，

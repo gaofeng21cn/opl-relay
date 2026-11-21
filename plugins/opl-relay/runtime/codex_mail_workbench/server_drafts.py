@@ -22,6 +22,10 @@ from .store import connect_email_store, fetch_raw_email_by_storage_ref, get_mess
 from .native import Himalaya
 
 
+_MESSAGE_ID = re.compile(r"<[^<>\s]+@[^<>\s]+>")
+_REPLY_PREFIXES = re.compile(r"(?i)^\s*(?:(?:re|fw|fwd|答复|回复|回覆|转发|轉發|轉寄)\s*[:：]\s*)+")
+
+
 def addresses(message, field):
     result = []
     for header in message.get_all(field, []):
@@ -84,8 +88,59 @@ def _paragraphs(text):
                    for p in text.split("\n\n"))
 
 
+def _source_thread(source):
+    ids = source.get_all("Message-ID", [])
+    if len(ids) != 1 or not _MESSAGE_ID.fullmatch(str(ids[0]).strip()):
+        raise ValueError("Source needs one valid Message-ID for a threaded reply")
+    history = str(source.get("References", source.get("In-Reply-To", "")))
+    return str(ids[0]).strip(), _MESSAGE_ID.findall(history)
+
+
+def _validate_message_id(value, field):
+    error = f"{field} requires a valid <Message-ID>"
+    if len(value) > 997 or not value.isascii() or not _MESSAGE_ID.fullmatch(value):
+        raise ValueError(error)
+    header = policy.default.header_factory("Message-ID", value)
+    if header.defects or str(header) != value:
+        raise ValueError(error)
+
+
+def _explicit_thread(thread_source_raw, in_reply_to, references):
+    if thread_source_raw is not None:
+        if in_reply_to is not None or references:
+            raise ValueError("Choose either a thread source or explicit thread headers")
+        source = BytesParser(policy=policy.default).parsebytes(thread_source_raw)
+        parent_id, refs = _source_thread(source)
+    else:
+        if in_reply_to is None:
+            raise ValueError("--references requires --in-reply-to")
+        if any(not value.strip() or "\r" in value or "\n" in value for value in references):
+            raise ValueError("References requires space-separated <Message-ID> values")
+        parent_id = in_reply_to.strip(" \t")
+        refs = [ref for value in references for ref in re.split(r"[ \t]+", value.strip(" \t"))]
+    _validate_message_id(parent_id, "In-Reply-To")
+    for ref in refs:
+        _validate_message_id(ref, "References")
+    history = list(dict.fromkeys(ref for ref in refs if ref != parent_id))
+    return parent_id, [*history, parent_id]
+
+
+def _thread_header(name, ids):
+    # The default email policy can RFC 2047 encode a long unbroken ID.
+    # Thread fields require literal Message-IDs, with folding only between IDs.
+    lines = [name + ":"]
+    for value in ids:
+        limit = 998 if lines[-1] == name + ":" else 78
+        if len(lines[-1]) + 1 + len(value) <= limit:
+            lines[-1] += " " + value
+        else:
+            lines.append(" " + value)
+    return ("\r\n".join(lines) + "\r\n").encode("ascii")
+
+
 def build_message(*, sender, self_addresses, body, signature, source_raw=None,
-                  to=(), cc=(), subject="", attachments=()):
+                  to=(), cc=(), subject="", attachments=(), thread_source_raw=None,
+                  in_reply_to=None, references=()):
     body, signature = normalize_body(body).strip(), normalize_body(signature).strip()
     if not body or not signature:
         raise ValueError("Both reply text and the approved signature are required")
@@ -96,14 +151,11 @@ def build_message(*, sender, self_addresses, body, signature, source_raw=None,
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="draft.opl.local")
     quote = ""
+    thread_headers = b""
     if source_raw is not None:
         source = BytesParser(policy=policy.default).parsebytes(source_raw)
         to, cc = reply_route(source, self_addresses)
-        ids = source.get_all("Message-ID", [])
-        if len(ids) != 1 or not re.fullmatch(r"<[^<>\s]+@[^<>\s]+>", str(ids[0]).strip()):
-            raise ValueError("Source needs one valid Message-ID for a threaded reply")
-        parent_id = str(ids[0]).strip()
-        refs = re.findall(r"<[^<>\s]+@[^<>\s]+>", str(source.get("References", source.get("In-Reply-To", ""))))
+        parent_id, refs = _source_thread(source)
         msg["In-Reply-To"] = parent_id
         msg["References"] = " ".join(dict.fromkeys([*refs, parent_id]))
         subject = str(source.get("Subject", ""))
@@ -124,6 +176,11 @@ def build_message(*, sender, self_addresses, body, signature, source_raw=None,
                     group.append(addr)
             groups.append(group)
         to, cc = groups
+        if thread_source_raw is not None or in_reply_to is not None or references:
+            parent_id, thread_chain = _explicit_thread(thread_source_raw, in_reply_to, references)
+            thread_headers = _thread_header("In-Reply-To", [parent_id]) + _thread_header("References", thread_chain)
+            base_subject = _REPLY_PREFIXES.sub("", subject).strip()
+            subject = "Re: " + base_subject if base_subject else ""
     if not to or not subject.strip():
         raise ValueError("Recipients and subject are required")
     msg["To"] = tuple(to)
@@ -143,7 +200,7 @@ def build_message(*, sender, self_addresses, body, signature, source_raw=None,
         kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         major, minor = kind.split("/", 1)
         msg.add_attachment(path.read_bytes(), maintype=major, subtype=minor, filename=path.name)
-    return msg.as_bytes()
+    return thread_headers + msg.as_bytes()
 
 
 def content_snapshot(raw):
@@ -438,14 +495,20 @@ def _ledger(path):
 
 def prepare_request(conn, *, db_path, accounts, account_id, request_id, row=None,
                     body="", signature="", source_ref=None, to=(), cc=(), subject="",
-                    attachments=(), self_aliases=()):
+                    attachments=(), self_aliases=(), thread_source_ref=None, in_reply_to=None,
+                    references=()):
     """Stage exact MIME on the caller's ledger transaction, without a mailbox write."""
+    if thread_source_ref is not None and not thread_source_ref.strip():
+        raise ValueError("--thread-source requires an exact storage reference")
+    if source_ref and (thread_source_ref or in_reply_to is not None or references):
+        raise ValueError("Reply All uses the exact source email for its thread")
     source_raw = None
-    if source_ref:
+    lookup_ref = source_ref or thread_source_ref
+    if lookup_ref:
         store = connect_email_store(db_path)
         try:
-            meta = get_message_by_storage_ref(store, source_ref)
-            source_raw = fetch_raw_email_by_storage_ref(store, source_ref)
+            meta = get_message_by_storage_ref(store, lookup_ref)
+            source_raw = fetch_raw_email_by_storage_ref(store, lookup_ref)
         finally:
             store.close()
         if not meta or meta["account_id"] != account_id or not source_raw:
@@ -454,12 +517,14 @@ def prepare_request(conn, *, db_path, accounts, account_id, request_id, row=None
             raise ValueError("Reply source evidence hash mismatch")
     raw = build_message(sender=accounts[account_id].email,
                         self_addresses=[a.email for a in accounts.values()] + list(self_aliases),
-                        body=body, signature=signature, source_raw=source_raw,
+                        body=body, signature=signature, source_raw=source_raw if source_ref else None,
                         to=to, cc=cc, subject=subject,
+                        thread_source_raw=source_raw if thread_source_ref else None,
+                        in_reply_to=in_reply_to, references=references,
                         attachments=[Path(p).expanduser() for p in attachments])
     snapshot = content_snapshot(raw)
     snapshot["headers"].pop("Message-ID")
-    identity = {"content": snapshot, "source_ref": source_ref}
+    identity = {"content": snapshot, "source_ref": lookup_ref}
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     if row is None:
         conn.execute("INSERT INTO server_draft_requests VALUES (?,?,?,?,?,?)",
@@ -483,7 +548,8 @@ def _is_workbench_request(conn, request_id):
 
 def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
                  body="", signature="", source_ref=None, to=(), cc=(), subject="",
-                 attachments=(), apply=False, inspect=False, self_aliases=(), use_prepared=False):
+                 attachments=(), apply=False, inspect=False, self_aliases=(), use_prepared=False,
+                 thread_source_ref=None, in_reply_to=None, references=()):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", request_id):
         raise ValueError("Use a stable, non-sensitive request ID (letters, digits, . _ -)")
     accounts = load_accounts_config(config_path)
@@ -517,7 +583,9 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
             row = prepare_request(conn, db_path=db_path, accounts=accounts, account_id=account_id,
                                   request_id=request_id, row=row, body=body, signature=signature,
                                   source_ref=source_ref, to=to, cc=cc, subject=subject,
-                                  attachments=attachments, self_aliases=self_aliases)
+                                  attachments=attachments, self_aliases=self_aliases,
+                                  thread_source_ref=thread_source_ref, in_reply_to=in_reply_to,
+                                  references=references)
         raw = bytes(row["raw"])
         if not apply and not inspect:
             conn.commit()

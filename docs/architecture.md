@@ -147,6 +147,26 @@ uses the existing Apple Mail delivery adapter: it locates the synchronized
 server draft by exact `Message-ID`, compares MIME, routing, attachments and
 thread headers, then uses the existing single-send ledger and Sent readback.
 
+To reply to an original message that someone forwarded to you, set the
+recipients explicitly and use that original message's Message-ID:
+
+```bash
+opl-relay --json draft server-create --account work --request-id reply-unique-id \
+  --to 'Author <author@example.test>' --cc 'Forwarder <forwarder@example.test>' \
+  --subject 'Fwd: Re: Collaboration' --in-reply-to '<original@example.test>' \
+  --references '<first@example.test>' --body-file ./reply.txt \
+  --signature-file ./signature.txt --apply
+```
+
+If the original is in the same Relay account's store, use
+`--thread-source 'email-store://...'` in place of both manual header options.
+The parent Message-ID is used for In-Reply-To and appended once to the
+deduplicated References chain. A forwarded copy has its own Message-ID, so
+use the original or its verified headers for the original conversation.
+This mode emits one `Re:` prefix, adds the signature once, and uses the
+supplied body as the new message text. Put any quoted history you want
+visible in the recipient's client in that body yourself.
+
 `draft reply-context` accepts an exact `--storage-ref`, or combines `--query`
 with `--latest-sent --sync` for a one-call follow-up source selection. It returns
 the exact source body, complete To/Cc, thread

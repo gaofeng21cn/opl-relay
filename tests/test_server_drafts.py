@@ -1,4 +1,6 @@
+import hashlib
 import itertools
+import json
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
@@ -8,6 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 from codex_mail_workbench import server_drafts as sd
+from codex_mail_workbench.cli import main as relay_cli
+from codex_mail_workbench.store import connect_email_store, upsert_email_message
 
 
 SIGNATURE = "Best regards,\nFeng GAO, Ph.D.\nhttps://example.test/"
@@ -149,6 +153,88 @@ def test_preview_does_not_connect_and_apply_is_idempotent(service, monkeypatch):
     with pytest.raises(ValueError, match="different content"):
         sd.server_draft(**(kwargs | {"body": "Changed"}), apply=True)
     assert client.appends == 1
+
+
+def test_server_create_cli_threads_explicit_recipients_without_quoting(tmp_path, service, capsys):
+    client, kwargs = service
+    signature = tmp_path / "signature.txt"
+    signature.write_text(SIGNATURE, encoding="utf-8")
+    args = [
+        "--json", "--config", str(kwargs["config_path"]), "--db", str(kwargs["db_path"]),
+        "--draft-db", str(kwargs["ledger_path"]), "draft", "server-create",
+        "--account", "work", "--request-id", "explicit-thread", "--to", "Author <author@example.test>",
+        "--cc", "forwarder@example.test", "--subject", "Re: 转发：Fwd: Re: Collaboration",
+        "--in-reply-to", "<original@example.test>", "--references", "<first@example.test> <original@example.test>",
+        "--references", "<first@example.test>", "--body", "Approved body\n\n> Supplied quote",
+        "--signature-file", str(signature), "--apply",
+    ]
+    assert relay_cli(args) == 0
+    draft = json.loads(capsys.readouterr().out)["draft"]
+    assert draft["folder"] == "Drafts" and draft["server_verified"]
+    assert draft["state"] == "draft" and draft["send_allowed"] is False
+    message = BytesParser(policy=policy.default).parsebytes(client.raw)
+    assert message["To"] == "Author <author@example.test>"
+    assert message["Cc"] == "forwarder@example.test"
+    assert message["Subject"] == "Re: Collaboration"
+    assert message["In-Reply-To"] == "<original@example.test>"
+    assert message["References"] == "<first@example.test> <original@example.test>"
+    body = message.get_body(preferencelist=("plain",)).get_content().replace("\r\n", "\n")
+    assert body == "Approved body\n\n> Supplied quote\n\n" + SIGNATURE + "\n"
+    assert relay_cli(args) == 0
+    assert json.loads(capsys.readouterr().out)["draft"]["message_id"] == draft["message_id"]
+    assert client.appends == 1
+
+
+def test_server_create_writes_long_message_ids_literally(service):
+    client, kwargs = service
+    parent = "<" + "a" * 85 + "@mail.example.test>"
+    first = "<first@example.test>"
+    sd.server_draft(**kwargs, in_reply_to=parent, references=[first], apply=True)
+    header = client.raw.split(b"\r\n\r\n", 1)[0]
+    assert f"In-Reply-To: {parent}\r\nReferences: {first}\r\n {parent}\r\n".encode() in header
+
+
+@pytest.mark.parametrize("source_account", ["work", "different-account"])
+def test_server_create_resolves_thread_source_without_using_its_recipients(service, source_account):
+    client, kwargs = service
+    original = source()
+    del original["References"]
+    original["In-Reply-To"] = "<previous@example.test>"
+    raw = original.as_bytes()
+    with connect_email_store(kwargs["db_path"]) as store:
+        ref = upsert_email_message(
+            store, account_id=source_account, folder="INBOX", folder_slug="INBOX", uid=1, uidvalidity=1,
+            message_id=str(original["Message-ID"]), subject=str(original["Subject"]),
+            sender=str(original["From"]), recipient=str(original["To"]),
+            date_iso="2026-11-21T12:00:00+00:00", ingest_ts="2026-11-21T12:00:00+00:00",
+            raw_sha256=hashlib.sha256(raw).hexdigest(), raw_eml=raw, attachments=[],
+        )
+    if source_account != kwargs["account_id"]:
+        with pytest.raises(ValueError, match="does not belong"):
+            sd.server_draft(**kwargs, thread_source_ref=ref, apply=True)
+        assert client.appends == 0
+        return
+    result = sd.server_draft(**kwargs, thread_source_ref=ref, apply=True)
+    assert result["headers"]["In-Reply-To"] == "<latest@example.test>"
+    assert result["headers"]["References"] == "<previous@example.test> <latest@example.test>"
+    assert result["to"] == "member@example.test"
+    assert result["cc"] == ""
+    assert "Older question" not in result["body_text"]
+
+
+@pytest.mark.parametrize("headers", [
+    {"in_reply_to": "plain-id@example.test"},
+    {"in_reply_to": "<one@example.test>\r\nBcc: injected@example.test"},
+    {"in_reply_to": "<one@example.test>", "references": ["<first@example.test>\n<second@example.test>"]},
+    {"in_reply_to": "<one@example.test>", "references": ["<first@example.test> malformed"]},
+    {"references": ["<first@example.test>"]},
+    {"thread_source_ref": ""},
+])
+def test_server_create_rejects_invalid_thread_inputs_before_append(service, headers):
+    client, kwargs = service
+    with pytest.raises(ValueError):
+        sd.server_draft(**kwargs, **headers, apply=True)
+    assert client.appends == 0
 
 
 def test_timeout_reconciles_without_duplicate_append(service):
