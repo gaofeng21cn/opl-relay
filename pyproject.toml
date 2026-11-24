@@ -8,7 +8,18 @@ version = "0.7.8"
 description = "Local-first personal communication relay for Codex and OPL."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "httpx>=0.28,<1",
+  "msal>=1.31,<2",
+  "pydantic>=2.10,<3",
+  "typer>=0.15,<1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.9,<1",
+]
 
 [project.scripts]
 opl-relay = "codex_mail_workbench.cli:main"

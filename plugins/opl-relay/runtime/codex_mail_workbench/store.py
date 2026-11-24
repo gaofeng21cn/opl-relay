@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .folders import folder_role, folder_slug, normalize_folder
 from .message import extract_text_body
-from .folders import normalize_folder, folder_role, folder_slug
+from .schema import ensure_mail_schema
 
 
 SCOPES = ("active", "history", "all")
@@ -21,135 +22,7 @@ MESSAGE_COLUMNS = (
 
 
 def ensure_email_store_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS email_messages (
-          account_id TEXT NOT NULL,
-          folder TEXT NOT NULL,
-          folder_slug TEXT NOT NULL,
-          uid INTEGER NOT NULL,
-          uidvalidity INTEGER,
-          message_id TEXT NOT NULL DEFAULT '',
-          subject TEXT NOT NULL DEFAULT '',
-          sender TEXT NOT NULL DEFAULT '',
-          recipient TEXT NOT NULL DEFAULT '',
-          date_iso TEXT NOT NULL DEFAULT '',
-          raw_sha256 TEXT NOT NULL,
-          raw_eml BLOB NOT NULL,
-          attachments_json TEXT NOT NULL DEFAULT '[]',
-          ingest_ts TEXT NOT NULL,
-          storage_ref TEXT NOT NULL UNIQUE,
-          deleted INTEGER NOT NULL DEFAULT 0,
-          deleted_ts TEXT NOT NULL DEFAULT '',
-          present INTEGER NOT NULL DEFAULT 1,
-          PRIMARY KEY (storage_ref)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_email_messages_folder_live
-        ON email_messages(account_id, folder_slug, deleted);
-
-        CREATE INDEX IF NOT EXISTS idx_email_messages_msgid
-        ON email_messages(account_id, message_id);
-
-        CREATE INDEX IF NOT EXISTS idx_email_messages_date_live
-        ON email_messages(date_iso, deleted);
-
-        CREATE TABLE IF NOT EXISTS mailbox_operations (
-          operation_ref TEXT PRIMARY KEY,
-          account_id TEXT NOT NULL,
-          storage_ref TEXT NOT NULL,
-          source_folder TEXT NOT NULL,
-          source_uid INTEGER NOT NULL,
-          destination_folder TEXT NOT NULL,
-          operation TEXT NOT NULL,
-          method TEXT NOT NULL,
-          raw_sha256 TEXT NOT NULL,
-          occurred_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mailbox_operations_storage_ref
-        ON mailbox_operations(storage_ref);
-        """
-    )
-    columns = conn.execute("PRAGMA table_info(email_messages)").fetchall()
-    if "present" not in {row[1] for row in columns}:
-        # Preserve every storage_ref and raw byte when replacing the old UID key.
-        # A reused UID in a new UIDVALIDITY must not overwrite historical evidence.
-        with conn:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute("ALTER TABLE email_messages RENAME TO email_messages_legacy")
-            conn.execute("""
-                CREATE TABLE email_messages (
-                  account_id TEXT NOT NULL, folder TEXT NOT NULL, folder_slug TEXT NOT NULL,
-                  uid INTEGER NOT NULL, uidvalidity INTEGER,
-                  message_id TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
-                  sender TEXT NOT NULL DEFAULT '', recipient TEXT NOT NULL DEFAULT '',
-                  date_iso TEXT NOT NULL DEFAULT '', raw_sha256 TEXT NOT NULL,
-                  raw_eml BLOB NOT NULL, attachments_json TEXT NOT NULL DEFAULT '[]',
-                  ingest_ts TEXT NOT NULL, storage_ref TEXT PRIMARY KEY,
-                  deleted INTEGER NOT NULL DEFAULT 0, deleted_ts TEXT NOT NULL DEFAULT '',
-                  present INTEGER NOT NULL DEFAULT 1
-                )
-            """)
-            conn.execute("""INSERT INTO email_messages SELECT
-                account_id,folder,folder_slug,uid,uidvalidity,message_id,subject,sender,recipient,
-                date_iso,raw_sha256,raw_eml,attachments_json,ingest_ts,storage_ref,deleted,deleted_ts,
-                CASE WHEN deleted=0 THEN 1 ELSE 0 END FROM email_messages_legacy""")
-            conn.execute("DROP TABLE email_messages_legacy")
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS email_blobs (
-          raw_sha256 TEXT PRIMARY KEY, raw_eml BLOB NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_email_messages_folder_live
-          ON email_messages(account_id, folder_slug, present, deleted);
-        CREATE INDEX IF NOT EXISTS idx_email_messages_msgid ON email_messages(account_id, message_id);
-        CREATE INDEX IF NOT EXISTS idx_email_messages_date_live ON email_messages(date_iso, deleted);
-        CREATE INDEX IF NOT EXISTS idx_email_messages_uid ON email_messages(account_id, folder_slug, uidvalidity, uid);
-        CREATE INDEX IF NOT EXISTS idx_email_messages_hash ON email_messages(raw_sha256);
-        CREATE INDEX IF NOT EXISTS idx_email_messages_present ON email_messages(account_id, folder_slug, present, deleted);
-        CREATE TABLE IF NOT EXISTS folder_snapshots (
-          account_id TEXT NOT NULL, folder TEXT NOT NULL, folder_slug TEXT NOT NULL,
-          uidvalidity INTEGER NOT NULL, remote_count INTEGER NOT NULL,
-          checked_at TEXT NOT NULL, complete INTEGER NOT NULL,
-          PRIMARY KEY(account_id, folder_slug)
-        );
-        CREATE TABLE IF NOT EXISTS mail_folders (
-          account_id TEXT NOT NULL, folder TEXT NOT NULL, role TEXT NOT NULL,
-          PRIMARY KEY(account_id, folder)
-        );
-        CREATE TABLE IF NOT EXISTS mail_reviews (
-          account_id TEXT NOT NULL, raw_sha256 TEXT NOT NULL,
-          storage_ref TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL,
-          note TEXT NOT NULL DEFAULT '', reviewed_at TEXT NOT NULL,
-          PRIMARY KEY(account_id, raw_sha256)
-        );
-        CREATE TABLE IF NOT EXISTS email_search (
-          raw_sha256 TEXT PRIMARY KEY, body_text TEXT NOT NULL
-        );
-        CREATE VIRTUAL TABLE IF NOT EXISTS email_search_fts USING fts5(
-          body_text, content='email_search', content_rowid='rowid', tokenize='trigram'
-        );
-        CREATE TRIGGER IF NOT EXISTS email_search_insert AFTER INSERT ON email_search BEGIN
-          INSERT INTO email_search_fts(rowid, body_text) VALUES(new.rowid, new.body_text);
-        END;
-    """)
-    review_columns = {r[1] for r in conn.execute("PRAGMA table_info(mail_reviews)")}
-    for column in ("category", "suggested_folder"):
-        if column not in review_columns:
-            conn.execute(f"ALTER TABLE mail_reviews ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
-    conn.commit()
-    if "raw_eml" in {r[1] for r in conn.execute("PRAGMA table_info(email_messages)")}:
-        # Content is immutable and shared by all folder identities. Keep the
-        # metadata table and every stable reference; remove only duplicate bytes.
-        with conn:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute("INSERT OR IGNORE INTO email_blobs SELECT raw_sha256,raw_eml FROM email_messages")
-            mismatch = conn.execute("""SELECT 1 FROM email_messages m JOIN email_blobs b USING(raw_sha256)
-                WHERE m.raw_eml<>b.raw_eml LIMIT 1""").fetchone()
-            if mismatch:
-                raise ValueError("raw hash collision or corrupt evidence; refusing content deduplication")
-            conn.execute("ALTER TABLE email_messages DROP COLUMN raw_eml")
-    conn.commit()
+    ensure_mail_schema(conn)
 
 
 def connect_email_store(path: Path) -> sqlite3.Connection:

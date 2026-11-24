@@ -1,24 +1,34 @@
 from __future__ import annotations
 
-import argparse
-import copy
 import getpass
 import json
 import os
 import shutil
-import sqlite3
 import sys
 from email.utils import getaddresses
+from enum import StrEnum
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Annotated, Any, Literal
+
+import typer
 
 from . import __version__
+from .app_contributions import (
+    APP_CONTRIBUTION_ABI,
+    APP_CONTRIBUTION_ACTION_CONTRACTS,
+    APP_CONTRIBUTION_COLLECTION_ACTIONS,
+    APP_CONTRIBUTION_DATA_ACTIONS,
+    APP_CONTRIBUTION_DATA_CONTRACTS,
+    APP_CONTRIBUTION_REQUEST_SCHEMA,
+    APP_CONTRIBUTION_RESPONSE_SCHEMA,
+    cmd_app_contribution,
+)
 from .apple_mail import AppleMailProvider
 from .config import (
     KEYCHAIN_SERVICE,
     add_account,
-    keychain_get_secret,
     keychain_has_secret,
-    keychain_read_secret,
     keychain_set_secret,
     load_account,
     load_accounts_config,
@@ -26,21 +36,12 @@ from .config import (
 from .context import ContextBuilder
 from .drafts import DraftLedger, DraftService, Recipient
 from .knowledge import FrameworkKnowledge, KnowledgeIndex
-from .memory_evidence import MemoryEvidence
 from .mailbox import MailboxMoveFailure, move_messages
 from .memory import (
-    MEMORY_CATEGORIES,
-    MEMORY_STATUSES,
-    SENSITIVITIES,
     MemoryStore,
 )
+from .memory_evidence import MemoryEvidence
 from .message import extract_text_body
-from .persona import (
-    load_approved_persona_draft_context,
-    load_persona_mail_context,
-    validate_approved_persona_draft_context,
-)
-from .people import read_memory_evidence, read_people
 from .paths import (
     default_config_path,
     default_db_path,
@@ -51,20 +52,21 @@ from .paths import (
     profile_workspace_source,
     state_dir_source,
 )
+from .persona import (
+    load_approved_persona_draft_context,
+    load_persona_mail_context,
+)
 from .store import (
     connect_email_store,
-    connect_email_store_readonly,
     fetch_raw_email_by_storage_ref,
-    get_message_by_storage_ref,
-    list_messages,
-    search_messages,
-    scope_filter,
-    SCOPES,
     folder_status,
+    get_message_by_storage_ref,
     index_messages,
+    list_messages,
     record_reviews,
     review_pending,
     review_status,
+    search_messages,
 )
 from .sync import sync_account
 from .triage import build_triage_evidence, validate_triage_evidence
@@ -75,336 +77,42 @@ from .workspace import (
     setup_status,
 )
 
+__all__ = [
+    "APP_CONTRIBUTION_ABI",
+    "APP_CONTRIBUTION_ACTION_CONTRACTS",
+    "APP_CONTRIBUTION_COLLECTION_ACTIONS",
+    "APP_CONTRIBUTION_DATA_ACTIONS",
+    "APP_CONTRIBUTION_DATA_CONTRACTS",
+    "APP_CONTRIBUTION_REQUEST_SCHEMA",
+    "APP_CONTRIBUTION_RESPONSE_SCHEMA",
+    "app",
+    "build_parser",
+    "main",
+]
 
-APP_CONTRIBUTION_ABI = "opl-package-app-contribution-cli.v1"
-APP_CONTRIBUTION_REQUEST_SCHEMA = "opl-package-app-contribution-request.v1"
-APP_CONTRIBUTION_RESPONSE_SCHEMA = "opl-package-app-contribution-response.v1"
-
-APP_CONTRIBUTION_DATA_CONTRACTS = {
-    "communications.mail.v1#recent": {
-        "operation": "read",
-        "input": {
-            "account": {"type": "string", "required": False},
-            "folder": {"type": "string", "required": False},
-            "since": {"type": "string", "required": False},
-            "until": {"type": "string", "required": False},
-            "query": {"type": "string", "required": False},
-            "scope": {"type": "string", "required": False, "enum": list(SCOPES), "default": "active"},
-            "status": {"type": "string", "required": False,
-                       "enum": ["all", "unreviewed", "open", "waiting", "closed", "none"], "default": "all"},
-            "offset": {"type": "integer", "required": False, "minimum": 0, "maximum": sys.maxsize, "default": 0},
-            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 2000, "default": 20},
-        },
-        "result": "communications.mail.v1#recent.result",
-    },
-    "communications.mail.v1#draft.inspect": {
-        "operation": "read",
-        "input": {
-            "draft_ref": {"type": "string", "required": False},
-            "query": {"type": "string", "required": False},
-            "status": {"type": "string", "required": False,
-                       "enum": ["active", "all", "draft", "sending", "unknown", "sent"], "default": "active"},
-            "offset": {"type": "integer", "required": False, "minimum": 0, "maximum": sys.maxsize, "default": 0},
-            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500, "default": 50},
-        },
-        "result": "communications.mail.v1#draft.inspect.result",
-    },
-    "communications.mail.v1#triage.evidence": {
-        "operation": "read",
-        "input": {
-            "source_ref": {"type": "string", "required": False},
-            "policy_refs": {"type": "string[]", "required": False, "min_items": 1},
-        },
-        "result": "communications.mail.v1#triage.evidence.result",
-    },
-    "personal.memory.v1#search": {
-        "operation": "read",
-        "input": {
-            "entity": {"type": "string", "required": False},
-            "query": {"type": "string", "required": False},
-            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
-            "include_stale": {"type": "boolean", "required": False, "default": False},
-        },
-        "result": "personal.memory.v1#search.result",
-    },
-    "personal.memory.v1#people": {
-        "operation": "read",
-        "input": {
-            "query": {"type": "string", "required": False},
-            "limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
-            "include_stale": {"type": "boolean", "required": False, "default": False},
-        },
-        "result": "personal.memory.v1#people.result",
-    },
-}
-
-APP_CONTRIBUTION_ACTION_CONTRACTS = {
-    "communications.mail.v1#workbench.open": {
-        "operation": "execute",
-        "confirmation_required": False,
-        "input": {name: {"type": "string", "required": False}
-                  for name in ("account", "storage_ref", "draft_id", "request_id")},
-        "result": "communications.mail.v1#workbench.open.result",
-    },
-    "communications.mail.v1#sync.incremental": {
-        "operation": "execute",
-        "confirmation_required": False,
-        "input": {
-            "account": {"type": "string", "required": True},
-            "limit_per_folder": {"type": "integer", "required": False, "minimum": 1},
-            "dry_run": {"type": "boolean", "required": False},
-        },
-        "result": "communications.mail.v1#sync.incremental.result",
-    },
-    "communications.mail.v1#draft.create": {
-        "operation": "execute",
-        "confirmation_required": False,
-        "input": {
-            "account": {"type": "string", "required": True},
-            "to": {"type": "string[]", "required": True, "min_items": 1},
-            "cc": {"type": "string[]", "required": False},
-            "bcc": {"type": "string[]", "required": False},
-            "subject": {"type": "string", "required": True},
-            "body": {"type": "string", "required": True},
-            "open": {"type": "boolean", "required": False},
-        },
-        "result": "communications.mail.v1#draft.create.result",
-    },
-    "communications.mail.v1#draft.create_from_persona": {
-        "operation": "execute",
-        "confirmation_required": True,
-        "input": {
-            "proposal_bundle": {"type": "object", "required": True},
-            "account": {"type": "string", "required": True},
-            "to": {"type": "string[]", "required": True, "min_items": 1},
-            "cc": {"type": "string[]", "required": False},
-            "bcc": {"type": "string[]", "required": False},
-            "open": {"type": "boolean", "required": False},
-        },
-        "result": "communications.mail.v1#draft.create_from_persona.result",
-    },
-    "communications.mail.v1#draft.reply_all": {
-        "operation": "execute",
-        "confirmation_required": False,
-        "input": {
-            "account": {"type": "string", "required": True},
-            "apple_mail_account": {"type": "string", "required": True},
-            "apple_mail_id": {"type": "integer", "required": True, "minimum": 1},
-            "mailbox_path": {"type": "string", "required": True},
-            "body": {"type": "string", "required": True},
-            "open": {"type": "boolean", "required": False},
-        },
-        "result": "communications.mail.v1#draft.reply_all.result",
-    },
-    "communications.mail.v1#draft.inspect": {
-        "operation": "execute",
-        "confirmation_required": False,
-        "input": {
-            "draft_ref": {"type": "string", "required": True},
-        },
-        "result": "communications.mail.v1#draft.inspect.result",
-    },
-    "communications.mail.v1#draft.open": {
-        "operation": "execute",
-        "confirmation_required": False,
-        "input": {
-            "draft_ref": {"type": "string", "required": True},
-        },
-        "result": "communications.mail.v1#draft.open.result",
-    },
-    "communications.mail.v1#draft.send": {
-        "operation": "execute",
-        "confirmation_required": True,
-        "input": {
-            "draft_ref": {"type": "string", "required": True},
-            "approval": {"type": "string", "required": True},
-        },
-        "result": "communications.mail.v1#draft.send.result",
-    },
-    "personal.context.v1#build": {
-        "operation": "execute",
-        "confirmation_required": False,
-        "input": {
-            "person": {"type": "string", "required": False},
-            "project": {"type": "string", "required": False},
-            "query": {"type": "string", "required": False},
-            "mail_limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 200},
-            "memory_limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 500},
-            "knowledge_limit": {"type": "integer", "required": False, "minimum": 1, "maximum": 200},
-        },
-        "result": "personal.context.v1#build.result",
-    },
-    "personal.memory.v1#inspect": {
-        "operation": "execute",
-        "confirmation_required": False,
-        "input": {
-            "memory_ref": {"type": "string", "required": True},
-        },
-        "result": "personal.memory.v1#inspect.result",
-    },
-}
+ScopeLiteral = Literal["active", "history", "all"]
+MemoryCategoryLiteral = Literal[
+    "commitment", "event", "fact", "inference", "note", "preference", "relationship", "style"
+]
+class MemoryStatusChoice(StrEnum):
+    approved = "approved"
+    candidate = "candidate"
+    forgotten = "forgotten"
+    rejected = "rejected"
+    superseded = "superseded"
 
 
-APP_CONTRIBUTION_DATA_ACTIONS = {
-    "communications.mail.v1#recent": ["communications.mail.v1#sync.incremental", "communications.mail.v1#workbench.open"],
-    "communications.mail.v1#draft.inspect": [
-        "communications.mail.v1#workbench.open",
-        "communications.mail.v1#draft.create",
-        "communications.mail.v1#draft.reply_all",
-        "communications.mail.v1#draft.create_from_persona",
-        "communications.mail.v1#draft.inspect",
-        "communications.mail.v1#draft.open",
-        "communications.mail.v1#draft.send",
-    ],
-    "communications.mail.v1#triage.evidence": [],
-    "personal.memory.v1#people": ["personal.context.v1#build", "personal.memory.v1#inspect"],
-    "personal.memory.v1#search": ["personal.memory.v1#inspect"],
-}
+SensitivityLiteral = Literal["private", "restricted", "sensitive"]
+ContentKindLiteral = Literal["", "policy", "state", "decision", "mechanism"]
 
 
-APP_CONTRIBUTION_COLLECTION_ACTIONS = {
-    "communications.mail.v1#recent": [
-        ("communications.mail.v1#workbench.open", {"en-US": "Open mail workbench", "zh-CN": "打开邮件工作台"}),
-        ("communications.mail.v1#sync.incremental", {"en-US": "Sync mail", "zh-CN": "同步邮件"}),
-    ],
-    "communications.mail.v1#draft.inspect": [
-        ("communications.mail.v1#workbench.open", {"en-US": "Open mail workbench", "zh-CN": "打开邮件工作台"}),
-        ("communications.mail.v1#draft.create", {"en-US": "New draft", "zh-CN": "新建草稿"}),
-        ("communications.mail.v1#draft.reply_all", {"en-US": "Reply all draft", "zh-CN": "回复全部草稿"}),
-        ("communications.mail.v1#draft.create_from_persona", {"en-US": "Draft from proposal", "zh-CN": "从提案创建草稿"}),
-    ],
-    "communications.mail.v1#triage.evidence": [],
-    "personal.memory.v1#people": [
-        ("personal.context.v1#build", {"en-US": "Build context", "zh-CN": "构建上下文"}),
-    ],
-    "personal.memory.v1#search": [],
-}
-
-
-def _app_contribution_form_schema(fields: dict[str, dict[str, object]]) -> dict[str, object]:
-    schema = copy.deepcopy(fields)
-    labels = {
-        "all": ("All", "全部"), "active": ("Active", "当前"), "history": ("History", "历史"),
-        "unreviewed": ("Unreviewed", "未审阅"), "open": ("Open", "待处理"),
-        "waiting": ("Waiting", "等待"), "closed": ("Closed", "已结束"), "none": ("No open task", "无待办"),
-        "draft": ("Draft", "草稿"), "sending": ("Sending", "正在发送"),
-        "unknown": ("Unknown", "待核实"), "sent": ("Sent", "已发送"),
-    }
-    for field in schema.values():
-        if field["type"] == "string[]":
-            field["type"] = "string_list"
-        if "enum" in field:
-            field["options"] = [
-                {"value": value, "label_i18n": {"en-US": labels[value][0], "zh-CN": labels[value][1]}}
-                for value in field["enum"]
-            ]
-    return schema
-
-
-def _app_contribution_pagination(offset: int, limit: int, total: int) -> dict[str, object]:
-    return {"offset": offset, "limit": limit, "total": total, "has_more": offset + limit < total}
-
-
-def _app_contribution_collection(
-    ref: str,
-    data: dict[str, object],
-    *,
-    state: str = "ready",
-    reason: str = "",
-    input_schema: dict[str, object] | None = None,
-    **legacy: object,
-) -> dict[str, object]:
-    command_inputs = {}
-    for action_ref in APP_CONTRIBUTION_DATA_ACTIONS[ref]:
-        contract = APP_CONTRIBUTION_ACTION_CONTRACTS[action_ref]
-        command_inputs[action_ref] = {
-            "input_schema": _app_contribution_form_schema(contract["input"]),
-            "defaults": {},
-            "confirmation_required": contract["confirmation_required"],
-        }
-    return {
-        **legacy,
-        "kind": "data",
-        "state": state,
-        "input_schema": input_schema if input_schema is not None else _app_contribution_form_schema(
-            APP_CONTRIBUTION_DATA_CONTRACTS[ref]["input"]
-        ),
-        "data": {"collection_actions": [
-            {"action_ref": action_ref, "input": {}, "label_i18n": label}
-            for action_ref, label in APP_CONTRIBUTION_COLLECTION_ACTIONS[ref]
-        ], **data, "command_inputs": command_inputs},
-        **({"reason": reason} if reason else {}),
-    }
-
-
-def _app_contribution_draft_item(draft: dict[str, object], *, inspection_required: bool) -> dict[str, object]:
-    draft_ref = draft["draft_ref"]
-    actions = [{"action_ref": "communications.mail.v1#draft.inspect", "input": {"draft_ref": draft_ref}}]
-    if draft.get("state") == "draft":
-        actions.extend(
-            {"action_ref": action_ref, "input": {"draft_ref": draft_ref}}
-            for action_ref in ("communications.mail.v1#draft.open", "communications.mail.v1#draft.send")
-        )
-    return {
-        **draft,
-        "id": draft_ref,
-        "title": draft.get("subject") or draft_ref,
-        "inspection_required": inspection_required,
-        "read_input": {"draft_ref": draft_ref},
-        "review_target": {key: draft[key] for key in (
-            "draft_ref", "account_id", "state", "sender", "to", "cc", "bcc", "subject", "attachments"
-        ) if key in draft},
-        "actions": actions,
-    }
-
-
-def _app_contribution_drafts(
-    args: argparse.Namespace, *, query: str, status: str, offset: int, limit: int,
-) -> dict[str, object]:
-    path = Path(args.draft_db).expanduser()
-    empty = {"items": [], "count": 0, "pagination": _app_contribution_pagination(offset, limit, 0), "has_more": False}
-    if not path.exists():
-        return {**empty, "store_state": "missing"}
-    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("BEGIN")
-        where, params = [], []
-        if status == "active":
-            where.append("state IN ('draft', 'sending', 'unknown')")
-        elif status != "all":
-            where.append("state=?")
-            params.append(status)
-        if query:
-            where.append("(instr(lower(draft_ref),?) OR instr(lower(account_id),?) OR instr(lower(provider_account),?) OR instr(lower(provider_uuid),?))")
-            params.extend([query.lower()] * 4)
-        predicate = " AND ".join(where) or "1=1"
-        total = conn.execute(f"SELECT count(*) FROM mail_drafts WHERE {predicate}", params).fetchone()[0]
-        rows = conn.execute(
-            f"""
-            SELECT draft_ref, account_id, provider_account, provider_uuid, state, created_at, updated_at
-            FROM mail_drafts WHERE {predicate}
-            ORDER BY updated_at DESC, draft_ref LIMIT ? OFFSET ?
-            """,
-            [*params, limit, offset],
-        ).fetchall()
-        items = [_app_contribution_draft_item(dict(row), inspection_required=True) for row in rows]
-        pagination = _app_contribution_pagination(offset, limit, total)
-        return {"items": items, "count": len(items), "store_state": "present", "pagination": pagination,
-                "has_more": pagination["has_more"]}
-    except sqlite3.OperationalError as exc:
-        if "no such table" not in str(exc):
-            raise
-        return {**empty, "store_state": "schema_missing"}
-    finally:
-        conn.close()
+# ---------------------------------------------------------------------------
+# Shared output, state, and domain helpers
+# ---------------------------------------------------------------------------
 
 
 def emit(payload: object, *, as_json: bool) -> None:
-    if as_json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-    if isinstance(payload, dict):
+    if as_json or isinstance(payload, dict):
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(payload)
@@ -419,1119 +127,84 @@ def fail(message: str, *, as_json: bool, code: int = 1) -> int:
     return code
 
 
-def _app_contribution_error(ref: str | None, code: str, message: str) -> dict[str, object]:
-    return {
-        "schema_version": APP_CONTRIBUTION_RESPONSE_SCHEMA,
-        "ok": False,
-        "ref": ref,
-        "error": {"code": code, "message": message},
-    }
+def _state(ctx: typer.Context) -> SimpleNamespace:
+    if isinstance(ctx.obj, SimpleNamespace):
+        return ctx.obj
+    return SimpleNamespace(
+        json=False,
+        config=str(default_config_path()),
+        db=str(default_db_path()),
+        draft_db=str(default_drafts_db_path()),
+        memory_db=str(default_memory_db_path()),
+        knowledge_project="",
+    )
 
 
-def _app_contribution_response(ref: str, operation: str, result: object) -> dict[str, object]:
-    return {
-        "schema_version": APP_CONTRIBUTION_RESPONSE_SCHEMA,
-        "ok": True,
-        "ref": ref,
-        "operation": operation,
-        "result": result,
-    }
-
-
-def _app_contribution_input(value: object) -> dict[str, object]:
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError("input must be an object")
-    return value
-
-
-def _app_contribution_string(value: object, field: str, *, required: bool = False) -> str:
-    if value is None and not required:
-        return ""
-    if not isinstance(value, str) or (required and not value.strip()):
-        raise ValueError(f"input.{field} must be a non-empty string")
-    return value.strip()
-
-
-def _app_contribution_bool(value: object, field: str, *, default: bool) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ValueError(f"input.{field} must be a boolean")
-    return value
-
-
-def _app_contribution_integer(
-    value: object,
-    field: str,
+def _require_exclusive(
+    first_val: object,
+    first_flag: str,
+    second_val: object,
+    second_flag: str,
     *,
-    default: int,
-    minimum: int,
-    maximum: int,
-) -> int:
-    if value is None:
-        return default
-    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-        raise ValueError(f"input.{field} must be an integer from {minimum} to {maximum}")
-    return value
-
-
-def _app_contribution_strings(value: object, field: str, *, required: bool = False) -> list[str]:
-    if value is None:
-        if required:
-            raise ValueError(f"input.{field} must be a non-empty string array")
-        return []
-    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
-        raise ValueError(f"input.{field} must be a string array")
-    values = [item.strip() for item in value]
-    if required and not values:
-        raise ValueError(f"input.{field} must be a non-empty string array")
-    return values
-
-
-def _app_contribution_input_keys(
-    payload: dict[str, object],
-    contract: dict[str, object],
+    required: bool,
 ) -> None:
-    fields = contract["input"]
-    assert isinstance(fields, dict)
-    unexpected = sorted(set(payload) - set(fields))
-    if unexpected:
-        raise ValueError("input contains unsupported fields: " + ", ".join(unexpected))
-    for name, schema in fields.items():
-        assert isinstance(name, str)
-        assert isinstance(schema, dict)
-        required = schema.get("required") is True
-        if name not in payload:
-            if required:
-                raise ValueError(f"input.{name} is required")
-            continue
-        value = payload[name]
-        value_type = schema.get("type")
-        if value_type == "string":
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"input.{name} must be a non-empty string")
-            if "enum" in schema and value not in schema["enum"]:
-                raise ValueError(f"input.{name} must be one of: " + ", ".join(schema["enum"]))
-        elif value_type == "boolean":
-            if not isinstance(value, bool):
-                raise ValueError(f"input.{name} must be a boolean")
-        elif value_type == "integer":
-            minimum = schema.get("minimum", -sys.maxsize)
-            maximum = schema.get("maximum", sys.maxsize)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or not isinstance(minimum, int)
-                or not isinstance(maximum, int)
-                or not minimum <= value <= maximum
-            ):
-                raise ValueError(f"input.{name} must be an integer from {minimum} to {maximum}")
-        elif value_type == "string[]":
-            if not isinstance(value, list) or not all(
-                isinstance(item, str) and item.strip() for item in value
-            ):
-                raise ValueError(f"input.{name} must be a string array")
-            minimum_items = schema.get("min_items", 0)
-            if not isinstance(minimum_items, int) or len(value) < minimum_items:
-                raise ValueError(f"input.{name} must contain at least {minimum_items} items")
-        elif value_type == "object":
-            if not isinstance(value, dict):
-                raise ValueError(f"input.{name} must be an object")
-        else:
-            raise ValueError(f"unsupported input type for {name}")
+    has_first = first_val is not None
+    has_second = second_val is not None
+    if has_first and has_second:
+        raise typer.BadParameter(f"{first_flag} and {second_flag} are mutually exclusive")
+    if required and not has_first and not has_second:
+        raise typer.BadParameter(f"one of {first_flag} or {second_flag} is required")
 
 
-def _app_contribution_recent(args: argparse.Namespace, payload: dict[str, object]) -> dict[str, object]:
-    payload = {field: value.strip() if isinstance(value, str) else value for field, value in payload.items()}
-    offset = payload.get("offset", 0)
-    limit = payload.get("limit", 20)
-    conn = connect_email_store_readonly(Path(args.db).expanduser())
-    messages, items, total = [], [], 0
-    try:
-        if conn is not None:
-            conn.execute("BEGIN")
-            where, params = scope_filter(payload.get("scope", "active"), payload.get("folder"))
-            if "account" in payload:
-                where.append("email_messages.account_id=?")
-                params.append(payload["account"])
-            for field, operator in (("since", ">="), ("until", "<")):
-                if field in payload:
-                    where.append(f"datetime(date_iso){operator}datetime(?)")
-                    params.append(payload[field])
-            # Reuse the owner's scope and body index; page references before resolving mail facts.
-            query = payload.get("query")
-            if query:
-                if conn.execute(
-                    f"SELECT 1 FROM email_messages WHERE {' AND '.join(where)} "
-                    "AND raw_sha256 NOT IN (SELECT raw_sha256 FROM email_search) LIMIT 1", params,
-                ).fetchone():
-                    raise ValueError("mail body index incomplete; run opl-relay index before searching")
-                term = query.casefold()
-                where.append("(instr(lower(subject),?) OR instr(lower(sender),?) OR instr(lower(recipient),?) "
-                             "OR instr(lower(message_id),?) OR email_messages.raw_sha256 IN "
-                             "(SELECT raw_sha256 FROM email_search WHERE instr(body_text,?)))")
-                params.extend([term] * 5)
-            status = payload.get("status", "all")
-            if status != "all":
-                where.append("coalesce(r.status,'unreviewed')=?")
-                params.append(status)
-            source = ("FROM email_messages LEFT JOIN mail_reviews r ON r.account_id=email_messages.account_id "
-                      "AND r.raw_sha256=email_messages.raw_sha256 " + f"WHERE {' AND '.join(where)}")
-            total = conn.execute("SELECT count(*) " + source, params).fetchone()[0]
-            rows = conn.execute(
-                "SELECT email_messages.storage_ref, coalesce(r.status,'unreviewed'), r.action, r.note " + source +
-                " ORDER BY date_iso DESC, ingest_ts DESC, uid DESC, email_messages.storage_ref LIMIT ? OFFSET ?",
-                [*params, limit, offset],
-            ).fetchall()
-            for storage_ref, review_state, action, note in rows:
-                message = get_message_by_storage_ref(conn, storage_ref)
-                raw = fetch_raw_email_by_storage_ref(conn, storage_ref)
-                body = extract_text_body(raw) if raw is not None else ""
-                messages.append(message)
-                items.append({
-                    **message, "id": storage_ref, "title": message["subject"],
-                    "body_text": body[:20000], "body_truncated": len(body) > 20000,
-                    "status": review_state,
-                    "review_target": {"source_ref": storage_ref, "status": review_state,
-                                      "action": action, "note": note or ""},
-                    "actions": [{"action_ref": "communications.mail.v1#sync.incremental",
-                                 "input": {"account": message["account_id"]}}],
-                })
-        pagination = _app_contribution_pagination(offset, limit, total)
-        return _app_contribution_collection(
-            "communications.mail.v1#recent",
-            {"items": items, "count": len(items), "pagination": pagination, "has_more": pagination["has_more"],
-             "store_state": "present" if conn is not None else "missing",
-             "collection_actions": [{"action_ref": action_ref, "input": {"account": payload["account"]} if "account" in payload else {},
-                                     "label_i18n": label}
-                                    for action_ref, label in APP_CONTRIBUTION_COLLECTION_ACTIONS["communications.mail.v1#recent"]],
-             "source_policy": {"owner": "EmailStore", "read_only": True, "local_snapshot_only": True}},
-            messages=messages,
-        )
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-def _app_contribution_triage_schema(args: argparse.Namespace) -> dict[str, object]:
-    schema = _app_contribution_form_schema(APP_CONTRIBUTION_DATA_CONTRACTS["communications.mail.v1#triage.evidence"]["input"])
-    schema["source_ref"].update(required=True, label_i18n={"en-US": "Source mail", "zh-CN": "来源邮件"}, options=[])
-    schema["policy_refs"].update(required=True, label_i18n={"en-US": "Policy references", "zh-CN": "策略引用"}, options=[])
-    conn = connect_email_store_readonly(Path(args.db).expanduser())
-    try:
-        if conn is not None:
-            schema["source_ref"]["options"] = [
-                {"value": message["storage_ref"], "label_i18n": {"en-US": message["subject"] or message["storage_ref"],
-                                                               "zh-CN": message["subject"] or message["storage_ref"]}}
-                for message in list_messages(conn, limit=20)
-            ]
-    finally:
-        if conn is not None:
-            conn.close()
-    policies = (default_profile_workspace() / "policies").resolve()
-    if policies.is_dir():
-        schema["policy_refs"]["options"] = [
-            {"value": path.as_uri(), "label_i18n": {"en-US": path.relative_to(policies).as_posix(),
-                                                   "zh-CN": path.relative_to(policies).as_posix()}}
-            for path in sorted(policies.rglob("*.md"))[:100] if path.is_file()
-        ]
-    return schema
-
-
-def _app_contribution_data(args: argparse.Namespace, ref: str, payload: dict[str, object]) -> object:
-    if ref == "communications.mail.v1#recent":
-        return _app_contribution_recent(args, payload)
-    if ref == "communications.mail.v1#draft.inspect":
-        draft_ref = _app_contribution_string(payload.get("draft_ref"), "draft_ref")
-        if not draft_ref:
-            data = _app_contribution_drafts(args, limit=_app_contribution_integer(
-                payload.get("limit"), "limit", default=50, minimum=1, maximum=500,
-            ), offset=payload.get("offset", 0), status=payload.get("status", "active"),
-                query=_app_contribution_string(payload.get("query"), "query"))
-            data["source_policy"] = {"owner": "DraftLedger", "read_only": True, "metadata_only": True,
-                                     "fresh_inspection_required_before_approval": True}
-            return _app_contribution_collection(ref, data, drafts=data["items"])
-        service, _ = draft_service(args)
-        draft = service.inspect(draft_ref)
-        if draft.get("draft_ref") != draft_ref:
-            raise ValueError("draft inspection identity mismatch")
-        item = _app_contribution_draft_item(draft, inspection_required=False)
-        return _app_contribution_collection(ref, {"items": [item], "count": 1,
-                                                 "pagination": _app_contribution_pagination(0, 1, 1)}, draft=draft)
-    if ref == "communications.mail.v1#triage.evidence":
-        schema = _app_contribution_triage_schema(args)
-        if not payload.get("source_ref") or not payload.get("policy_refs"):
-            return _app_contribution_collection(
-                ref, {"items": [], "count": 0}, state="input_required",
-                reason="source_ref and policy_refs are required for mail triage evidence",
-                input_schema=schema,
-            )
-        evidence = build_triage_evidence(
-            mail_db_path=Path(args.db).expanduser(),
-            source_ref=_app_contribution_string(
-                payload.get("source_ref"), "source_ref", required=True
-            ),
-            policy_refs=_app_contribution_strings(
-                payload.get("policy_refs"), "policy_refs", required=True
-            ),
-        )
-        return _app_contribution_collection(
-            ref, {"items": [{"id": evidence["mail"]["source_ref"], **evidence,
-                             "title": evidence["mail"]["headers"]["subject"],
-                             "body_text": evidence["mail"]["raw_readback"]["body_text"],
-                             "review_target": {"source_ref": evidence["mail"]["source_ref"],
-                                               "headers": evidence["mail"]["headers"],
-                                               "policy_refs": evidence["policy"]["policy_refs"]},
-                             "actions": []}], "count": 1},
-            evidence=evidence, input_schema=schema,
-        )
-    if ref == "personal.memory.v1#people":
-        return _app_contribution_collection(
-            ref, read_people(
-                memory_store(args),
-                evidence=memory_evidence(args),
-                query=_app_contribution_string(payload.get("query"), "query"),
-                limit=_app_contribution_integer(
-                    payload.get("limit"), "limit", default=50, minimum=1, maximum=500
-                ),
-                include_stale=bool(payload.get("include_stale", False)),
-            ),
-        )
-    if ref == "personal.memory.v1#search":
-        return _app_contribution_collection(
-            ref, read_memory_evidence(
-                memory_store(args),
-                evidence=memory_evidence(args),
-                entity=_app_contribution_string(payload.get("entity"), "entity"),
-                query=_app_contribution_string(payload.get("query"), "query"),
-                limit=_app_contribution_integer(
-                    payload.get("limit"), "limit", default=50, minimum=1, maximum=500
-                ),
-                include_stale=bool(payload.get("include_stale", False)),
-            ),
-        )
-    raise ValueError("unsupported data ref")
-
-
-def _app_contribution_action(args: argparse.Namespace, ref: str, payload: dict[str, object]) -> object:
-    if ref == "communications.mail.v1#workbench.open":
-        from .workbench import open_workbench
-
-        focus = {("account_id" if name == "account" else name): value for name in
-                 ("account", "storage_ref", "draft_id", "request_id")
-                 if (value := _app_contribution_string(payload.get(name), name))}
-        return {"ok": True, "presentation": {"mode": "browser", **open_workbench(focus=focus)}}
-    if ref == "communications.mail.v1#sync.incremental":
-        return sync_account(
-            config_path=Path(args.config).expanduser(),
-            db_path=Path(args.db).expanduser(),
-            account_id=_app_contribution_string(payload.get("account"), "account", required=True),
-            mode="incremental",
-            limit_per_folder=(
-                _app_contribution_integer(
-                    payload.get("limit_per_folder"),
-                    "limit_per_folder",
-                    default=1,
-                    minimum=1,
-                    maximum=100000,
-                )
-                if payload.get("limit_per_folder") is not None
-                else None
-            ),
-            dry_run=_app_contribution_bool(payload.get("dry_run"), "dry_run", default=False),
-        )
-    if ref == "communications.mail.v1#draft.create":
-        account = load_account(
-            Path(args.config).expanduser(),
-            _app_contribution_string(payload.get("account"), "account", required=True),
-        )
-        service, _ = draft_service(args)
-        return {
-            "draft": service.create(
-                account_id=account.account_id,
-                sender=account.email,
-                to=parse_recipients(_app_contribution_strings(payload.get("to"), "to", required=True), required=True),
-                cc=parse_recipients(_app_contribution_strings(payload.get("cc"), "cc")),
-                bcc=parse_recipients(_app_contribution_strings(payload.get("bcc"), "bcc")),
-                subject=_app_contribution_string(payload.get("subject"), "subject", required=True),
-                body_text=_app_contribution_string(payload.get("body"), "body", required=True),
-                attachments=[],
-                visible=_app_contribution_bool(payload.get("open"), "open", default=True),
-            )
-        }
-    if ref == "communications.mail.v1#draft.create_from_persona":
-        return create_persona_review_draft(
-            args,
-            context=validate_approved_persona_draft_context(
-                payload.get("proposal_bundle")
-            ),
-            account_id=_app_contribution_string(
-                payload.get("account"),
-                "account",
-                required=True,
-            ),
-            to=_app_contribution_strings(payload.get("to"), "to", required=True),
-            cc=_app_contribution_strings(payload.get("cc"), "cc"),
-            bcc=_app_contribution_strings(payload.get("bcc"), "bcc"),
-            visible=_app_contribution_bool(payload.get("open"), "open", default=True),
-        )
-    if ref == "communications.mail.v1#draft.reply_all":
-        account = load_account(
-            Path(args.config).expanduser(),
-            _app_contribution_string(payload.get("account"), "account", required=True),
-        )
-        service, _ = draft_service(args)
-        return {"draft": service.reply_all(
-            account_id=account.account_id,
-            sender=account.email,
-            provider_account=_app_contribution_string(payload.get("apple_mail_account"), "apple_mail_account", required=True),
-            source_message_id=_app_contribution_integer(
-                payload.get("apple_mail_id"), "apple_mail_id", default=1, minimum=1, maximum=sys.maxsize,
-            ),
-            mailbox_path=_app_contribution_string(payload.get("mailbox_path"), "mailbox_path", required=True),
-            body_text=_app_contribution_string(payload.get("body"), "body", required=True),
-            attachments=[],
-            visible=_app_contribution_bool(payload.get("open"), "open", default=True),
-        )}
-    if ref == "communications.mail.v1#draft.inspect":
-        service, _ = draft_service(args)
-        return {
-            "draft": service.inspect(
-                _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True)
-            )
-        }
-    if ref == "communications.mail.v1#draft.open":
-        service, _ = draft_service(args)
-        return {
-            "draft": service.open(
-                _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True)
-            )
-        }
-    if ref == "communications.mail.v1#draft.send":
-        service, _ = draft_service(args)
-        return {
-            "draft": service.send(
-                _app_contribution_string(payload.get("draft_ref"), "draft_ref", required=True),
-                approval=_app_contribution_string(payload.get("approval"), "approval", required=True),
-            )
-        }
-    if ref == "personal.context.v1#build":
-        return ContextBuilder(
-            mail_db_path=Path(args.db).expanduser(),
-            memory_db_path=Path(args.memory_db).expanduser(),
-            framework=framework_knowledge(args),
-        ).build(
-            person=_app_contribution_string(payload.get("person"), "person"),
-            project=_app_contribution_string(payload.get("project"), "project"),
-            query=_app_contribution_string(payload.get("query"), "query"),
-            mail_limit=_app_contribution_integer(
-                payload.get("mail_limit"), "mail_limit", default=6, minimum=1, maximum=200
-            ),
-            memory_limit=_app_contribution_integer(
-                payload.get("memory_limit"), "memory_limit", default=20, minimum=1, maximum=500
-            ),
-            knowledge_limit=_app_contribution_integer(
-                payload.get("knowledge_limit"), "knowledge_limit", default=6, minimum=1, maximum=200
-            ),
-        )
-    if ref == "personal.memory.v1#inspect":
-        return {
-            "memory": memory_evidence(args).inspect(memory_store(args).get_memory(
-                _app_contribution_string(payload.get("memory_ref"), "memory_ref", required=True)
-            ))
-        }
-    raise ValueError("unsupported action ref")
-
-
-def cmd_app_contribution(args: argparse.Namespace) -> int:
-    try:
-        request = json.load(sys.stdin)
-        if not isinstance(request, dict):
-            raise ValueError("request must be an object")
-        unexpected = sorted(set(request) - {"schema_version", "operation", "ref", "input"})
-        if unexpected:
-            raise ValueError("request contains unsupported fields: " + ", ".join(unexpected))
-        if request.get("schema_version") != APP_CONTRIBUTION_REQUEST_SCHEMA:
-            raise ValueError(f"schema_version must be {APP_CONTRIBUTION_REQUEST_SCHEMA}")
-        operation = request.get("operation")
-        ref = request.get("ref")
-        if not isinstance(operation, str) or operation not in {"describe", "read", "execute"}:
-            raise ValueError("operation must be describe, read, or execute")
-        if not isinstance(ref, str) or not ref:
-            raise ValueError("ref must be a non-empty string")
-        data_contract = APP_CONTRIBUTION_DATA_CONTRACTS.get(ref)
-        action_contract = APP_CONTRIBUTION_ACTION_CONTRACTS.get(ref)
-        if data_contract is None and action_contract is None:
-            raise ValueError("ref is not declared by this package")
-        if operation == "describe":
-            if "input" in request:
-                raise ValueError("describe does not accept input")
-            emit(
-                _app_contribution_response(
-                    ref,
-                    operation,
-                    {
-                        "abi": APP_CONTRIBUTION_ABI,
-                        "request_schema": APP_CONTRIBUTION_REQUEST_SCHEMA,
-                        "response_schema": APP_CONTRIBUTION_RESPONSE_SCHEMA,
-                        "ref": ref,
-                        "operations": [
-                            contract
-                            for contract in (data_contract, action_contract)
-                            if contract is not None
-                        ],
-                    },
-                ),
-                as_json=True,
-            )
-            return 0
-        contract = data_contract if operation == "read" else action_contract
-        if contract is None:
-            raise ValueError(f"{ref} does not support {operation}")
-        payload = _app_contribution_input(request.get("input"))
-        _app_contribution_input_keys(payload, contract)
-        result = (
-            _app_contribution_data(args, ref, payload)
-            if operation == "read"
-            else _app_contribution_action(args, ref, payload)
-        )
-        emit(_app_contribution_response(ref, operation, result), as_json=True)
-        return 0
-    except Exception as exc:
-        ref = None
-        try:
-            if isinstance(locals().get("request"), dict) and isinstance(request.get("ref"), str):
-                ref = request["ref"]
-        except UnboundLocalError:
-            pass
-        emit(_app_contribution_error(ref, "invalid_request", str(exc)), as_json=True)
-        return 2
-
-
-def cmd_doctor(args: argparse.Namespace) -> int:
-    config_path = Path(args.config).expanduser()
-    db_path = Path(args.db).expanduser()
-    drafts_db_path = Path(args.draft_db).expanduser()
-    memory_db_path = Path(args.memory_db).expanduser()
-    workspace = inspect_workspace(default_profile_workspace())
-    setup = setup_status(default_profile_workspace())
-    accounts = {}
-    config_error = ""
-    if config_path.exists():
-        try:
-            accounts = load_accounts_config(config_path)
-        except Exception as exc:
-            config_error = str(exc)
-    payload = {
-        "ok": not config_error,
-        "product": "opl-relay",
-        "version": __version__,
-        "command": shutil.which("opl-relay"),
-        "commands": {
-            "opl-relay": shutil.which("opl-relay"),
-        },
-        "state_dir": str(default_state_dir()),
-        "state_dir_source": state_dir_source(),
-        "profile_workspace": str(default_profile_workspace()),
-        "profile_workspace_source": profile_workspace_source(),
-        "workspace": workspace,
-        "setup": setup,
-        "readiness": setup["readiness"],
-        "config_path": str(config_path),
-        "config_exists": config_path.exists(),
-        "config_error": config_error,
-        "db_path": str(db_path),
-        "db_exists": db_path.exists(),
-        "draft_db_path": str(drafts_db_path),
-        "draft_db_exists": drafts_db_path.exists(),
-        "memory_db_path": str(memory_db_path),
-        "memory_db_exists": memory_db_path.exists(),
-        "knowledge_authority": "opl-framework",
-        "knowledge_project": getattr(args, "knowledge_project", ""),
-        "apple_mail_available": sys.platform == "darwin" and bool(shutil.which("osascript")),
-        "accounts": sorted(accounts.keys()),
-        "keychain_services": [KEYCHAIN_SERVICE],
-    }
-    emit(payload, as_json=args.json)
-    return 0 if payload["ok"] else 1
-
-
-def cmd_workspace_inspect(args: argparse.Namespace) -> int:
-    emit(
-        {"ok": True, "workspace": inspect_workspace(default_profile_workspace())},
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_workspace_init(args: argparse.Namespace) -> int:
-    emit(
-        {"ok": True, "workspace": initialize_workspace(default_profile_workspace())},
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_setup_status(args: argparse.Namespace) -> int:
-    emit(
-        {"ok": True, "setup": setup_status(default_profile_workspace())},
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_setup_init(args: argparse.Namespace) -> int:
-    workspace_payload = initialize_workspace(default_profile_workspace())
-    setup_payload = dict(workspace_payload["setup"])
-    setup_payload["created"] = workspace_payload["created"]
-    emit(
-        {"ok": True, "setup": setup_payload, "workspace": workspace_payload},
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_workspace_migrate(args: argparse.Namespace) -> int:
-    payload = migrate_workspace(
-        Path(args.from_path),
-        default_profile_workspace(),
-        apply=args.apply,
-    )
-    emit(payload, as_json=args.json)
-    return 0 if payload["ok"] else 1
-
-
-def cmd_accounts(args: argparse.Namespace) -> int:
-    accounts = load_accounts_config(Path(args.config).expanduser())
-    emit(
-        {
-            "ok": True,
-            "accounts": [
-                {
-                    "account_id": account.account_id,
-                    "email": account.email,
-                    "provider": account.provider,
-                    "backend": account.backend,
-                    "imap_host": account.imap.host if account.imap else None,
-                    "include_folders": account.include_folders,
-                    "exclude_folders": account.exclude_folders,
-                }
-                for account in accounts.values()
-            ],
-        },
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_account_add(args: argparse.Namespace) -> int:
-    if args.provider == "imap" and not args.host:
-        raise ValueError("--host is required for IMAP accounts")
-    account = add_account(
-        Path(args.config).expanduser(),
-        account_id=args.account_id,
-        email=args.email,
-        host=args.host,
-        port=args.port,
-        security=args.security,
-        username=args.username or args.email,
-        credential_ref=args.credential_ref or f"keychain.{args.account_id}.{'oauth' if args.provider == 'microsoft_graph' else 'imap'}",
-        include_folders=args.include or ["*"],
-        exclude_folders=args.exclude,
-        provider=args.provider,
-        client_id=args.client_id,
-        tenant=args.tenant,
-        backend=getattr(args, "backend", "himalaya"),
-    )
-    emit(
-        {
-            "ok": True,
-            "account": {
-                "account_id": account.account_id,
-                "email": account.email,
-                "provider": account.provider,
-                "imap_host": account.imap.host if account.imap else None,
-                "credential_ref": account.imap.credential_ref if account.imap else account.graph.credential_ref,
-                "include_folders": account.include_folders,
-                "exclude_folders": account.exclude_folders,
-                "credential_configured": False,
-            },
-            "next_actions": [
-                f"opl-relay --json {'account login' if account.graph else 'credential set'} --account {account.account_id}",
-                f"opl-relay --json account check --account {account.account_id}",
-            ],
-        },
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_credential_set(args: argparse.Namespace) -> int:
-    account = load_account(Path(args.config).expanduser(), args.account_id)
-    if account.graph:
-        raise ValueError("Microsoft mail uses OAuth; run account login instead of entering a password")
-    secret = (
-        sys.stdin.read().rstrip("\r\n")
-        if args.secret_stdin
-        else getpass.getpass(f"IMAP password for {account.email}: ")
-    )
-    keychain_set_secret(account.imap.credential_ref, secret)
-    emit(
-        {
-            "ok": True,
-            "account": account.account_id,
-            "credential_ref": account.imap.credential_ref,
-            "credential_configured": True,
-            "secret_persisted_to": KEYCHAIN_SERVICE,
-        },
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_account_check(args: argparse.Namespace) -> int:
-    account = load_account(Path(args.config).expanduser(), args.account)
-    if account.graph:
-        from .graph import GraphClient
-        from .keychain import get_oauth_secret
-        credential_error = ""
-        try:
-            configured = bool(get_oauth_secret(account.graph.credential_ref))
-        except RuntimeError as exc:
-            configured, credential_error = False, str(exc)
-        payload = {"ok": True, "account": account.account_id, "email": account.email,
-                   "provider": account.provider, "backend": account.backend, "credential_configured": configured,
-                   "connection": {"status": "not_checked"}}
-        if args.connect:
-            try:
-                if not configured:
-                    raise ValueError(credential_error or "oauth_login_required")
-                client = GraphClient(account)
-                client.identity()
-                from .native import Himalaya
-                Himalaya(account, token=client._access_token()).check()
-                payload["connection"] = {"status": "healthy", "identity_verified": True}
-                payload["scopes"] = sorted(client.scopes)
-            except Exception as exc:
-                payload.update(ok=False, connection={"status": "unavailable", "reason": str(exc)})
-        emit(payload, as_json=args.json)
-        return 0 if payload["ok"] else 1
-    configured = keychain_has_secret(account.imap.credential_ref,
-                                      fallback_keychain=account.imap.fallback_keychain)
-    payload: dict[str, object] = {
-        "ok": True,
-        "account": account.account_id,
-        "email": account.email,
-        "imap_host": account.imap.host,
-        "credential_ref": account.imap.credential_ref,
-        "credential_configured": configured,
-        "backend": account.backend,
-        "connection": {"status": "not_checked"},
-    }
-    if args.connect:
-        if not configured:
-            payload["connection"] = {
-                "status": "blocked",
-                "reason": "credential_not_configured",
-            }
-        else:
-            try:
-                from .native import Himalaya
-                Himalaya(account).check()
-                payload["connection"] = {
-                    "status": "healthy",
-                    "server_response": "OK",
-                }
-            except Exception as exc:
-                payload["connection"] = {
-                    "status": "unavailable",
-                    "reason": type(exc).__name__,
-                }
-    emit(payload, as_json=args.json)
-    return 0 if payload["connection"]["status"] not in {"blocked", "unavailable"} else 1
-
-
-def cmd_account_login(args: argparse.Namespace) -> int:
-    from .graph import login_graph
-    account = load_account(Path(args.config).expanduser(), args.account)
-    def notify(url):
-        print(json.dumps({"status": "awaiting_microsoft_login", "account": account.account_id,
-                          "authorization_url": url, "permissions": "Mail.ReadWrite" if args.write else "Mail.Read",
-                          "send_allowed": False}), flush=True)
-    payload = login_graph(account, write=args.write, notify=notify, timeout=args.timeout)
-    emit(payload, as_json=args.json)
-    return 0
-
-
-def cmd_account_folders(args: argparse.Namespace) -> int:
-    account = load_account(Path(args.config).expanduser(), args.account)
-    if account.graph:
-        from .graph import GraphClient
-        client = GraphClient(account)
-        client.identity()
-    else:
-        from .native import Himalaya
-        client = Himalaya(account)
-    folders = client.folders()
-    if not account.graph:
-        folders = [{"name": box["name"], "flags": sorted(box["flags"])} for box in folders]
-    emit({"ok": True, "account": account.account_id, "folders": folders}, as_json=args.json)
-    return 0
-
-
-def cmd_recent(args: argparse.Namespace) -> int:
-    conn = connect_email_store(Path(args.db).expanduser())
-    try:
-        rows = list_messages(
-            conn,
-            account_ids=[args.account] if args.account else None,
-            folder_slug=args.folder,
-            since=args.since,
-            until=args.until,
-            limit=args.limit,
-            scope=args.scope,
-        )
-    finally:
-        conn.close()
-    emit({"ok": True, "messages": rows}, as_json=args.json)
-    return 0
-
-
-def cmd_search(args: argparse.Namespace) -> int:
-    if getattr(args, "remote", False):
-        if not args.account:
-            raise ValueError("Remote search requires an explicit --account")
-        from .remote_search import search_remote
-        result = search_remote(account=load_account(Path(args.config).expanduser(), args.account),
-                               db_path=Path(args.db).expanduser(), query=args.query, scope=args.scope,
-                               folder=args.folder, limit=args.limit, since=args.since, until=args.until)
-        emit(result, as_json=args.json)
-        return 0 if result["ok"] else 1
-    conn = connect_email_store(Path(args.db).expanduser())
-    try:
-        rows = search_messages(
-            conn,
-            queries=[args.query],
-            account_ids=[args.account] if args.account else None,
-            folder_slug=args.folder,
-            since=args.since,
-            until=args.until,
-            include_body=args.include_body,
-            max_scan=args.max_scan,
-            limit=args.limit,
-            scope=args.scope,
-        )
-    finally:
-        conn.close()
-    emit({"ok": True, "scope": args.scope, "messages": rows,
-          "search_complete": True, "result_limit": args.limit}, as_json=args.json)
-    return 0
-
-
-def cmd_index(args: argparse.Namespace) -> int:
-    conn = connect_email_store(Path(args.db).expanduser())
-    try:
-        emit(index_messages(conn), as_json=args.json)
-    finally:
-        conn.close()
-    return 0
-
-
-def cmd_mail_status(args: argparse.Namespace) -> int:
-    conn = connect_email_store(Path(args.db).expanduser())
-    try:
-        emit({"ok": True, "folders": folder_status(conn, args.account),
-              "counts_are": "last verified provider snapshot, not a live server query"}, as_json=args.json)
-    finally:
-        conn.close()
-    return 0
-
-
-def cmd_review(args: argparse.Namespace) -> int:
-    if args.review_action == "prepare":
-        accounts = [args.account] if args.account else list(load_accounts_config(Path(args.config).expanduser()))
-        prepared = []
-        for account in accounts:
-            try:
-                sync_result = sync_account(config_path=Path(args.config).expanduser(),
-                                          db_path=Path(args.db).expanduser(), account_id=account,
-                                          scope="active", limit_per_folder=args.sync_limit)
-            except Exception as exc:
-                sync_result = {"ok": False, "error": str(exc), "folders": []}
-            conn = connect_email_store(Path(args.db).expanduser())
-            try:
-                queue = review_pending(conn, account=account, limit=args.limit)
-                state = review_status(conn, account=account)
-            finally:
-                conn.close()
-            # Successful UID enumeration proves membership of available rows,
-            # even while an old body-download backlog remains incomplete.
-            validated = any(f.get("folder", "").lower() == "inbox" and "remote_count" in f and f.get("membership_verified", True)
-                            for f in sync_result.get("folders", []))
-            prepared.append({"account": account, "sync": sync_result,
-                             "available_for_review": validated, "pending": queue,
-                             "open_items": state["open_items"]})
-        payload = {"ok": all(p["sync"].get("ok") for p in prepared), "accounts": prepared}
-        emit(payload, as_json=args.json)
-        return 0 if payload["ok"] else 1
-    conn = connect_email_store(Path(args.db).expanduser())
-    try:
-        if args.review_action == "pending":
-            payload = review_pending(conn, account=args.account, limit=args.limit)
-        elif args.review_action == "status":
-            payload = review_status(conn, account=args.account)
-        else:
-            records = json.loads(Path(args.file).expanduser().read_text(encoding="utf-8"))
-            if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
-                raise ValueError("review file must be a JSON array of records")
-            payload = record_reviews(conn, records)
-        emit(payload, as_json=args.json)
-    finally:
-        conn.close()
-    return 0
-
-
-def cmd_read(args: argparse.Namespace) -> int:
-    conn = connect_email_store(Path(args.db).expanduser())
-    try:
-        meta = get_message_by_storage_ref(conn, args.storage_ref)
-        raw = fetch_raw_email_by_storage_ref(conn, args.storage_ref)
-    finally:
-        conn.close()
-    if not meta or raw is None:
-        return fail("message not found", as_json=args.json, code=2)
-    meta["body_text"] = extract_text_body(raw)
-    from .server_drafts import content_snapshot
-    meta["headers"] = content_snapshot(raw)["headers"]
-    if args.include_raw:
-        meta["raw_eml"] = raw.decode("utf-8", errors="replace")
-    emit({"ok": True, "message": meta}, as_json=args.json)
-    return 0
-
-
-def cmd_sync(args: argparse.Namespace) -> int:
-    payload = sync_account(
-        config_path=Path(args.config).expanduser(),
-        db_path=Path(args.db).expanduser(),
-        account_id=args.account,
-        mode=args.mode,
-        limit_per_folder=args.limit_per_folder,
-        dry_run=args.dry_run,
-        scope=args.scope,
-        folder=args.folder,
-        max_duration_sec=args.max_seconds,
-    )
-    emit(payload, as_json=args.json)
-    return 0 if payload.get("ok") else 1
-
-
-def cmd_mailbox_move(args: argparse.Namespace) -> int:
-    try:
-        if getattr(args, "reconcile", False):
-            if args.apply:
-                raise ValueError("--reconcile never accepts --apply")
-            from .graph import reconcile_graph_moves
-            account = load_account(Path(args.config).expanduser(), args.account)
-            if not account.graph:
-                raise ValueError("This reconciliation command currently requires a Graph account")
-            payload = reconcile_graph_moves(account=account, db_path=Path(args.db).expanduser(),
-                destination=args.destination, exact_folder=args.destination_folder, storage_refs=args.storage_ref)
-            emit(payload, as_json=args.json)
-            return 0 if payload["ok"] else 1
-        payload = move_messages(
-            config_path=Path(args.config).expanduser(),
-            db_path=Path(args.db).expanduser(),
-            account_id=args.account,
-            destination=args.destination,
-            exact_folder=args.destination_folder,
-            storage_refs=args.storage_ref,
-            apply=args.apply,
-        )
-    except (ValueError, LookupError, MailboxMoveFailure) as exc:
-        return fail(str(exc), as_json=args.json, code=2)
-    emit(payload, as_json=args.json)
-    return 0 if payload.get("ok") is True else 1
-
-
-def memory_store(args: argparse.Namespace) -> MemoryStore:
+def memory_store(args: Any) -> MemoryStore:
     return MemoryStore(Path(args.memory_db).expanduser())
 
 
-def framework_knowledge(args: argparse.Namespace) -> FrameworkKnowledge:
+def framework_knowledge(args: Any) -> FrameworkKnowledge:
     project = getattr(args, "knowledge_project", "")
     return FrameworkKnowledge(project_root=Path(project) if project else None)
 
 
-def memory_evidence(args: argparse.Namespace) -> MemoryEvidence:
-    return MemoryEvidence(mail_db_path=Path(args.db).expanduser(),
-                          framework=framework_knowledge(args))
-
-
-def cmd_memory_entity_upsert(args: argparse.Namespace) -> int:
-    entity = memory_store(args).upsert_entity(
-        kind=args.kind,
-        canonical_name=args.name,
-        aliases=args.alias,
-        emails=args.email,
+def memory_evidence(args: Any) -> MemoryEvidence:
+    return MemoryEvidence(
+        mail_db_path=Path(args.db).expanduser(),
+        framework=framework_knowledge(args),
     )
-    emit({"ok": True, "entity": entity}, as_json=args.json)
-    return 0
-
-
-def cmd_memory_entity_list(args: argparse.Namespace) -> int:
-    entities = memory_store(args).list_entities(query=args.query, limit=args.limit)
-    emit({"ok": True, "entities": entities}, as_json=args.json)
-    return 0
 
 
 def _source_kind(source_ref: str) -> str:
-    if source_ref.startswith("email-store://"):
-        return "email"
-    if source_ref.startswith("knowledge://"):
-        return "knowledge"
-    if source_ref.startswith("obsidian://"):
-        return "obsidian"
-    if source_ref.startswith("markdown://"):
-        return "markdown"
-    if source_ref.startswith("user://"):
-        return "user"
-    if source_ref.startswith("calendar://"):
-        return "calendar"
-    if source_ref.startswith("contact://"):
-        return "contact"
-    if source_ref.startswith("model://"):
-        return "model"
+    for prefix, kind in (
+        ("email-store://", "email"),
+        ("knowledge://", "knowledge"),
+        ("obsidian://", "obsidian"),
+        ("markdown://", "markdown"),
+        ("user://", "user"),
+        ("calendar://", "calendar"),
+        ("contact://", "contact"),
+        ("model://", "model"),
+    ):
+        if source_ref.startswith(prefix):
+            return kind
     return "other"
 
 
-def _memory_sources(args: argparse.Namespace) -> list[dict[str, str]]:
-    source_refs = list(args.source)
-    excerpts = list(args.source_excerpt)
-    if excerpts and len(excerpts) != len(source_refs):
+def _memory_sources(args: Any, sources: list[str], excerpts: list[str]) -> list[dict[str, str]]:
+    if excerpts and len(excerpts) != len(sources):
         raise ValueError("--source-excerpt must be omitted or supplied once per --source")
-
     evidence = memory_evidence(args)
-
     return [
         {
             "source_ref": source_ref,
             "source_kind": _source_kind(source_ref),
             "excerpt": excerpts[index] if excerpts else "",
-            "source_sha256": (evidence.source_digest(source_ref, _source_kind(source_ref))
-                              if _source_kind(source_ref) in {"email", "knowledge", "obsidian", "markdown"}
-                              else ""),
+            "source_sha256": (
+                evidence.source_digest(source_ref, _source_kind(source_ref))
+                if _source_kind(source_ref) in {"email", "knowledge", "obsidian", "markdown"}
+                else ""
+            ),
         }
-        for index, source_ref in enumerate(source_refs)
+        for index, source_ref in enumerate(sources)
     ]
-
-
-def cmd_memory_propose(args: argparse.Namespace) -> int:
-    store = memory_store(args)
-    entity = store.resolve_entity(args.entity)
-    memory = store.propose_memory(
-        entity_ref=entity["entity_ref"],
-        category=args.category,
-        content=args.content,
-        sources=_memory_sources(args),
-        confidence=args.confidence,
-        sensitivity=args.sensitivity,
-        occurred_at=args.occurred_at,
-        valid_from=args.valid_from,
-        valid_until=args.valid_until,
-        supersedes_ref=args.supersedes,
-        observed_at=args.observed_at,
-        next_review_at=args.next_review_at,
-        content_kind=args.content_kind,
-    )
-    emit({"ok": True, "memory": memory}, as_json=args.json)
-    return 0
-
-
-def cmd_memory_candidates(args: argparse.Namespace) -> int:
-    memories = memory_store(args).list_memories(
-        entity=args.entity,
-        statuses=("candidate",),
-        query=args.query,
-        limit=args.limit,
-    )
-    emit({"ok": True, "memories": memories}, as_json=args.json)
-    return 0
-
-
-def cmd_memory_search(args: argparse.Namespace) -> int:
-    evidence = memory_evidence(args)
-    memories = memory_store(args).list_memories(
-        entity=args.entity,
-        statuses=args.status or ("approved",),
-        query=args.query,
-        limit=args.limit,
-        is_current=None if args.include_stale else evidence.current,
-    )
-    if args.include_stale:
-        memories = [evidence.inspect(memory) for memory in memories]
-    emit({"ok": True, "memories": memories}, as_json=args.json)
-    return 0
-
-
-def cmd_memory_inspect(args: argparse.Namespace) -> int:
-    memory = memory_evidence(args).inspect(memory_store(args).get_memory(args.memory_ref))
-    if memory is None:
-        return fail("memory not found", as_json=args.json, code=2)
-    emit({"ok": True, "memory": memory}, as_json=args.json)
-    return 0
-
-
-def _memory_transition(args: argparse.Namespace, action: str) -> int:
-    store = memory_store(args)
-    if action == "approve":
-        candidate = store.get_memory(args.memory_ref)
-        if candidate is None:
-            raise ValueError("memory not found")
-        currentness = memory_evidence(args).check(candidate, approving=True)
-        if currentness["status"] != "current":
-            raise ValueError("memory evidence requires review: " + ", ".join(currentness["reasons"]))
-    memory = getattr(store, action)(args.memory_ref)
-    emit({"ok": True, "memory": memory}, as_json=args.json)
-    return 0
-
-
-def cmd_memory_approve(args: argparse.Namespace) -> int:
-    return _memory_transition(args, "approve")
-
-
-def cmd_memory_reject(args: argparse.Namespace) -> int:
-    return _memory_transition(args, "reject")
-
-
-def cmd_memory_forget(args: argparse.Namespace) -> int:
-    return _memory_transition(args, "forget")
-
-
-def cmd_sources_list(args: argparse.Namespace) -> int:
-    sources = framework_knowledge(args).sources()
-    emit({"ok": True, "authority": "opl-framework", "sources": sources}, as_json=args.json)
-    return 0
-
-
-def cmd_sources_index(args: argparse.Namespace) -> int:
-    result = KnowledgeIndex(Path(args.memory_db).expanduser()).rebuild(framework_knowledge(args))
-    emit({"ok": True, "result": result}, as_json=args.json)
-    return 0
-
-
-def cmd_sources_search(args: argparse.Namespace) -> int:
-    results = KnowledgeIndex(Path(args.memory_db).expanduser()).search(
-        args.query, framework=framework_knowledge(args), source_ids=args.source, limit=args.limit)
-    emit({"ok": True, "results": results}, as_json=args.json)
-    return 0
-
-
-def cmd_sources_discover(args: argparse.Namespace) -> int:
-    payload = framework_knowledge(args).discover(args.query, limit=args.limit)
-    emit({"ok": True, **payload}, as_json=args.json)
-    return 0
 
 
 def _private_json_output(path: str, payload: object) -> None:
@@ -1544,77 +217,47 @@ def _private_json_output(path: str, payload: object) -> None:
         stream.write("\n")
 
 
-def cmd_memory_export(args: argparse.Namespace) -> int:
-    payload = {**memory_store(args).export_memories(entity=args.entity), "authority": "opl-relay"}
-    _private_json_output(args.output, payload)
-    emit({"ok": True, "output": str(Path(args.output).expanduser()),
-          "count": payload["count"]}, as_json=args.json)
-    return 0
+def _triage_evidence_from_cli_output(value: object) -> object:
+    """Accept the exact successful wrapper emitted by ``triage evidence``."""
+    if not isinstance(value, dict) or set(value) != {"ok", "evidence"}:
+        return value
+    if value["ok"] is not True:
+        raise ValueError("triage evidence command result must be successful")
+    if not isinstance(value["evidence"], dict):
+        raise ValueError("triage evidence command result must contain an evidence object")
+    return value["evidence"]
 
 
-def cmd_memory_link(args: argparse.Namespace) -> int:
-    framework = framework_knowledge(args)
-    source = framework.read_source(args.knowledge_id)
-    versions = {args.knowledge_id: source["sha256"]}
-    if not framework.verify_dependencies(versions).get("valid"):
-        raise ValueError("canonical_source_not_current")
-    metadata = next((item for item in framework.sources() if item["knowledge_id"] == args.knowledge_id), None)
-    if metadata is None or metadata["body_ref"]["sha256"] != source["sha256"]:
-        raise ValueError("canonical_source_changed")
-    linked = memory_store(args).link_memory(
-        args.memory_ref, knowledge_id=args.knowledge_id, source_versions=versions,
-        canonical_target={"source_id": source["source_id"], "ref": source["source_ref"], "sha256": source["sha256"]},
-        scope=source["scope"], content_kind=source["content_kind"],
-        observed_at=args.observed_at or metadata.get("reviewed_at", ""),
-        next_review_at=args.next_review_at or metadata.get("next_review_at", ""))
-    emit({"ok": True, "memory": memory_evidence(args).inspect(linked)}, as_json=args.json)
-    return 0
+def parse_recipients(values: list[str] | None, *, required: bool = False) -> list[Recipient]:
+    parsed = [
+        Recipient(address=address.strip(), name=name.strip())
+        for name, address in getaddresses(values or [])
+        if address.strip()
+    ]
+    invalid = [item.address for item in parsed if "@" not in item.address]
+    if invalid:
+        raise ValueError("无效邮件地址: " + ", ".join(invalid))
+    if required and not parsed:
+        raise ValueError("至少需要一个收件人")
+    return parsed
 
 
-def cmd_memory_promote(args: argparse.Namespace) -> int:
-    store = memory_store(args)
-    memory = store.get_memory(args.memory_ref)
-    if memory is None:
-        raise ValueError("memory not found")
-    if memory["status"] not in {"candidate", "approved"}:
-        raise ValueError("only candidate or approved memory can be proposed for promotion")
-    payload = {"version": "relay-memory-promotion.v1", "proposal_only": True,
-               "semantic_owner": "persona", "writeback_owner": "opl-framework",
-               "target_knowledge_id": args.knowledge_id, "memory": memory_evidence(args).inspect(memory)}
-    _private_json_output(args.output, payload)
-    store.record_promotion(args.memory_ref, proposal_ref=str(Path(args.output).expanduser().resolve()),
-                           knowledge_id=args.knowledge_id)
-    emit({"ok": True, "proposal_only": True, "output": str(Path(args.output).expanduser())}, as_json=args.json)
-    return 0
+def read_body_text(body: str | None, body_file: str | None) -> str:
+    if body_file == "-":
+        return sys.stdin.read()
+    if body_file:
+        return Path(body_file).expanduser().read_text(encoding="utf-8-sig")
+    return str(body or "")
 
 
-def cmd_context_build(args: argparse.Namespace) -> int:
-    payload = ContextBuilder(
-        mail_db_path=Path(args.db).expanduser(),
-        memory_db_path=Path(args.memory_db).expanduser(),
-        framework=framework_knowledge(args),
-    ).build(
-        person=args.person,
-        project=args.project,
-        query=args.query,
-        mail_limit=args.mail_limit,
-        memory_limit=args.memory_limit,
-        knowledge_limit=args.knowledge_limit,
-    )
-    emit(payload, as_json=args.json)
-    return 0
-
-
-def cmd_persona_draft_context(args: argparse.Namespace) -> int:
-    emit(
-        load_persona_mail_context(Path(args.input).expanduser()),
-        as_json=args.json,
-    )
-    return 0
+def draft_service(args: Any) -> tuple[DraftService, AppleMailProvider]:
+    provider = AppleMailProvider()
+    ledger = DraftLedger(Path(args.draft_db).expanduser())
+    return DraftService(ledger, provider), provider
 
 
 def create_persona_review_draft(
-    args: argparse.Namespace,
+    args: Any,
     *,
     context: dict[str, object],
     account_id: str,
@@ -1648,251 +291,444 @@ def create_persona_review_draft(
     }
 
 
-def cmd_persona_draft_create(args: argparse.Namespace) -> int:
-    context = load_approved_persona_draft_context(Path(args.input).expanduser())
+def _memory_transition(args: Any, memory_ref: str, action: str) -> int:
+    store = memory_store(args)
+    if action == "approve":
+        candidate = store.get_memory(memory_ref)
+        if candidate is None:
+            raise ValueError("memory not found")
+        currentness = memory_evidence(args).check(candidate, approving=True)
+        if currentness["status"] != "current":
+            raise ValueError("memory evidence requires review: " + ", ".join(currentness["reasons"]))
+    memory = getattr(store, action)(memory_ref)
+    emit({"ok": True, "memory": memory}, as_json=args.json)
+    return 0
+
+
+def _apple_mail_provider() -> AppleMailProvider:
+    return AppleMailProvider()
+
+
+# ---------------------------------------------------------------------------
+# Typer application tree
+# ---------------------------------------------------------------------------
+
+
+app = typer.Typer(
+    name="opl-relay",
+    no_args_is_help=True,
+    pretty_exceptions_enable=False,
+    add_completion=False,
+)
+workbench_app = typer.Typer(help="打开共享邮件工作台或启动 MCP App", no_args_is_help=True)
+review_app = typer.Typer(help="本地逐封审阅进度，不更改服务器邮件", no_args_is_help=True)
+mailbox_app = typer.Typer(help="逐封受控 IMAP 邮箱移动", no_args_is_help=True)
+memory_app = typer.Typer(help="私有人物、项目与关系记忆", no_args_is_help=True)
+memory_entity_app = typer.Typer(help="管理记忆主体", no_args_is_help=True)
+sources_app = typer.Typer(help="读取 Framework 授权知识", no_args_is_help=True)
+context_app = typer.Typer(help="组装起草所需的最小证据上下文", no_args_is_help=True)
+persona_app = typer.Typer(help="读取跨域 Persona 提案", no_args_is_help=True)
+triage_app = typer.Typer(help="生成或验证只读邮件 triage 证据", no_args_is_help=True)
+workspace_app = typer.Typer(help="检查、初始化或迁移 Relay workspace", no_args_is_help=True)
+setup_app = typer.Typer(help="首次配置 Profile Workspace 和邮箱", no_args_is_help=True)
+account_app = typer.Typer(help="配置和检查一个邮箱账号", no_args_is_help=True)
+credential_app = typer.Typer(help="将邮箱密码安全保存到 macOS Keychain", no_args_is_help=True)
+draft_app = typer.Typer(help="服务器审核草稿、Apple Mail 草稿与受控发送", no_args_is_help=True)
+apple_mail_app = typer.Typer(help="只读 Apple Mail 驱动接口（不提供删除或标记）", no_args_is_help=True)
+
+memory_app.add_typer(memory_entity_app, name="entity")
+app.add_typer(workbench_app, name="workbench")
+app.add_typer(review_app, name="review")
+app.add_typer(mailbox_app, name="mailbox")
+app.add_typer(memory_app, name="memory")
+app.add_typer(sources_app, name="sources")
+app.add_typer(context_app, name="context")
+app.add_typer(persona_app, name="persona")
+app.add_typer(triage_app, name="triage")
+app.add_typer(workspace_app, name="workspace")
+app.add_typer(setup_app, name="setup")
+app.add_typer(account_app, name="account")
+app.add_typer(credential_app, name="credential")
+app.add_typer(draft_app, name="draft")
+app.add_typer(apple_mail_app, name="apple-mail")
+
+
+@app.callback()
+def _root_options(
+    ctx: typer.Context,
+    as_json: Annotated[bool, typer.Option("--json", help="输出稳定 JSON")] = False,
+    config: Annotated[str | None, typer.Option("--config", help="accounts.toml 路径")] = None,
+    db: Annotated[str | None, typer.Option("--db", help="SQLite 邮件库路径")] = None,
+    draft_db: Annotated[str | None, typer.Option("--draft-db", help="本地草稿审批 ledger 路径")] = None,
+    memory_db: Annotated[str | None, typer.Option("--memory-db", help="私有记忆与知识索引 SQLite 路径")] = None,
+    knowledge_project: Annotated[
+        str,
+        typer.Option("--knowledge-project", help="Framework 知识授权的项目根目录；不是 context 的项目检索词"),
+    ] = "",
+) -> None:
+    ctx.obj = SimpleNamespace(
+        json=as_json,
+        config=config or str(default_config_path()),
+        db=db or str(default_db_path()),
+        draft_db=draft_db or str(default_drafts_db_path()),
+        memory_db=memory_db or str(default_memory_db_path()),
+        knowledge_project=knowledge_project,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Top-level commands
+# ---------------------------------------------------------------------------
+
+
+@app.command("connect", help="通过 stdin JSON 暴露 Relay 邮箱连接 provider")
+def cmd_connect(ctx: typer.Context) -> int:
+    from .connect import create_provider
+
+    args = _state(ctx)
+    try:
+        try:
+            request = json.load(sys.stdin)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = {
+                "ok": False,
+                "disposition": "not_dispatched",
+                "error": {"code": "INVALID_REQUEST", "message": "连接请求无效"},
+            }
+        else:
+            provider = create_provider(
+                config_path=Path(args.config).expanduser(),
+                db_path=Path(args.db).expanduser(),
+                ledger_path=Path(args.draft_db).expanduser(),
+            )
+            payload = provider.dispatch(request)
+    except Exception:
+        payload = {
+            "ok": False,
+            "disposition": "not_dispatched",
+            "error": {"code": "PROVIDER_UNAVAILABLE", "message": "Relay 邮箱连接暂不可用"},
+        }
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
+@app.command("doctor", help="检查配置、数据库和安装状态")
+def cmd_doctor(ctx: typer.Context) -> int:
+    args = _state(ctx)
+    config_path = Path(args.config).expanduser()
+    db_path = Path(args.db).expanduser()
+    drafts_db_path = Path(args.draft_db).expanduser()
+    memory_db_path = Path(args.memory_db).expanduser()
+    workspace = inspect_workspace(default_profile_workspace())
+    setup = setup_status(default_profile_workspace())
+    accounts = {}
+    config_error = ""
+    if config_path.exists():
+        try:
+            accounts = load_accounts_config(config_path)
+        except Exception as exc:
+            config_error = str(exc)
+    payload = {
+        "ok": not config_error,
+        "product": "opl-relay",
+        "version": __version__,
+        "command": shutil.which("opl-relay"),
+        "commands": {"opl-relay": shutil.which("opl-relay")},
+        "state_dir": str(default_state_dir()),
+        "state_dir_source": state_dir_source(),
+        "profile_workspace": str(default_profile_workspace()),
+        "profile_workspace_source": profile_workspace_source(),
+        "workspace": workspace,
+        "setup": setup,
+        "readiness": setup["readiness"],
+        "config_path": str(config_path),
+        "config_exists": config_path.exists(),
+        "config_error": config_error,
+        "db_path": str(db_path),
+        "db_exists": db_path.exists(),
+        "draft_db_path": str(drafts_db_path),
+        "draft_db_exists": drafts_db_path.exists(),
+        "memory_db_path": str(memory_db_path),
+        "memory_db_exists": memory_db_path.exists(),
+        "knowledge_authority": "opl-framework",
+        "knowledge_project": args.knowledge_project,
+        "apple_mail_available": sys.platform == "darwin" and bool(shutil.which("osascript")),
+        "accounts": sorted(accounts.keys()),
+        "keychain_services": [KEYCHAIN_SERVICE],
+    }
+    emit(payload, as_json=args.json)
+    return 0 if payload["ok"] else 1
+
+
+@app.command("app-contribution", help="执行 Package-owned app contribution JSON ABI")
+def cmd_app_contribution_entry(ctx: typer.Context) -> int:
+    return cmd_app_contribution(_state(ctx))
+
+
+@app.command("accounts", help="列出配置账号")
+def cmd_accounts(ctx: typer.Context) -> int:
+    args = _state(ctx)
+    accounts = load_accounts_config(Path(args.config).expanduser())
     emit(
         {
             "ok": True,
-            "handoff": create_persona_review_draft(
-                args,
-                context=context,
-                account_id=args.account,
-                to=args.to,
-                cc=args.cc,
-                bcc=args.bcc,
-                visible=args.open,
-            ),
+            "accounts": [
+                {
+                    "account_id": account.account_id,
+                    "email": account.email,
+                    "provider": account.provider,
+                    "backend": account.backend,
+                    "imap_host": account.imap.host if account.imap else None,
+                    "include_folders": account.include_folders,
+                    "exclude_folders": account.exclude_folders,
+                }
+                for account in accounts.values()
+            ],
         },
         as_json=args.json,
     )
     return 0
 
 
-def cmd_triage_evidence(args: argparse.Namespace) -> int:
-    payload = build_triage_evidence(
-        mail_db_path=Path(args.db).expanduser(),
-        source_ref=args.source_ref,
-        policy_refs=list(args.policy_ref),
-    )
-    emit({"ok": True, "evidence": payload}, as_json=args.json)
+@app.command("recent", help="列出最近邮件")
+def cmd_recent(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")] = "",
+    folder: Annotated[str, typer.Option("--folder")] = "",
+    since: Annotated[str, typer.Option("--since", help="include messages at or after this ISO datetime")] = "",
+    until: Annotated[str, typer.Option("--until", help="include messages before this ISO datetime")] = "",
+    limit: Annotated[int, typer.Option("--limit")] = 20,
+    scope: Annotated[ScopeLiteral, typer.Option("--scope")] = "active",
+) -> int:
+    args = _state(ctx)
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        rows = list_messages(
+            conn,
+            account_ids=[account] if account else None,
+            folder_slug=folder,
+            since=since,
+            until=until,
+            limit=limit,
+            scope=scope,
+        )
+    finally:
+        conn.close()
+    emit({"ok": True, "messages": rows}, as_json=args.json)
     return 0
 
 
-def _triage_evidence_from_cli_output(value: object) -> object:
-    """Accept the exact successful wrapper emitted by ``triage evidence``."""
-    if not isinstance(value, dict) or set(value) != {"ok", "evidence"}:
-        return value
-    if value["ok"] is not True:
-        raise ValueError("triage evidence command result must be successful")
-    if not isinstance(value["evidence"], dict):
-        raise ValueError("triage evidence command result must contain an evidence object")
-    return value["evidence"]
+@app.command("search", help="搜索本地邮件元数据")
+def cmd_search(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument()],
+    account: Annotated[str, typer.Option("--account")] = "",
+    folder: Annotated[str, typer.Option("--folder")] = "",
+    since: Annotated[str, typer.Option("--since", help="include messages at or after this ISO datetime")] = "",
+    until: Annotated[str, typer.Option("--until", help="include messages before this ISO datetime")] = "",
+    limit: Annotated[int, typer.Option("--limit")] = 20,
+    scope: Annotated[ScopeLiteral, typer.Option("--scope")] = "active",
+    remote: Annotated[
+        bool,
+        typer.Option("--remote", help="按需在服务器检索，只缓存命中的原文，不同步整个归档"),
+    ] = False,
+    include_body: Annotated[bool, typer.Option("--include-body/--no-include-body")] = True,
+    max_scan: Annotated[
+        int,
+        typer.Option("--max-scan", help="compatibility option; indexed search always covers the full selected scope"),
+    ] = 500,
+) -> int:
+    args = _state(ctx)
+    if remote:
+        if not account:
+            raise ValueError("Remote search requires an explicit --account")
+        from .remote_search import search_remote
 
-
-def cmd_triage_validate(args: argparse.Namespace) -> int:
-    raw = sys.stdin.read() if args.input == "-" else Path(args.input).expanduser().read_text(
-        encoding="utf-8"
+        result = search_remote(
+            account=load_account(Path(args.config).expanduser(), account),
+            db_path=Path(args.db).expanduser(),
+            query=query,
+            scope=scope,
+            folder=folder,
+            limit=limit,
+            since=since,
+            until=until,
+        )
+        emit(result, as_json=args.json)
+        return 0 if result["ok"] else 1
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        rows = search_messages(
+            conn,
+            queries=[query],
+            account_ids=[account] if account else None,
+            folder_slug=folder,
+            since=since,
+            until=until,
+            include_body=include_body,
+            max_scan=max_scan,
+            limit=limit,
+            scope=scope,
+        )
+    finally:
+        conn.close()
+    emit(
+        {
+            "ok": True,
+            "scope": scope,
+            "messages": rows,
+            "search_complete": True,
+            "result_limit": limit,
+        },
+        as_json=args.json,
     )
-    payload = _triage_evidence_from_cli_output(json.loads(raw))
-    emit(validate_triage_evidence(payload), as_json=args.json)
     return 0
 
 
-def parse_recipients(values: list[str] | None, *, required: bool = False) -> list[Recipient]:
-    parsed = [
-        Recipient(address=address.strip(), name=name.strip())
-        for name, address in getaddresses(values or [])
-        if address.strip()
-    ]
-    invalid = [item.address for item in parsed if "@" not in item.address]
-    if invalid:
-        raise ValueError("无效邮件地址: " + ", ".join(invalid))
-    if required and not parsed:
-        raise ValueError("至少需要一个收件人")
-    return parsed
+@app.command("read", help="读取一封邮件正文")
+def cmd_read(
+    ctx: typer.Context,
+    storage_ref: Annotated[str, typer.Argument()],
+    include_raw: Annotated[bool, typer.Option("--include-raw")] = False,
+) -> int:
+    args = _state(ctx)
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        meta = get_message_by_storage_ref(conn, storage_ref)
+        raw = fetch_raw_email_by_storage_ref(conn, storage_ref)
+    finally:
+        conn.close()
+    if not meta or raw is None:
+        return fail("message not found", as_json=args.json, code=2)
+    meta["body_text"] = extract_text_body(raw)
+    from .server_drafts import content_snapshot
 
-
-def read_body(args: argparse.Namespace) -> str:
-    if args.body_file == "-":
-        return sys.stdin.read()
-    if args.body_file:
-        return Path(args.body_file).expanduser().read_text(encoding="utf-8-sig")
-    return str(args.body or "")
-
-
-def draft_service(args: argparse.Namespace) -> tuple[DraftService, AppleMailProvider]:
-    provider = AppleMailProvider()
-    ledger = DraftLedger(Path(args.draft_db).expanduser())
-    return DraftService(ledger, provider), provider
-
-
-def cmd_server_draft(args: argparse.Namespace) -> int:
-    from .server_drafts import server_draft
-
-    inspect = args.draft_action == "server-inspect"
-    payload = server_draft(
-        config_path=Path(args.config).expanduser(), db_path=Path(args.db).expanduser(),
-        ledger_path=Path(args.draft_db).expanduser(), account_id=args.account,
-        request_id=args.request_id, inspect=inspect,
-        body="" if inspect else read_body(args),
-        signature="" if inspect else Path(args.signature_file).expanduser().read_text(encoding="utf-8"),
-        source_ref=getattr(args, "storage_ref", None),
-        to=getattr(args, "to", []), cc=getattr(args, "cc", []),
-        subject=getattr(args, "subject", ""), attachments=getattr(args, "attach", []),
-        thread_source_ref=getattr(args, "thread_source", None),
-        in_reply_to=getattr(args, "in_reply_to", None), references=getattr(args, "references", []),
-        self_aliases=getattr(args, "self_address", []), apply=getattr(args, "apply", False),
-    )
-    emit({"ok": True, "draft": payload}, as_json=args.json)
+    meta["headers"] = content_snapshot(raw)["headers"]
+    if include_raw:
+        meta["raw_eml"] = raw.decode("utf-8", errors="replace")
+    emit({"ok": True, "message": meta}, as_json=args.json)
     return 0
 
 
-def cmd_draft_server_reconcile(args: argparse.Namespace) -> int:
-    from .server_drafts import reconcile_server_drafts
-
-    payload = reconcile_server_drafts(
+@app.command("sync", help="从 IMAP 同步邮件到本地 SQLite")
+def cmd_sync(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    mode: Annotated[Literal["initial", "incremental"], typer.Option("--mode")] = "incremental",
+    limit_per_folder: Annotated[int | None, typer.Option("--limit-per-folder")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    scope: Annotated[ScopeLiteral, typer.Option("--scope")] = "active",
+    folder: Annotated[str, typer.Option("--folder", help="sync one configured folder")] = "",
+    max_seconds: Annotated[
+        float,
+        typer.Option("--max-seconds", help="每轮 IMAP 同步的总预算（默认 120 秒，超时返回可续跑的部分结果）"),
+    ] = 120.0,
+) -> int:
+    args = _state(ctx)
+    payload = sync_account(
         config_path=Path(args.config).expanduser(),
-        ledger_path=Path(args.draft_db).expanduser(),
-        account_id=args.account,
-        apply=args.apply,
-        request_id=args.request_id,
-        sent_message_id=args.sent_message_id,
+        db_path=Path(args.db).expanduser(),
+        account_id=account,
+        mode=mode,
+        limit_per_folder=limit_per_folder,
+        dry_run=dry_run,
+        scope=scope,
+        folder=folder,
+        max_duration_sec=max_seconds,
     )
-    emit({"ok": True, "reconcile": payload}, as_json=args.json)
+    emit(payload, as_json=args.json)
+    return 0 if payload.get("ok") else 1
+
+
+@app.command("index", help="建立或补齐本地正文索引（按原文哈希去重）")
+def cmd_index(ctx: typer.Context) -> int:
+    args = _state(ctx)
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        emit(index_messages(conn), as_json=args.json)
+    finally:
+        conn.close()
     return 0
 
 
-def cmd_server_send(args: argparse.Namespace) -> int:
-    from .server_send import send_server_draft
-    payload = send_server_draft(config_path=Path(args.config).expanduser(),
-                                ledger_path=Path(args.draft_db).expanduser(), account_id=args.account,
-                                request_id=args.request_id, approval=args.approval, check=args.check)
-    ok = payload["state"] != "unknown"
-    emit({"ok": ok, "draft": payload}, as_json=args.json)
-    return 0 if ok else 1
-
-
-def cmd_reply_context(args: argparse.Namespace) -> int:
-    from .reply_context import reply_context
-    result = None
-    if args.sync:
-        result = sync_account(config_path=Path(args.config).expanduser(), db_path=Path(args.db).expanduser(),
-                              account_id=args.account, scope="active", max_duration_sec=60)
-        if not result.get("ok") or any(not item.get("complete") for item in result.get("folders", [])):
-            emit({"ok": False, "sync": result, "error": "Active sync is incomplete; inspect available mail before selecting a reply"}, as_json=args.json)
-            return 1
-    payload = reply_context(config_path=Path(args.config).expanduser(), db_path=Path(args.db).expanduser(),
-                            account_id=args.account, storage_ref=args.storage_ref, query=args.query,
-                            latest_sent=args.latest_sent)
-    if result is not None:
-        payload["sync"] = result
-        payload["coverage"]["freshness"] = "fresh active sync"
-    emit({"ok": True, "reply_context": payload}, as_json=args.json)
+@app.command("status", help="读取各文件夹最后一次 IMAP 对账与完整性")
+def cmd_mail_status(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")] = "",
+) -> int:
+    args = _state(ctx)
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        emit(
+            {
+                "ok": True,
+                "folders": folder_status(conn, account),
+                "counts_are": "last verified provider snapshot, not a live server query",
+            },
+            as_json=args.json,
+        )
+    finally:
+        conn.close()
     return 0
 
 
-def cmd_draft_create(args: argparse.Namespace) -> int:
-    account = load_account(Path(args.config).expanduser(), args.account)
-    attachments = [Path(value).expanduser() for value in args.attach]
-    missing = [str(path) for path in attachments if not path.is_file()]
-    if missing:
-        raise FileNotFoundError("附件不存在: " + ", ".join(missing))
-    service, _ = draft_service(args)
-    payload = service.create(
-        account_id=account.account_id,
-        sender=account.email,
-        to=parse_recipients(args.to, required=True),
-        cc=parse_recipients(args.cc),
-        bcc=parse_recipients(args.bcc),
-        subject=args.subject,
-        body_text=read_body(args),
-        attachments=attachments,
-        visible=args.open,
-    )
-    emit({"ok": True, "draft": payload}, as_json=args.json)
+# ---------------------------------------------------------------------------
+# workbench subcommands
+# ---------------------------------------------------------------------------
+
+
+@workbench_app.command("open")
+def cmd_workbench_open(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")] = "",
+    storage_ref: Annotated[str, typer.Option("--storage-ref")] = "",
+    draft_id: Annotated[str, typer.Option("--draft-id")] = "",
+    request_id: Annotated[str, typer.Option("--request-id")] = "",
+    revision: Annotated[int | None, typer.Option("--revision")] = None,
+) -> int:
+    from .workbench import Workbench, open_workbench
+
+    args = _state(ctx)
+    focus = {
+        key: value
+        for key, value in {
+            "account_id": account,
+            "storage_ref": storage_ref,
+            "draft_id": draft_id,
+            "request_id": request_id,
+            "revision": revision,
+        }.items()
+        if value is not None and value != ""
+    }
+    workbench = Workbench(config_path=args.config, db_path=args.db, ledger_path=args.draft_db)
+    emit(open_workbench(focus=workbench.focus(**focus)["focus"]), as_json=True)
     return 0
 
 
-def cmd_draft_reply_all(args: argparse.Namespace) -> int:
-    account = load_account(Path(args.config).expanduser(), args.account)
-    attachments = [Path(value).expanduser() for value in args.attach]
-    missing = [str(path) for path in attachments if not path.is_file()]
-    if missing:
-        raise FileNotFoundError("附件不存在: " + ", ".join(missing))
-    service, _ = draft_service(args)
-    payload = service.reply_all(
-        account_id=account.account_id,
-        sender=account.email,
-        provider_account=args.apple_mail_account,
-        source_message_id=args.apple_mail_id,
-        mailbox_path=args.mailbox_path,
-        body_text=read_body(args),
-        attachments=attachments,
-        visible=args.open,
-    )
-    emit({"ok": True, "draft": payload}, as_json=args.json)
+@workbench_app.command("connection", help="生成当前宿主的连接配置或 DSH 原生配置包")
+def cmd_workbench_connection(
+    host: Annotated[Literal["generic", "codex", "dsh", "opl"], typer.Option("--host")] = "generic",
+    output: Annotated[str, typer.Option("--output")] = "",
+) -> int:
+    from .workbench import connection_config
+
+    emit(connection_config(host=host, output=output), as_json=True)
     return 0
 
 
-def cmd_draft_adopt(args: argparse.Namespace) -> int:
-    account = load_account(Path(args.config).expanduser(), args.account)
-    service, provider = draft_service(args)
-    provider_account = provider.resolve_account(account.email)
-    payload = service.adopt(
-        account_id=account.account_id,
-        provider_account=provider_account,
-        provider_uuid=args.apple_mail_uuid,
-    )
-    emit({"ok": True, "draft": payload}, as_json=args.json)
+@workbench_app.command("mcp")
+def cmd_workbench_mcp() -> int:
+    from .workbench import bundle_root
+
+    os.execvp("node", ["node", str(bundle_root() / "server.mjs"), "--python", sys.executable])
     return 0
 
 
-def cmd_draft_inspect(args: argparse.Namespace) -> int:
-    service, _ = draft_service(args)
-    emit(
-        {"ok": True, "draft": service.inspect(args.draft_ref)},
-        as_json=args.json,
-    )
-    return 0
+@workbench_app.command("action")
+def cmd_workbench_action(ctx: typer.Context) -> int:
+    from .workbench import Workbench
 
-
-def cmd_draft_open(args: argparse.Namespace) -> int:
-    service, _ = draft_service(args)
-    emit(
-        {"ok": True, "draft": service.open(args.draft_ref)},
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_draft_send(args: argparse.Namespace) -> int:
-    service, _ = draft_service(args)
-    emit(
-        {
-            "ok": True,
-            "draft": service.send(args.draft_ref, approval=args.approval),
-        },
-        as_json=args.json,
-    )
-    return 0
-
-
-def cmd_workbench(args: argparse.Namespace) -> int:
-    from .workbench import Workbench, bundle_root, connection_config, open_workbench
-    if args.workbench_action == "connection":
-        emit(connection_config(host=args.host, output=args.output), as_json=True)
-        return 0
-    if args.workbench_action == "open":
-        focus = {key: value for key, value in {
-            "account_id": args.account, "storage_ref": args.storage_ref,
-            "draft_id": args.draft_id, "request_id": args.request_id, "revision": args.revision,
-        }.items() if value is not None and value != ""}
-        workbench = Workbench(config_path=args.config, db_path=args.db, ledger_path=args.draft_db)
-        emit(open_workbench(focus=workbench.focus(**focus)["focus"]), as_json=True)
-        return 0
-    if args.workbench_action == "mcp":
-        import os
-        os.execvp("node", ["node", str(bundle_root() / "server.mjs"), "--python", sys.executable])
+    args = _state(ctx)
     request = json.load(sys.stdin)
     if not isinstance(request, dict) or set(request) != {"action", "input"}:
         raise ValueError("workbench action expects action and input")
@@ -1905,496 +741,1242 @@ def cmd_workbench(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_connect(args: argparse.Namespace) -> int:
-    from .connect import create_provider
+# ---------------------------------------------------------------------------
+# review subcommands
+# ---------------------------------------------------------------------------
 
-    try:
+
+@review_app.command("prepare")
+def cmd_review_prepare(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")] = "",
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+    sync_limit: Annotated[
+        int,
+        typer.Option("--sync-limit", help="每个文件夹每轮最多补抓的邮件数，优先新信"),
+    ] = 200,
+) -> int:
+    args = _state(ctx)
+    accounts = [account] if account else list(load_accounts_config(Path(args.config).expanduser()))
+    prepared = []
+    for account_id in accounts:
         try:
-            request = json.load(sys.stdin)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            payload = {"ok": False, "disposition": "not_dispatched",
-                       "error": {"code": "INVALID_REQUEST", "message": "连接请求无效"}}
-        else:
-            provider = create_provider(
+            sync_result = sync_account(
                 config_path=Path(args.config).expanduser(),
                 db_path=Path(args.db).expanduser(),
-                ledger_path=Path(args.draft_db).expanduser(),
+                account_id=account_id,
+                scope="active",
+                limit_per_folder=sync_limit,
             )
-            payload = provider.dispatch(request)
-    except Exception:
-        payload = {"ok": False, "disposition": "not_dispatched",
-                   "error": {"code": "PROVIDER_UNAVAILABLE", "message": "Relay 邮箱连接暂不可用"}}
-    print(json.dumps(payload, ensure_ascii=False))
+        except Exception as exc:
+            sync_result = {"ok": False, "error": str(exc), "folders": []}
+        conn = connect_email_store(Path(args.db).expanduser())
+        try:
+            queue = review_pending(conn, account=account_id, limit=limit)
+            state = review_status(conn, account=account_id)
+        finally:
+            conn.close()
+        validated = any(
+            f.get("folder", "").lower() == "inbox"
+            and "remote_count" in f
+            and f.get("membership_verified", True)
+            for f in sync_result.get("folders", [])
+        )
+        prepared.append({
+            "account": account_id,
+            "sync": sync_result,
+            "available_for_review": validated,
+            "pending": queue,
+            "open_items": state["open_items"],
+        })
+    payload = {"ok": all(p["sync"].get("ok") for p in prepared), "accounts": prepared}
+    emit(payload, as_json=args.json)
+    return 0 if payload["ok"] else 1
+
+
+@review_app.command("pending")
+def cmd_review_pending(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+) -> int:
+    args = _state(ctx)
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        emit(review_pending(conn, account=account, limit=limit), as_json=args.json)
+    finally:
+        conn.close()
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="opl-relay")
-    parser.add_argument("--json", action="store_true", help="输出稳定 JSON")
-    parser.add_argument("--config", default=str(default_config_path()), help="accounts.toml 路径")
-    parser.add_argument("--db", default=str(default_db_path()), help="SQLite 邮件库路径")
-    parser.add_argument(
-        "--draft-db",
-        default=str(default_drafts_db_path()),
-        help="本地草稿审批 ledger 路径",
+@review_app.command("status")
+def cmd_review_status(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+) -> int:
+    args = _state(ctx)
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        emit(review_status(conn, account=account), as_json=args.json)
+    finally:
+        conn.close()
+    return 0
+
+
+@review_app.command("record")
+def cmd_review_record(
+    ctx: typer.Context,
+    file: Annotated[str, typer.Option("--file", help="JSON records: storage_ref, action, status, note")],
+) -> int:
+    args = _state(ctx)
+    conn = connect_email_store(Path(args.db).expanduser())
+    try:
+        records = json.loads(Path(file).expanduser().read_text(encoding="utf-8"))
+        if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
+            raise ValueError("review file must be a JSON array of records")
+        emit(record_reviews(conn, records), as_json=args.json)
+    finally:
+        conn.close()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# mailbox subcommands
+# ---------------------------------------------------------------------------
+
+
+@mailbox_app.command("move", help="只将经实时验证的精确邮件移动到已存在的 Archive、Trash、Bill 或精确指定的现有文件夹")
+def cmd_mailbox_move(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    storage_ref: Annotated[list[str], typer.Option("--storage-ref")],
+    destination: Annotated[Literal["archive", "trash", "bill"] | None, typer.Option("--destination")] = None,
+    destination_folder: Annotated[
+        str,
+        typer.Option("--destination-folder", help="精确指定一个已存在的现有文件夹（不创建新文件夹）"),
+    ] = "",
+    reconcile: Annotated[
+        bool,
+        typer.Option("--reconcile", help="只读核对 Graph 未知移动结果并保存回执，不重试远端操作"),
+    ] = False,
+    apply: Annotated[bool, typer.Option("--apply", help="执行移动；省略时仅做远端实时预检")] = False,
+) -> int:
+    args = _state(ctx)
+    try:
+        if reconcile:
+            if apply:
+                raise ValueError("--reconcile never accepts --apply")
+            from .graph import reconcile_graph_moves
+
+            acct = load_account(Path(args.config).expanduser(), account)
+            if not acct.graph:
+                raise ValueError("This reconciliation command currently requires a Graph account")
+            payload = reconcile_graph_moves(
+                account=acct,
+                db_path=Path(args.db).expanduser(),
+                destination=destination,
+                exact_folder=destination_folder,
+                storage_refs=storage_ref,
+            )
+            emit(payload, as_json=args.json)
+            return 0 if payload["ok"] else 1
+        payload = move_messages(
+            config_path=Path(args.config).expanduser(),
+            db_path=Path(args.db).expanduser(),
+            account_id=account,
+            destination=destination,
+            exact_folder=destination_folder,
+            storage_refs=storage_ref,
+            apply=apply,
+        )
+    except (ValueError, LookupError, MailboxMoveFailure) as exc:
+        return fail(str(exc), as_json=args.json, code=2)
+    emit(payload, as_json=args.json)
+    return 0 if payload.get("ok") is True else 1
+
+
+# ---------------------------------------------------------------------------
+# memory subcommands
+# ---------------------------------------------------------------------------
+
+
+@memory_entity_app.command("upsert", help="新增或更新人物、机构或项目")
+def cmd_memory_entity_upsert(
+    ctx: typer.Context,
+    kind: Annotated[Literal["person", "organization", "project"], typer.Option("--kind")],
+    name: Annotated[str, typer.Option("--name")],
+    alias: Annotated[list[str] | None, typer.Option("--alias")] = None,
+    email: Annotated[list[str] | None, typer.Option("--email")] = None,
+) -> int:
+    args = _state(ctx)
+    entity = memory_store(args).upsert_entity(
+        kind=kind,
+        canonical_name=name,
+        aliases=alias or [],
+        emails=email or [],
     )
-    parser.add_argument(
-        "--memory-db",
-        default=str(default_memory_db_path()),
-        help="私有记忆与知识索引 SQLite 路径",
+    emit({"ok": True, "entity": entity}, as_json=args.json)
+    return 0
+
+
+@memory_entity_app.command("list", help="列出或搜索记忆主体")
+def cmd_memory_entity_list(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Option("--query")] = "",
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+) -> int:
+    args = _state(ctx)
+    entities = memory_store(args).list_entities(query=query, limit=limit)
+    emit({"ok": True, "entities": entities}, as_json=args.json)
+    return 0
+
+
+@memory_app.command("propose", help="提出带证据的记忆候选")
+def cmd_memory_propose(
+    ctx: typer.Context,
+    entity: Annotated[str, typer.Option("--entity")],
+    category: Annotated[MemoryCategoryLiteral, typer.Option("--category")],
+    content: Annotated[str, typer.Option("--content")],
+    source: Annotated[list[str], typer.Option("--source")],
+    source_excerpt: Annotated[list[str] | None, typer.Option("--source-excerpt")] = None,
+    confidence: Annotated[float, typer.Option("--confidence")] = 1.0,
+    sensitivity: Annotated[SensitivityLiteral, typer.Option("--sensitivity")] = "private",
+    occurred_at: Annotated[str, typer.Option("--occurred-at")] = "",
+    valid_from: Annotated[str, typer.Option("--valid-from")] = "",
+    valid_until: Annotated[str, typer.Option("--valid-until")] = "",
+    supersedes: Annotated[str, typer.Option("--supersedes")] = "",
+    observed_at: Annotated[str, typer.Option("--observed-at")] = "",
+    next_review_at: Annotated[str, typer.Option("--next-review-at")] = "",
+    content_kind: Annotated[ContentKindLiteral, typer.Option("--content-kind")] = "",
+) -> int:
+    args = _state(ctx)
+    store = memory_store(args)
+    resolved = store.resolve_entity(entity)
+    memory = store.propose_memory(
+        entity_ref=resolved["entity_ref"],
+        category=category,
+        content=content,
+        sources=_memory_sources(args, list(source), list(source_excerpt or [])),
+        confidence=confidence,
+        sensitivity=sensitivity,
+        occurred_at=occurred_at,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        supersedes_ref=supersedes,
+        observed_at=observed_at,
+        next_review_at=next_review_at,
+        content_kind=content_kind,
     )
-    parser.add_argument(
-        "--knowledge-project", default="",
-        help="Framework 知识授权的项目根目录；不是 context 的项目检索词",
+    emit({"ok": True, "memory": memory}, as_json=args.json)
+    return 0
+
+
+@memory_app.command("candidates", help="列出待审核记忆")
+def cmd_memory_candidates(
+    ctx: typer.Context,
+    entity: Annotated[str, typer.Option("--entity")] = "",
+    query: Annotated[str, typer.Option("--query")] = "",
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+) -> int:
+    args = _state(ctx)
+    memories = memory_store(args).list_memories(
+        entity=entity,
+        statuses=("candidate",),
+        query=query,
+        limit=limit,
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    emit({"ok": True, "memories": memories}, as_json=args.json)
+    return 0
 
-    connect = sub.add_parser("connect", help="通过 stdin JSON 暴露 Relay 邮箱连接 provider")
-    connect.set_defaults(func=cmd_connect)
 
-    workbench = sub.add_parser("workbench", help="打开共享邮件工作台或启动 MCP App")
-    workbench_actions = workbench.add_subparsers(dest="workbench_action", required=True)
-    workbench_open = workbench_actions.add_parser("open")
-    for argument in ("account", "storage-ref", "draft-id", "request-id"):
-        workbench_open.add_argument("--" + argument, default="")
-    workbench_open.add_argument("--revision", type=int)
-    workbench_open.set_defaults(func=cmd_workbench)
-    workbench_connection = workbench_actions.add_parser("connection", help="生成当前宿主的连接配置或 DSH 原生配置包")
-    workbench_connection.add_argument("--host", choices=("generic", "codex", "dsh", "opl"), default="generic")
-    workbench_connection.add_argument("--output", default="")
-    workbench_connection.set_defaults(func=cmd_workbench)
-    for action in ("mcp", "action"):
-        workbench_actions.add_parser(action).set_defaults(func=cmd_workbench)
-
-    doctor = sub.add_parser("doctor", help="检查配置、数据库和安装状态")
-    doctor.set_defaults(func=cmd_doctor)
-
-    app_contribution = sub.add_parser(
-        "app-contribution",
-        help="执行 Package-owned app contribution JSON ABI",
+@memory_app.command("search", help="搜索结构化记忆")
+def cmd_memory_search(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument()] = "",
+    entity: Annotated[str, typer.Option("--entity")] = "",
+    status: Annotated[list[MemoryStatusChoice] | None, typer.Option("--status")] = None,
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+    include_stale: Annotated[
+        bool,
+        typer.Option("--include-stale", help="查看保留的历史条目及来源复核状态，不作为当前上下文"),
+    ] = False,
+) -> int:
+    args = _state(ctx)
+    evidence = memory_evidence(args)
+    memories = memory_store(args).list_memories(
+        entity=entity,
+        statuses=tuple(item.value for item in status) if status else ("approved",),
+        query=query,
+        limit=limit,
+        is_current=None if include_stale else evidence.current,
     )
-    app_contribution.set_defaults(func=cmd_app_contribution)
+    if include_stale:
+        memories = [evidence.inspect(memory) for memory in memories]
+    emit({"ok": True, "memories": memories}, as_json=args.json)
+    return 0
 
-    accounts = sub.add_parser("accounts", help="列出配置账号")
-    accounts.set_defaults(func=cmd_accounts)
 
-    recent = sub.add_parser("recent", help="列出最近邮件")
-    recent.add_argument("--account", default="")
-    recent.add_argument("--folder", default="")
-    recent.add_argument("--since", default="", help="include messages at or after this ISO datetime")
-    recent.add_argument("--until", default="", help="include messages before this ISO datetime")
-    recent.add_argument("--limit", type=int, default=20)
-    recent.add_argument("--scope", choices=SCOPES, default="active")
-    recent.set_defaults(func=cmd_recent)
+@memory_app.command("inspect", help="查看记忆及其证据")
+def cmd_memory_inspect(ctx: typer.Context, memory_ref: Annotated[str, typer.Argument()]) -> int:
+    args = _state(ctx)
+    memory = memory_evidence(args).inspect(memory_store(args).get_memory(memory_ref))
+    if memory is None:
+        return fail("memory not found", as_json=args.json, code=2)
+    emit({"ok": True, "memory": memory}, as_json=args.json)
+    return 0
 
-    search = sub.add_parser("search", help="搜索本地邮件元数据")
-    search.add_argument("query")
-    search.add_argument("--account", default="")
-    search.add_argument("--folder", default="")
-    search.add_argument("--since", default="", help="include messages at or after this ISO datetime")
-    search.add_argument("--until", default="", help="include messages before this ISO datetime")
-    search.add_argument("--limit", type=int, default=20)
-    search.add_argument("--scope", choices=SCOPES, default="active")
-    search.add_argument("--remote", action="store_true", help="按需在服务器检索，只缓存命中的原文，不同步整个归档")
-    search.add_argument("--include-body", action=argparse.BooleanOptionalAction, default=True)
-    search.add_argument("--max-scan", type=int, default=500, help="compatibility option; indexed search always covers the full selected scope")
-    search.set_defaults(func=cmd_search)
 
-    read = sub.add_parser("read", help="读取一封邮件正文")
-    read.add_argument("storage_ref")
-    read.add_argument("--include-raw", action="store_true")
-    read.set_defaults(func=cmd_read)
+@memory_app.command("approve", help="批准记忆候选")
+def cmd_memory_approve(ctx: typer.Context, memory_ref: Annotated[str, typer.Argument()]) -> int:
+    return _memory_transition(_state(ctx), memory_ref, "approve")
 
-    sync = sub.add_parser("sync", help="从 IMAP 同步邮件到本地 SQLite")
-    sync.add_argument("--account", required=True)
-    sync.add_argument("--mode", choices=["initial", "incremental"], default="incremental")
-    sync.add_argument("--limit-per-folder", type=int, default=None)
-    sync.add_argument("--dry-run", action="store_true")
-    sync.add_argument("--scope", choices=SCOPES, default="active")
-    sync.add_argument("--folder", default="", help="sync one configured folder")
-    sync.add_argument("--max-seconds", type=float, default=120.0,
-                      help="每轮 IMAP 同步的总预算（默认 120 秒，超时返回可续跑的部分结果）")
-    sync.set_defaults(func=cmd_sync)
 
-    index = sub.add_parser("index", help="建立或补齐本地正文索引（按原文哈希去重）")
-    index.set_defaults(func=cmd_index)
-    status = sub.add_parser("status", help="读取各文件夹最后一次 IMAP 对账与完整性")
-    status.add_argument("--account", default="")
-    status.set_defaults(func=cmd_mail_status)
-    review = sub.add_parser("review", help="本地逐封审阅进度，不更改服务器邮件")
-    review_actions = review.add_subparsers(dest="review_action", required=True)
-    for name in ("prepare", "pending", "status", "record"):
-        command = review_actions.add_parser(name)
-        command.set_defaults(func=cmd_review)
-        if name == "record":
-            command.add_argument("--file", required=True, help="JSON records: storage_ref, action, status, note")
+@memory_app.command("reject", help="拒绝记忆候选")
+def cmd_memory_reject(ctx: typer.Context, memory_ref: Annotated[str, typer.Argument()]) -> int:
+    return _memory_transition(_state(ctx), memory_ref, "reject")
+
+
+@memory_app.command("forget", help="停用但不物理删除记忆")
+def cmd_memory_forget(ctx: typer.Context, memory_ref: Annotated[str, typer.Argument()]) -> int:
+    return _memory_transition(_state(ctx), memory_ref, "forget")
+
+
+@memory_app.command("export", help="保留原证据导出私有迁移文件")
+def cmd_memory_export(
+    ctx: typer.Context,
+    output: Annotated[str, typer.Option("--output")],
+    entity: Annotated[str, typer.Option("--entity")] = "",
+) -> int:
+    args = _state(ctx)
+    payload = {**memory_store(args).export_memories(entity=entity), "authority": "opl-relay"}
+    _private_json_output(output, payload)
+    emit({"ok": True, "output": str(Path(output).expanduser()), "count": payload["count"]}, as_json=args.json)
+    return 0
+
+
+@memory_app.command("link", help="关联经 Framework 核验的唯一知识正文")
+def cmd_memory_link(
+    ctx: typer.Context,
+    memory_ref: Annotated[str, typer.Argument()],
+    knowledge_id: Annotated[str, typer.Option("--knowledge-id")],
+    observed_at: Annotated[str, typer.Option("--observed-at")] = "",
+    next_review_at: Annotated[str, typer.Option("--next-review-at")] = "",
+) -> int:
+    args = _state(ctx)
+    framework = framework_knowledge(args)
+    source = framework.read_source(knowledge_id)
+    versions = {knowledge_id: source["sha256"]}
+    if not framework.verify_dependencies(versions).get("valid"):
+        raise ValueError("canonical_source_not_current")
+    metadata = next((item for item in framework.sources() if item["knowledge_id"] == knowledge_id), None)
+    if metadata is None or metadata["body_ref"]["sha256"] != source["sha256"]:
+        raise ValueError("canonical_source_changed")
+    linked = memory_store(args).link_memory(
+        memory_ref,
+        knowledge_id=knowledge_id,
+        source_versions=versions,
+        canonical_target={
+            "source_id": source["source_id"],
+            "ref": source["source_ref"],
+            "sha256": source["sha256"],
+        },
+        scope=source["scope"],
+        content_kind=source["content_kind"],
+        observed_at=observed_at or metadata.get("reviewed_at", ""),
+        next_review_at=next_review_at or metadata.get("next_review_at", ""),
+    )
+    emit({"ok": True, "memory": memory_evidence(args).inspect(linked)}, as_json=args.json)
+    return 0
+
+
+@memory_app.command("promote", help="导出交给 Persona 判断的长期知识晋升提案")
+def cmd_memory_promote(
+    ctx: typer.Context,
+    memory_ref: Annotated[str, typer.Argument()],
+    knowledge_id: Annotated[str, typer.Option("--knowledge-id")],
+    output: Annotated[str, typer.Option("--output")],
+) -> int:
+    args = _state(ctx)
+    store = memory_store(args)
+    memory = store.get_memory(memory_ref)
+    if memory is None:
+        raise ValueError("memory not found")
+    if memory["status"] not in {"candidate", "approved"}:
+        raise ValueError("only candidate or approved memory can be proposed for promotion")
+    payload = {
+        "version": "relay-memory-promotion.v1",
+        "proposal_only": True,
+        "semantic_owner": "persona",
+        "writeback_owner": "opl-framework",
+        "target_knowledge_id": knowledge_id,
+        "memory": memory_evidence(args).inspect(memory),
+    }
+    _private_json_output(output, payload)
+    store.record_promotion(
+        memory_ref,
+        proposal_ref=str(Path(output).expanduser().resolve()),
+        knowledge_id=knowledge_id,
+    )
+    emit({"ok": True, "proposal_only": True, "output": str(Path(output).expanduser())}, as_json=args.json)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# sources / context / persona / triage subcommands
+# ---------------------------------------------------------------------------
+
+
+@sources_app.command("list", help="列出 Framework 已授权接受的知识元信息")
+def cmd_sources_list(ctx: typer.Context) -> int:
+    args = _state(ctx)
+    sources = framework_knowledge(args).sources()
+    emit({"ok": True, "authority": "opl-framework", "sources": sources}, as_json=args.json)
+    return 0
+
+
+@sources_app.command("index", help="重建可丢弃的知识元信息目录")
+def cmd_sources_index(ctx: typer.Context) -> int:
+    args = _state(ctx)
+    result = KnowledgeIndex(Path(args.memory_db).expanduser()).rebuild(framework_knowledge(args))
+    emit({"ok": True, "result": result}, as_json=args.json)
+    return 0
+
+
+@sources_app.command("search", help="通过 Framework 检索当前已接受知识")
+def cmd_sources_search(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument()],
+    source: Annotated[list[str] | None, typer.Option("--source")] = None,
+    limit: Annotated[int, typer.Option("--limit")] = 10,
+) -> int:
+    args = _state(ctx)
+    results = KnowledgeIndex(Path(args.memory_db).expanduser()).search(
+        query,
+        framework=framework_knowledge(args),
+        source_ids=source or [],
+        limit=limit,
+    )
+    emit({"ok": True, "results": results}, as_json=args.json)
+    return 0
+
+
+@sources_app.command("discover", help="发现来源授权内的未审阅候选；不作为当前事实")
+def cmd_sources_discover(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument()],
+    limit: Annotated[int, typer.Option("--limit")] = 10,
+) -> int:
+    args = _state(ctx)
+    payload = framework_knowledge(args).discover(query, limit=limit)
+    emit({"ok": True, **payload}, as_json=args.json)
+    return 0
+
+
+@context_app.command("build", help="按人物、项目或任务组装上下文")
+def cmd_context_build(
+    ctx: typer.Context,
+    person: Annotated[str, typer.Option("--person")] = "",
+    project: Annotated[str, typer.Option("--project")] = "",
+    query: Annotated[str, typer.Option("--query")] = "",
+    mail_limit: Annotated[int, typer.Option("--mail-limit")] = 6,
+    memory_limit: Annotated[int, typer.Option("--memory-limit")] = 20,
+    knowledge_limit: Annotated[int, typer.Option("--knowledge-limit")] = 6,
+) -> int:
+    args = _state(ctx)
+    payload = ContextBuilder(
+        mail_db_path=Path(args.db).expanduser(),
+        memory_db_path=Path(args.memory_db).expanduser(),
+        framework=framework_knowledge(args),
+    ).build(
+        person=person,
+        project=project,
+        query=query,
+        mail_limit=mail_limit,
+        memory_limit=memory_limit,
+        knowledge_limit=knowledge_limit,
+    )
+    emit(payload, as_json=args.json)
+    return 0
+
+
+@persona_app.command("draft-context", help="读取 Persona 的邮件草稿上下文，不创建或发送草稿")
+def cmd_persona_draft_context(
+    ctx: typer.Context,
+    input_path: Annotated[str, typer.Option("--input")],
+) -> int:
+    args = _state(ctx)
+    emit(load_persona_mail_context(Path(input_path).expanduser()), as_json=args.json)
+    return 0
+
+
+@persona_app.command("draft-create", help="从已批准 Persona 提案创建 Apple Mail 审核草稿；不发送")
+def cmd_persona_draft_create(
+    ctx: typer.Context,
+    input_path: Annotated[str, typer.Option("--input")],
+    account: Annotated[str, typer.Option("--account")],
+    to: Annotated[list[str], typer.Option("--to")],
+    cc: Annotated[list[str] | None, typer.Option("--cc")] = None,
+    bcc: Annotated[list[str] | None, typer.Option("--bcc")] = None,
+    open_draft: Annotated[bool, typer.Option("--open/--no-open", help="创建后在 Apple Mail 中显示草稿")] = True,
+) -> int:
+    args = _state(ctx)
+    context = load_approved_persona_draft_context(Path(input_path).expanduser())
+    emit(
+        {
+            "ok": True,
+            "handoff": create_persona_review_draft(
+                args,
+                context=context,
+                account_id=account,
+                to=list(to),
+                cc=list(cc or []),
+                bcc=list(bcc or []),
+                visible=open_draft,
+            ),
+        },
+        as_json=args.json,
+    )
+    return 0
+
+
+@triage_app.command("evidence", help="从 email-store:// 邮件证据生成不可写邮箱的 triage envelope")
+def cmd_triage_evidence(
+    ctx: typer.Context,
+    source_ref: Annotated[str, typer.Argument()],
+    policy_ref: Annotated[list[str], typer.Option("--policy-ref")],
+) -> int:
+    args = _state(ctx)
+    payload = build_triage_evidence(
+        mail_db_path=Path(args.db).expanduser(),
+        source_ref=source_ref,
+        policy_refs=list(policy_ref),
+    )
+    emit({"ok": True, "evidence": payload}, as_json=args.json)
+    return 0
+
+
+@triage_app.command("validate", help="验证 triage evidence 的 provenance、policy digest 与写入边界")
+def cmd_triage_validate(
+    ctx: typer.Context,
+    input_path: Annotated[str, typer.Option("--input")],
+) -> int:
+    args = _state(ctx)
+    raw = sys.stdin.read() if input_path == "-" else Path(input_path).expanduser().read_text(encoding="utf-8")
+    payload = _triage_evidence_from_cli_output(json.loads(raw))
+    emit(validate_triage_evidence(payload), as_json=args.json)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# workspace / setup / account / credential subcommands
+# ---------------------------------------------------------------------------
+
+
+@workspace_app.command("inspect", help="只读检查 workspace")
+def cmd_workspace_inspect(ctx: typer.Context) -> int:
+    emit({"ok": True, "workspace": inspect_workspace(default_profile_workspace())}, as_json=_state(ctx).json)
+    return 0
+
+
+@workspace_app.command("init", help="初始化 workspace 目录")
+def cmd_workspace_init(ctx: typer.Context) -> int:
+    emit({"ok": True, "workspace": initialize_workspace(default_profile_workspace())}, as_json=_state(ctx).json)
+    return 0
+
+
+@workspace_app.command("migrate", help="从旧 private overlay 复制到当前 workspace")
+def cmd_workspace_migrate(
+    ctx: typer.Context,
+    from_path: Annotated[str, typer.Option("--from")],
+    apply: Annotated[bool, typer.Option("--apply", help="执行复制；省略时只输出计划")] = False,
+) -> int:
+    args = _state(ctx)
+    payload = migrate_workspace(Path(from_path), default_profile_workspace(), apply=apply)
+    emit(payload, as_json=args.json)
+    return 0 if payload["ok"] else 1
+
+
+@setup_app.command("status", help="显示首次配置步骤")
+def cmd_setup_status(ctx: typer.Context) -> int:
+    emit({"ok": True, "setup": setup_status(default_profile_workspace())}, as_json=_state(ctx).json)
+    return 0
+
+
+@setup_app.command("init", help="创建缺失的 Profile 模板和空配置")
+def cmd_setup_init(ctx: typer.Context) -> int:
+    workspace_payload = initialize_workspace(default_profile_workspace())
+    setup_payload = dict(workspace_payload["setup"])
+    setup_payload["created"] = workspace_payload["created"]
+    emit({"ok": True, "setup": setup_payload, "workspace": workspace_payload}, as_json=_state(ctx).json)
+    return 0
+
+
+@account_app.command("add", help="写入账号元数据，不保存密码")
+def cmd_account_add(
+    ctx: typer.Context,
+    account_id: Annotated[str, typer.Option("--id")],
+    email: Annotated[str, typer.Option("--email")],
+    host: Annotated[str, typer.Option("--host")] = "",
+    provider: Annotated[Literal["imap", "microsoft_graph"], typer.Option("--provider")] = "imap",
+    client_id: Annotated[str, typer.Option("--client-id")] = "",
+    tenant: Annotated[Literal["consumers", "common", "organizations"], typer.Option("--tenant")] = "consumers",
+    port: Annotated[int, typer.Option("--port")] = 993,
+    security: Annotated[Literal["ssl", "starttls", "plain"], typer.Option("--security")] = "ssl",
+    username: Annotated[str, typer.Option("--username")] = "",
+    credential_ref: Annotated[str, typer.Option("--credential-ref")] = "",
+    backend: Annotated[Literal["himalaya"], typer.Option("--backend")] = "himalaya",
+    include: Annotated[list[str] | None, typer.Option("--include")] = None,
+    exclude: Annotated[list[str] | None, typer.Option("--exclude")] = None,
+) -> int:
+    args = _state(ctx)
+    if provider == "imap" and not host:
+        raise ValueError("--host is required for IMAP accounts")
+    account = add_account(
+        Path(args.config).expanduser(),
+        account_id=account_id,
+        email=email,
+        host=host,
+        port=port,
+        security=security,
+        username=username or email,
+        credential_ref=credential_ref or f"keychain.{account_id}.{'oauth' if provider == 'microsoft_graph' else 'imap'}",
+        include_folders=include or ["*"],
+        exclude_folders=exclude or [],
+        provider=provider,
+        client_id=client_id,
+        tenant=tenant,
+        backend=backend,
+    )
+    emit(
+        {
+            "ok": True,
+            "account": {
+                "account_id": account.account_id,
+                "email": account.email,
+                "provider": account.provider,
+                "imap_host": account.imap.host if account.imap else None,
+                "credential_ref": account.imap.credential_ref if account.imap else account.graph.credential_ref,
+                "include_folders": account.include_folders,
+                "exclude_folders": account.exclude_folders,
+                "credential_configured": False,
+            },
+            "next_actions": [
+                f"opl-relay --json {'account login' if account.graph else 'credential set'} --account {account.account_id}",
+                f"opl-relay --json account check --account {account.account_id}",
+            ],
+        },
+        as_json=args.json,
+    )
+    return 0
+
+
+@account_app.command("check", help="检查账号元数据和密码存在性")
+def cmd_account_check(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    connect: Annotated[bool, typer.Option("--connect", help="额外执行一次 IMAP 登录探测")] = False,
+) -> int:
+    args = _state(ctx)
+    acct = load_account(Path(args.config).expanduser(), account)
+    if acct.graph:
+        from .graph import GraphClient
+        from .keychain import get_oauth_secret
+
+        credential_error = ""
+        try:
+            configured = bool(get_oauth_secret(acct.graph.credential_ref))
+        except RuntimeError as exc:
+            configured, credential_error = False, str(exc)
+        payload: dict[str, object] = {
+            "ok": True,
+            "account": acct.account_id,
+            "email": acct.email,
+            "provider": acct.provider,
+            "backend": acct.backend,
+            "credential_configured": configured,
+            "connection": {"status": "not_checked"},
+        }
+        if connect:
+            try:
+                if not configured:
+                    raise ValueError(credential_error or "oauth_login_required")
+                client = GraphClient(acct)
+                client.identity()
+                from .native import Himalaya
+
+                Himalaya(acct, token=client._access_token()).check()
+                payload["connection"] = {"status": "healthy", "identity_verified": True}
+                payload["scopes"] = sorted(client.scopes)
+            except Exception as exc:
+                payload.update(ok=False, connection={"status": "unavailable", "reason": str(exc)})
+        emit(payload, as_json=args.json)
+        return 0 if payload["ok"] else 1
+    configured = keychain_has_secret(
+        acct.imap.credential_ref,
+        fallback_keychain=acct.imap.fallback_keychain,
+    )
+    payload = {
+        "ok": True,
+        "account": acct.account_id,
+        "email": acct.email,
+        "imap_host": acct.imap.host,
+        "credential_ref": acct.imap.credential_ref,
+        "credential_configured": configured,
+        "backend": acct.backend,
+        "connection": {"status": "not_checked"},
+    }
+    if connect:
+        if not configured:
+            payload["connection"] = {"status": "blocked", "reason": "credential_not_configured"}
         else:
-            command.add_argument("--account", required=name != "prepare", default="")
-        if name in ("prepare", "pending"):
-            command.add_argument("--limit", type=int, default=50)
-        if name == "prepare":
-            command.add_argument("--sync-limit", type=int, default=200, help="每个文件夹每轮最多补抓的邮件数，优先新信")
+            try:
+                from .native import Himalaya
 
-    mailbox = sub.add_parser("mailbox", help="逐封受控 IMAP 邮箱移动")
-    mailbox_actions = mailbox.add_subparsers(dest="mailbox_action", required=True)
-    mailbox_move = mailbox_actions.add_parser(
-        "move",
-        help="只将经实时验证的精确邮件移动到已存在的 Archive、Trash、Bill 或精确指定的现有文件夹",
+                Himalaya(acct).check()
+                payload["connection"] = {"status": "healthy", "server_response": "OK"}
+            except Exception as exc:
+                payload["connection"] = {"status": "unavailable", "reason": type(exc).__name__}
+    emit(payload, as_json=args.json)
+    return 0 if payload["connection"]["status"] not in {"blocked", "unavailable"} else 1
+
+
+@account_app.command("login", help="微软 OAuth 登录；令牌仅存入 Keychain")
+def cmd_account_login(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    write: Annotated[bool, typer.Option("--write", help="授权邮件整理与草稿；不申请发送权限")] = False,
+    timeout: Annotated[int, typer.Option("--timeout")] = 600,
+) -> int:
+    from .graph import login_graph
+
+    args = _state(ctx)
+    acct = load_account(Path(args.config).expanduser(), account)
+
+    def notify(url: str) -> None:
+        print(
+            json.dumps({
+                "status": "awaiting_microsoft_login",
+                "account": acct.account_id,
+                "authorization_url": url,
+                "permissions": "Mail.ReadWrite" if write else "Mail.Read",
+                "send_allowed": False,
+            }),
+            flush=True,
+        )
+
+    payload = login_graph(acct, write=write, notify=notify, timeout=timeout)
+    emit(payload, as_json=args.json)
+    return 0
+
+
+def cmd_account_folders(args: Any) -> int:
+    acct = load_account(Path(args.config).expanduser(), args.account)
+    if acct.graph:
+        from .graph import GraphClient
+
+        client = GraphClient(acct)
+        client.identity()
+    else:
+        from .native import Himalaya
+
+        client = Himalaya(acct)
+    folders = client.folders()
+    if not acct.graph:
+        folders = [{"name": box["name"], "flags": sorted(box["flags"])} for box in folders]
+    emit({"ok": True, "account": acct.account_id, "folders": folders}, as_json=args.json)
+    return 0
+
+
+@account_app.command("folders", help="只读盘点 Microsoft Graph 文件夹")
+def _cli_account_folders(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+) -> int:
+    args = _state(ctx)
+    return cmd_account_folders(SimpleNamespace(config=args.config, account=account, json=args.json))
+
+
+@credential_app.command("set", help="交互式录入密码")
+def cmd_credential_set(
+    ctx: typer.Context,
+    account_id: Annotated[str, typer.Option("--account")],
+    secret_stdin: Annotated[
+        bool,
+        typer.Option("--secret-stdin", help="从 stdin 读取密码，避免密码出现在命令参数中"),
+    ] = False,
+) -> int:
+    args = _state(ctx)
+    account = load_account(Path(args.config).expanduser(), account_id)
+    if account.graph:
+        raise ValueError("Microsoft mail uses OAuth; run account login instead of entering a password")
+    secret = (
+        sys.stdin.read().rstrip("\r\n")
+        if secret_stdin
+        else getpass.getpass(f"IMAP password for {account.email}: ")
     )
-    mailbox_move.add_argument("--account", required=True)
-    mailbox_move.add_argument("--destination", choices=["archive", "trash", "bill"])
-    mailbox_move.add_argument(
-        "--destination-folder",
-        default="",
-        help="精确指定一个已存在的现有文件夹（不创建新文件夹）",
+    keychain_set_secret(account.imap.credential_ref, secret)
+    emit(
+        {
+            "ok": True,
+            "account": account.account_id,
+            "credential_ref": account.imap.credential_ref,
+            "credential_configured": True,
+            "secret_persisted_to": KEYCHAIN_SERVICE,
+        },
+        as_json=args.json,
     )
-    mailbox_move.add_argument("--storage-ref", action="append", required=True)
-    mailbox_move.add_argument("--reconcile", action="store_true", help="只读核对 Graph 未知移动结果并保存回执，不重试远端操作")
-    mailbox_move.add_argument(
-        "--apply",
-        action="store_true",
-        help="执行移动；省略时仅做远端实时预检",
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# draft subcommands
+# ---------------------------------------------------------------------------
+
+
+@draft_app.command("server-create", help="准备服务器草稿；--apply 保存至 IMAP Drafts，不发送")
+def cmd_draft_server_create(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    request_id: Annotated[str, typer.Option("--request-id")],
+    signature_file: Annotated[str, typer.Option("--signature-file")],
+    to: Annotated[list[str], typer.Option("--to")],
+    subject: Annotated[str, typer.Option("--subject")],
+    body: Annotated[str | None, typer.Option("--body")] = None,
+    body_file: Annotated[str | None, typer.Option("--body-file")] = None,
+    cc: Annotated[list[str] | None, typer.Option("--cc")] = None,
+    attach: Annotated[list[str] | None, typer.Option("--attach")] = None,
+    in_reply_to: Annotated[str | None, typer.Option("--in-reply-to", help="被回复原信的 Message-ID，包含尖括号")] = None,
+    thread_source: Annotated[
+        str | None,
+        typer.Option("--thread-source", help="从本账号原信提取线程头，保留显式收件人和正文"),
+    ] = None,
+    references: Annotated[
+        list[str] | None,
+        typer.Option("--references", help="已有线程 Message-ID（空格分隔或重复传入）；与 --in-reply-to 配用"),
+    ] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="仅写入服务器 Drafts；不会发送")] = False,
+) -> int:
+    from .server_drafts import server_draft
+
+    _require_exclusive(body, "--body", body_file, "--body-file", required=True)
+    _require_exclusive(in_reply_to, "--in-reply-to", thread_source, "--thread-source", required=False)
+    args = _state(ctx)
+    payload = server_draft(
+        config_path=Path(args.config).expanduser(),
+        db_path=Path(args.db).expanduser(),
+        ledger_path=Path(args.draft_db).expanduser(),
+        account_id=account,
+        request_id=request_id,
+        inspect=False,
+        body=read_body_text(body, body_file),
+        signature=Path(signature_file).expanduser().read_text(encoding="utf-8"),
+        to=list(to),
+        cc=list(cc or []),
+        subject=subject,
+        attachments=list(attach or []),
+        thread_source_ref=thread_source,
+        in_reply_to=in_reply_to,
+        references=list(references or []),
+        apply=apply,
     )
-    mailbox_move.set_defaults(func=cmd_mailbox_move)
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
 
-    memory = sub.add_parser("memory", help="私有人物、项目与关系记忆")
-    memory_actions = memory.add_subparsers(dest="memory_action", required=True)
 
-    memory_entity = memory_actions.add_parser("entity", help="管理记忆主体")
-    entity_actions = memory_entity.add_subparsers(dest="entity_action", required=True)
-    entity_upsert = entity_actions.add_parser("upsert", help="新增或更新人物、机构或项目")
-    entity_upsert.add_argument("--kind", choices=["person", "organization", "project"], required=True)
-    entity_upsert.add_argument("--name", required=True)
-    entity_upsert.add_argument("--alias", action="append", default=[])
-    entity_upsert.add_argument("--email", action="append", default=[])
-    entity_upsert.set_defaults(func=cmd_memory_entity_upsert)
-    entity_list = entity_actions.add_parser("list", help="列出或搜索记忆主体")
-    entity_list.add_argument("--query", default="")
-    entity_list.add_argument("--limit", type=int, default=50)
-    entity_list.set_defaults(func=cmd_memory_entity_list)
+@draft_app.command("server-reply-all", help="按完整原邮件回复所有人，保存服务器草稿，不依赖桌面")
+def cmd_draft_server_reply_all(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    request_id: Annotated[str, typer.Option("--request-id")],
+    signature_file: Annotated[str, typer.Option("--signature-file")],
+    storage_ref: Annotated[str, typer.Option("--storage-ref")],
+    body: Annotated[str | None, typer.Option("--body")] = None,
+    body_file: Annotated[str | None, typer.Option("--body-file")] = None,
+    attach: Annotated[list[str] | None, typer.Option("--attach")] = None,
+    self_address: Annotated[list[str] | None, typer.Option("--self-address", help="额外已确认的本人邮箱别名")] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="仅写入服务器 Drafts；不会发送")] = False,
+) -> int:
+    from .server_drafts import server_draft
 
-    memory_propose = memory_actions.add_parser("propose", help="提出带证据的记忆候选")
-    memory_propose.add_argument("--entity", required=True)
-    memory_propose.add_argument("--category", choices=sorted(MEMORY_CATEGORIES), required=True)
-    memory_propose.add_argument("--content", required=True)
-    memory_propose.add_argument("--source", action="append", required=True)
-    memory_propose.add_argument("--source-excerpt", action="append", default=[])
-    memory_propose.add_argument("--confidence", type=float, default=1.0)
-    memory_propose.add_argument("--sensitivity", choices=sorted(SENSITIVITIES), default="private")
-    memory_propose.add_argument("--occurred-at", default="")
-    memory_propose.add_argument("--valid-from", default="")
-    memory_propose.add_argument("--valid-until", default="")
-    memory_propose.add_argument("--supersedes", default="")
-    memory_propose.add_argument("--observed-at", default="")
-    memory_propose.add_argument("--next-review-at", default="")
-    memory_propose.add_argument("--content-kind", choices=["policy", "state", "decision", "mechanism"], default="")
-    memory_propose.set_defaults(func=cmd_memory_propose)
-
-    memory_candidates = memory_actions.add_parser("candidates", help="列出待审核记忆")
-    memory_candidates.add_argument("--entity", default="")
-    memory_candidates.add_argument("--query", default="")
-    memory_candidates.add_argument("--limit", type=int, default=50)
-    memory_candidates.set_defaults(func=cmd_memory_candidates)
-
-    memory_search = memory_actions.add_parser("search", help="搜索结构化记忆")
-    memory_search.add_argument("query", nargs="?", default="")
-    memory_search.add_argument("--entity", default="")
-    memory_search.add_argument(
-        "--status",
-        action="append",
-        choices=sorted(MEMORY_STATUSES),
-        default=None,
+    _require_exclusive(body, "--body", body_file, "--body-file", required=True)
+    args = _state(ctx)
+    payload = server_draft(
+        config_path=Path(args.config).expanduser(),
+        db_path=Path(args.db).expanduser(),
+        ledger_path=Path(args.draft_db).expanduser(),
+        account_id=account,
+        request_id=request_id,
+        inspect=False,
+        body=read_body_text(body, body_file),
+        signature=Path(signature_file).expanduser().read_text(encoding="utf-8"),
+        source_ref=storage_ref,
+        attachments=list(attach or []),
+        self_aliases=list(self_address or []),
+        apply=apply,
     )
-    memory_search.add_argument("--limit", type=int, default=50)
-    memory_search.add_argument("--include-stale", action="store_true",
-                               help="查看保留的历史条目及来源复核状态，不作为当前上下文")
-    memory_search.set_defaults(func=cmd_memory_search)
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
 
-    memory_inspect = memory_actions.add_parser("inspect", help="查看记忆及其证据")
-    memory_inspect.add_argument("memory_ref")
-    memory_inspect.set_defaults(func=cmd_memory_inspect)
-    for name, handler, help_text in [
-        ("approve", cmd_memory_approve, "批准记忆候选"),
-        ("reject", cmd_memory_reject, "拒绝记忆候选"),
-        ("forget", cmd_memory_forget, "停用但不物理删除记忆"),
-    ]:
-        action = memory_actions.add_parser(name, help=help_text)
-        action.add_argument("memory_ref")
-        action.set_defaults(func=handler)
 
-    export = memory_actions.add_parser("export", help="保留原证据导出私有迁移文件")
-    export.add_argument("--entity", default="")
-    export.add_argument("--output", required=True)
-    export.set_defaults(func=cmd_memory_export)
-    link = memory_actions.add_parser("link", help="关联经 Framework 核验的唯一知识正文")
-    link.add_argument("memory_ref")
-    link.add_argument("--knowledge-id", required=True)
-    link.add_argument("--observed-at", default="")
-    link.add_argument("--next-review-at", default="")
-    link.set_defaults(func=cmd_memory_link)
-    promote = memory_actions.add_parser("promote", help="导出交给 Persona 判断的长期知识晋升提案")
-    promote.add_argument("memory_ref")
-    promote.add_argument("--knowledge-id", required=True)
-    promote.add_argument("--output", required=True)
-    promote.set_defaults(func=cmd_memory_promote)
+@draft_app.command("server-inspect", help="从服务器回读同一请求的草稿，不重建或覆盖")
+def cmd_draft_server_inspect(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    request_id: Annotated[str, typer.Option("--request-id")],
+) -> int:
+    from .server_drafts import server_draft
 
-    sources = sub.add_parser("sources", help="读取 Framework 授权知识")
-    source_actions = sources.add_subparsers(dest="sources_action", required=True)
-    source_list = source_actions.add_parser("list", help="列出 Framework 已授权接受的知识元信息")
-    source_list.set_defaults(func=cmd_sources_list)
-    source_index = source_actions.add_parser("index", help="重建可丢弃的知识元信息目录")
-    source_index.set_defaults(func=cmd_sources_index)
-    source_search = source_actions.add_parser("search", help="通过 Framework 检索当前已接受知识")
-    source_search.add_argument("query")
-    source_search.add_argument("--source", action="append", default=[])
-    source_search.add_argument("--limit", type=int, default=10)
-    source_search.set_defaults(func=cmd_sources_search)
-    discover = source_actions.add_parser("discover", help="发现来源授权内的未审阅候选；不作为当前事实")
-    discover.add_argument("query")
-    discover.add_argument("--limit", type=int, default=10)
-    discover.set_defaults(func=cmd_sources_discover)
-
-    context = sub.add_parser("context", help="组装起草所需的最小证据上下文")
-    context_actions = context.add_subparsers(dest="context_action", required=True)
-    context_build = context_actions.add_parser("build", help="按人物、项目或任务组装上下文")
-    context_build.add_argument("--person", default="")
-    context_build.add_argument("--project", default="")
-    context_build.add_argument("--query", default="")
-    context_build.add_argument("--mail-limit", type=int, default=6)
-    context_build.add_argument("--memory-limit", type=int, default=20)
-    context_build.add_argument("--knowledge-limit", type=int, default=6)
-    context_build.set_defaults(func=cmd_context_build)
-
-    persona = sub.add_parser("persona", help="读取跨域 Persona 提案")
-    persona_actions = persona.add_subparsers(dest="persona_action", required=True)
-    persona_context = persona_actions.add_parser(
-        "draft-context",
-        help="读取 Persona 的邮件草稿上下文，不创建或发送草稿",
+    args = _state(ctx)
+    payload = server_draft(
+        config_path=Path(args.config).expanduser(),
+        db_path=Path(args.db).expanduser(),
+        ledger_path=Path(args.draft_db).expanduser(),
+        account_id=account,
+        request_id=request_id,
+        inspect=True,
     )
-    persona_context.add_argument("--input", required=True)
-    persona_context.set_defaults(func=cmd_persona_draft_context)
-    persona_draft_create = persona_actions.add_parser(
-        "draft-create",
-        help="从已批准 Persona 提案创建 Apple Mail 审核草稿；不发送",
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
+
+
+@draft_app.command("server-reconcile", help="对账 Drafts 与 Sent，清除已由已发件取代的残留服务器草稿")
+def cmd_draft_server_reconcile(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    request_id: Annotated[str | None, typer.Option("--request-id", help="只核对这一个 Relay 请求")] = None,
+    sent_message_id: Annotated[
+        str | None,
+        typer.Option("--sent-message-id", help="在 Sent 中实时验证这一 Message-ID，避免扫描历史"),
+    ] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="执行删除；默认只做只读预览")] = False,
+) -> int:
+    from .server_drafts import reconcile_server_drafts
+
+    args = _state(ctx)
+    payload = reconcile_server_drafts(
+        config_path=Path(args.config).expanduser(),
+        ledger_path=Path(args.draft_db).expanduser(),
+        account_id=account,
+        apply=apply,
+        request_id=request_id,
+        sent_message_id=sent_message_id,
     )
-    persona_draft_create.add_argument("--input", required=True)
-    persona_draft_create.add_argument("--account", required=True)
-    persona_draft_create.add_argument("--to", action="append", required=True)
-    persona_draft_create.add_argument("--cc", action="append", default=[])
-    persona_draft_create.add_argument("--bcc", action="append", default=[])
-    persona_draft_create.add_argument(
-        "--open",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="创建后在 Apple Mail 中显示草稿",
+    emit({"ok": True, "reconcile": payload}, as_json=args.json)
+    return 0
+
+
+@draft_app.command("server-send", help="按已审核指纹单次发送服务器草稿并核对 Sent")
+def cmd_server_send(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    request_id: Annotated[str, typer.Option("--request-id")],
+    approval: Annotated[str, typer.Option("--approval")],
+    check: Annotated[bool, typer.Option("--check", help="只核对同一草稿的交付就绪状态，不发送或认领")] = False,
+) -> int:
+    from .server_send import send_server_draft
+
+    args = _state(ctx)
+    payload = send_server_draft(
+        config_path=Path(args.config).expanduser(),
+        ledger_path=Path(args.draft_db).expanduser(),
+        account_id=account,
+        request_id=request_id,
+        approval=approval,
+        check=check,
     )
-    persona_draft_create.set_defaults(func=cmd_persona_draft_create)
+    ok = payload["state"] != "unknown"
+    emit({"ok": ok, "draft": payload}, as_json=args.json)
+    return 0 if ok else 1
 
-    triage = sub.add_parser("triage", help="生成或验证只读邮件 triage 证据")
-    triage_actions = triage.add_subparsers(dest="triage_action", required=True)
-    triage_evidence = triage_actions.add_parser(
-        "evidence",
-        help="从 email-store:// 邮件证据生成不可写邮箱的 triage envelope",
+
+@draft_app.command("reply-context", help="一次读取回复原文、完整收件人及线程锚点")
+def cmd_reply_context(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    storage_ref: Annotated[str | None, typer.Option("--storage-ref")] = None,
+    query: Annotated[str | None, typer.Option("--query", help="搜索当前活动邮箱；配合 --latest-sent 选择最新本人已发线程")] = None,
+    latest_sent: Annotated[bool, typer.Option("--latest-sent", help="催办时选同线程中较新的本人已发邮件")] = False,
+    sync: Annotated[bool, typer.Option("--sync", help="选择来源前只同步一次当前账户")] = False,
+) -> int:
+    from .reply_context import reply_context
+
+    _require_exclusive(storage_ref, "--storage-ref", query, "--query", required=True)
+    args = _state(ctx)
+    result = None
+    if sync:
+        result = sync_account(
+            config_path=Path(args.config).expanduser(),
+            db_path=Path(args.db).expanduser(),
+            account_id=account,
+            scope="active",
+            max_duration_sec=60,
+        )
+        if not result.get("ok") or any(not item.get("complete") for item in result.get("folders", [])):
+            emit(
+                {
+                    "ok": False,
+                    "sync": result,
+                    "error": "Active sync is incomplete; inspect available mail before selecting a reply",
+                },
+                as_json=args.json,
+            )
+            return 1
+    payload = reply_context(
+        config_path=Path(args.config).expanduser(),
+        db_path=Path(args.db).expanduser(),
+        account_id=account,
+        storage_ref=storage_ref,
+        query=query,
+        latest_sent=latest_sent,
     )
-    triage_evidence.add_argument("source_ref")
-    triage_evidence.add_argument("--policy-ref", action="append", required=True)
-    triage_evidence.set_defaults(func=cmd_triage_evidence)
-    triage_validate = triage_actions.add_parser(
-        "validate",
-        help="验证 triage evidence 的 provenance、policy digest 与写入边界",
+    if result is not None:
+        payload["sync"] = result
+        payload["coverage"]["freshness"] = "fresh active sync"
+    emit({"ok": True, "reply_context": payload}, as_json=args.json)
+    return 0
+
+
+@draft_app.command("create", help="创建并保存 Apple Mail 草稿")
+def cmd_draft_create(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    to: Annotated[list[str], typer.Option("--to")],
+    subject: Annotated[str, typer.Option("--subject")],
+    body: Annotated[str | None, typer.Option("--body")] = None,
+    body_file: Annotated[str | None, typer.Option("--body-file")] = None,
+    cc: Annotated[list[str] | None, typer.Option("--cc")] = None,
+    bcc: Annotated[list[str] | None, typer.Option("--bcc")] = None,
+    attach: Annotated[list[str] | None, typer.Option("--attach")] = None,
+    open_draft: Annotated[bool, typer.Option("--open/--no-open", help="创建后在 Apple Mail 中显示草稿")] = True,
+) -> int:
+    _require_exclusive(body, "--body", body_file, "--body-file", required=True)
+    args = _state(ctx)
+    acct = load_account(Path(args.config).expanduser(), account)
+    attachments = [Path(value).expanduser() for value in (attach or [])]
+    missing = [str(path) for path in attachments if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("附件不存在: " + ", ".join(missing))
+    service, _ = draft_service(args)
+    payload = service.create(
+        account_id=acct.account_id,
+        sender=acct.email,
+        to=parse_recipients(list(to), required=True),
+        cc=parse_recipients(list(cc or [])),
+        bcc=parse_recipients(list(bcc or [])),
+        subject=subject,
+        body_text=read_body_text(body, body_file),
+        attachments=attachments,
+        visible=open_draft,
     )
-    triage_validate.add_argument("--input", required=True)
-    triage_validate.set_defaults(func=cmd_triage_validate)
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
 
-    workspace = sub.add_parser("workspace", help="检查、初始化或迁移 Relay workspace")
-    workspace_actions = workspace.add_subparsers(dest="workspace_action", required=True)
-    workspace_inspect = workspace_actions.add_parser("inspect", help="只读检查 workspace")
-    workspace_inspect.set_defaults(func=cmd_workspace_inspect)
-    workspace_init = workspace_actions.add_parser("init", help="初始化 workspace 目录")
-    workspace_init.set_defaults(func=cmd_workspace_init)
-    workspace_migrate = workspace_actions.add_parser(
-        "migrate",
-        help="从旧 private overlay 复制到当前 workspace",
+
+@draft_app.command("reply-all", help="按 Apple Mail 原生 Reply All 路由创建稳定审核草稿")
+def cmd_draft_reply_all(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    apple_mail_account: Annotated[str, typer.Option("--apple-mail-account")],
+    apple_mail_id: Annotated[int, typer.Option("--apple-mail-id")],
+    mailbox_path: Annotated[str, typer.Option("--mailbox-path")],
+    body: Annotated[str | None, typer.Option("--body")] = None,
+    body_file: Annotated[str | None, typer.Option("--body-file")] = None,
+    attach: Annotated[list[str] | None, typer.Option("--attach")] = None,
+    open_draft: Annotated[bool, typer.Option("--open/--no-open", help="创建后在 Apple Mail 中显示草稿")] = True,
+) -> int:
+    _require_exclusive(body, "--body", body_file, "--body-file", required=True)
+    args = _state(ctx)
+    acct = load_account(Path(args.config).expanduser(), account)
+    attachments = [Path(value).expanduser() for value in (attach or [])]
+    missing = [str(path) for path in attachments if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("附件不存在: " + ", ".join(missing))
+    service, _ = draft_service(args)
+    payload = service.reply_all(
+        account_id=acct.account_id,
+        sender=acct.email,
+        provider_account=apple_mail_account,
+        source_message_id=apple_mail_id,
+        mailbox_path=mailbox_path,
+        body_text=read_body_text(body, body_file),
+        attachments=attachments,
+        visible=open_draft,
     )
-    workspace_migrate.add_argument("--from", dest="from_path", required=True)
-    workspace_migrate.add_argument(
-        "--apply",
-        action="store_true",
-        help="执行复制；省略时只输出计划",
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
+
+
+@draft_app.command("adopt", help="登记现有 Apple Mail 草稿")
+def cmd_draft_adopt(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    apple_mail_uuid: Annotated[str, typer.Option("--apple-mail-uuid")],
+) -> int:
+    args = _state(ctx)
+    acct = load_account(Path(args.config).expanduser(), account)
+    service, provider = draft_service(args)
+    provider_account = provider.resolve_account(acct.email)
+    payload = service.adopt(
+        account_id=acct.account_id,
+        provider_account=provider_account,
+        provider_uuid=apple_mail_uuid,
     )
-    workspace_migrate.set_defaults(func=cmd_workspace_migrate)
+    emit({"ok": True, "draft": payload}, as_json=args.json)
+    return 0
 
-    setup = sub.add_parser("setup", help="首次配置 Profile Workspace 和邮箱")
-    setup_actions = setup.add_subparsers(dest="setup_action", required=True)
-    setup_status_parser = setup_actions.add_parser("status", help="显示首次配置步骤")
-    setup_status_parser.set_defaults(func=cmd_setup_status)
-    setup_init_parser = setup_actions.add_parser("init", help="创建缺失的 Profile 模板和空配置")
-    setup_init_parser.set_defaults(func=cmd_setup_init)
 
-    account = sub.add_parser("account", help="配置和检查一个邮箱账号")
-    account_actions = account.add_subparsers(dest="account_action", required=True)
-    account_add = account_actions.add_parser("add", help="写入账号元数据，不保存密码")
-    account_add.add_argument("--id", required=True, dest="account_id")
-    account_add.add_argument("--email", required=True)
-    account_add.add_argument("--host", default="")
-    account_add.add_argument("--provider", choices=["imap", "microsoft_graph"], default="imap")
-    account_add.add_argument("--client-id", default="")
-    account_add.add_argument("--tenant", choices=["consumers", "common", "organizations"], default="consumers")
-    account_add.add_argument("--port", type=int, default=993)
-    account_add.add_argument("--security", choices=["ssl", "starttls", "plain"], default="ssl")
-    account_add.add_argument("--username", default="")
-    account_add.add_argument("--credential-ref", default="")
-    account_add.add_argument("--backend", choices=["himalaya"], default="himalaya")
-    account_add.add_argument("--include", action="append", default=[])
-    account_add.add_argument("--exclude", action="append", default=[])
-    account_add.set_defaults(func=cmd_account_add)
-    account_check = account_actions.add_parser("check", help="检查账号元数据和密码存在性")
-    account_check.add_argument("--account", required=True)
-    account_check.add_argument("--connect", action="store_true", help="额外执行一次 IMAP 登录探测")
-    account_check.set_defaults(func=cmd_account_check)
-    account_login = account_actions.add_parser("login", help="微软 OAuth 登录；令牌仅存入 Keychain")
-    account_login.add_argument("--account", required=True)
-    account_login.add_argument("--write", action="store_true", help="授权邮件整理与草稿；不申请发送权限")
-    account_login.add_argument("--timeout", type=int, default=600)
-    account_login.set_defaults(func=cmd_account_login)
-    account_folders = account_actions.add_parser("folders", help="只读盘点 Microsoft Graph 文件夹")
-    account_folders.add_argument("--account", required=True)
-    account_folders.set_defaults(func=cmd_account_folders)
+@draft_app.command("inspect", help="回读草稿并生成审批指纹")
+def cmd_draft_inspect(ctx: typer.Context, draft_ref: Annotated[str, typer.Argument()]) -> int:
+    args = _state(ctx)
+    service, _ = draft_service(args)
+    emit({"ok": True, "draft": service.inspect(draft_ref)}, as_json=args.json)
+    return 0
 
-    credential = sub.add_parser("credential", help="将邮箱密码安全保存到 macOS Keychain")
-    credential_actions = credential.add_subparsers(dest="credential_action", required=True)
-    credential_set = credential_actions.add_parser("set", help="交互式录入密码")
-    credential_set.add_argument("--account", required=True, dest="account_id")
-    credential_set.add_argument(
-        "--secret-stdin",
-        action="store_true",
-        help="从 stdin 读取密码，避免密码出现在命令参数中",
+
+@draft_app.command("open", help="在 Apple Mail 中打开草稿")
+def cmd_draft_open(ctx: typer.Context, draft_ref: Annotated[str, typer.Argument()]) -> int:
+    args = _state(ctx)
+    service, _ = draft_service(args)
+    emit({"ok": True, "draft": service.open(draft_ref)}, as_json=args.json)
+    return 0
+
+
+@draft_app.command("send", help="使用当前审批指纹单次发送")
+def cmd_draft_send(
+    ctx: typer.Context,
+    draft_ref: Annotated[str, typer.Argument()],
+    approval: Annotated[str, typer.Option("--approval")],
+) -> int:
+    args = _state(ctx)
+    service, _ = draft_service(args)
+    emit({"ok": True, "draft": service.send(draft_ref, approval=approval)}, as_json=args.json)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Canonical read-only Apple Mail subcommands
+# ---------------------------------------------------------------------------
+
+
+@apple_mail_app.command("accounts", help="列出本机 Apple Mail 账户（只读）")
+def cmd_apple_mail_accounts(ctx: typer.Context) -> int:
+    emit({"ok": True, "accounts": _apple_mail_provider().list_accounts()}, as_json=_state(ctx).json)
+    return 0
+
+
+@apple_mail_app.command("mailboxes", help="列出指定 Apple Mail 账户下的邮箱目录（只读）")
+def cmd_apple_mail_mailboxes(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+) -> int:
+    emit(
+        {"ok": True, "account": account, "mailboxes": _apple_mail_provider().list_mailboxes(provider_account=account)},
+        as_json=_state(ctx).json,
     )
-    credential_set.set_defaults(func=cmd_credential_set)
+    return 0
 
-    draft = sub.add_parser("draft", help="服务器审核草稿、Apple Mail 草稿与受控发送")
-    draft_actions = draft.add_subparsers(dest="draft_action", required=True)
 
-    for action, help_text in (
-        ("server-create", "准备服务器草稿；--apply 保存至 IMAP Drafts，不发送"),
-        ("server-reply-all", "按完整原邮件回复所有人，保存服务器草稿，不依赖桌面"),
-        ("server-inspect", "从服务器回读同一请求的草稿，不重建或覆盖"),
-    ):
-        command = draft_actions.add_parser(action, help=help_text)
-        command.add_argument("--account", required=True)
-        command.add_argument("--request-id", required=True)
-        if action != "server-inspect":
-            body_source = command.add_mutually_exclusive_group(required=True)
-            body_source.add_argument("--body")
-            body_source.add_argument("--body-file")
-            command.add_argument("--signature-file", required=True)
-            command.add_argument("--attach", action="append", default=[])
-            command.add_argument("--apply", action="store_true", help="仅写入服务器 Drafts；不会发送")
-            if action == "server-reply-all":
-                command.add_argument("--storage-ref", required=True)
-                command.add_argument("--self-address", action="append", default=[], help="额外已确认的本人邮箱别名")
-            else:
-                command.add_argument("--to", action="append", required=True)
-                command.add_argument("--cc", action="append", default=[])
-                command.add_argument("--subject", required=True)
-                thread = command.add_mutually_exclusive_group()
-                thread.add_argument("--in-reply-to", metavar="MESSAGE_ID", help="被回复原信的 Message-ID，包含尖括号")
-                thread.add_argument("--thread-source", metavar="STORAGE_REF", help="从本账号原信提取线程头，保留显式收件人和正文")
-                command.add_argument("--references", action="append", default=[], metavar="MESSAGE_IDS",
-                                     help="已有线程 Message-ID（空格分隔或重复传入）；与 --in-reply-to 配用")
-        command.set_defaults(func=cmd_server_draft)
-
-    reconcile = draft_actions.add_parser(
-        "server-reconcile",
-        help="对账 Drafts 与 Sent，清除已由已发件取代的残留服务器草稿")
-    reconcile.add_argument("--account", required=True)
-    reconcile.add_argument("--request-id", help="只核对这一个 Relay 请求")
-    reconcile.add_argument("--sent-message-id", help="在 Sent 中实时验证这一 Message-ID，避免扫描历史")
-    reconcile.add_argument("--apply", action="store_true", help="执行删除；默认只做只读预览")
-    reconcile.set_defaults(func=cmd_draft_server_reconcile)
-
-    server_send = draft_actions.add_parser("server-send", help="按已审核指纹单次发送服务器草稿并核对 Sent")
-    server_send.add_argument("--account", required=True)
-    server_send.add_argument("--request-id", required=True)
-    server_send.add_argument("--approval", required=True)
-    server_send.add_argument("--check", action="store_true", help="只核对同一草稿的交付就绪状态，不发送或认领")
-    server_send.set_defaults(func=cmd_server_send)
-
-    reply_context = draft_actions.add_parser("reply-context", help="一次读取回复原文、完整收件人及线程锚点")
-    reply_context.add_argument("--account", required=True)
-    source = reply_context.add_mutually_exclusive_group(required=True)
-    source.add_argument("--storage-ref")
-    source.add_argument("--query", help="搜索当前活动邮箱；配合 --latest-sent 选择最新本人已发线程")
-    reply_context.add_argument("--latest-sent", action="store_true", help="催办时选同线程中较新的本人已发邮件")
-    reply_context.add_argument("--sync", action="store_true", help="选择来源前只同步一次当前账户")
-    reply_context.set_defaults(func=cmd_reply_context)
-
-    draft_create = draft_actions.add_parser("create", help="创建并保存 Apple Mail 草稿")
-    draft_create.add_argument("--account", required=True)
-    draft_create.add_argument("--to", action="append", required=True)
-    draft_create.add_argument("--cc", action="append", default=[])
-    draft_create.add_argument("--bcc", action="append", default=[])
-    draft_create.add_argument("--subject", required=True)
-    body_source = draft_create.add_mutually_exclusive_group(required=True)
-    body_source.add_argument("--body")
-    body_source.add_argument("--body-file")
-    draft_create.add_argument("--attach", action="append", default=[])
-    draft_create.add_argument(
-        "--open",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="创建后在 Apple Mail 中显示草稿",
+@apple_mail_app.command("recent", help="列出 Apple Mail 指定目录最近邮件（只读）")
+def cmd_apple_mail_recent(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    mailbox_path: Annotated[str, typer.Option("--mailbox-path")] = "INBOX",
+    limit: Annotated[int, typer.Option("--limit")] = 20,
+    include_read: Annotated[bool, typer.Option("--include-read")] = False,
+) -> int:
+    messages = _apple_mail_provider().recent_messages(
+        provider_account=account,
+        mailbox_path=mailbox_path,
+        limit=limit,
+        include_read=include_read,
     )
-    draft_create.set_defaults(func=cmd_draft_create)
+    emit({"ok": True, "messages": messages}, as_json=_state(ctx).json)
+    return 0
 
-    draft_reply_all = draft_actions.add_parser(
-        "reply-all",
-        help="按 Apple Mail 原生 Reply All 路由创建稳定审核草稿",
+
+@apple_mail_app.command("read", help="读取 Apple Mail 单封邮件（只读）")
+def cmd_apple_mail_read(
+    ctx: typer.Context,
+    account: Annotated[str, typer.Option("--account")],
+    message_id: Annotated[int, typer.Option("--id")],
+    mailbox_path: Annotated[str, typer.Option("--mailbox-path")] = "INBOX",
+) -> int:
+    message = _apple_mail_provider().read_message(
+        provider_account=account,
+        mailbox_path=mailbox_path,
+        message_id=message_id,
     )
-    draft_reply_all.add_argument("--account", required=True)
-    draft_reply_all.add_argument("--apple-mail-account", required=True)
-    draft_reply_all.add_argument("--apple-mail-id", required=True, type=int)
-    draft_reply_all.add_argument("--mailbox-path", required=True)
-    reply_body_source = draft_reply_all.add_mutually_exclusive_group(required=True)
-    reply_body_source.add_argument("--body")
-    reply_body_source.add_argument("--body-file")
-    draft_reply_all.add_argument("--attach", action="append", default=[])
-    draft_reply_all.add_argument(
-        "--open",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="创建后在 Apple Mail 中显示草稿",
-    )
-    draft_reply_all.set_defaults(func=cmd_draft_reply_all)
+    emit({"ok": True, "message": message}, as_json=_state(ctx).json)
+    return 0
 
-    draft_adopt = draft_actions.add_parser("adopt", help="登记现有 Apple Mail 草稿")
-    draft_adopt.add_argument("--account", required=True)
-    draft_adopt.add_argument("--apple-mail-uuid", required=True)
-    draft_adopt.set_defaults(func=cmd_draft_adopt)
 
-    draft_inspect = draft_actions.add_parser("inspect", help="回读草稿并生成审批指纹")
-    draft_inspect.add_argument("draft_ref")
-    draft_inspect.set_defaults(func=cmd_draft_inspect)
+@apple_mail_app.command("resolve-account", help="按发件邮箱解析唯一 Apple Mail 账户名（只读）")
+def cmd_apple_mail_resolve_account(
+    ctx: typer.Context,
+    sender: Annotated[str, typer.Option("--sender")],
+) -> int:
+    provider_account = _apple_mail_provider().resolve_account(sender)
+    emit({"ok": True, "sender": sender, "provider_account": provider_account}, as_json=_state(ctx).json)
+    return 0
 
-    draft_open = draft_actions.add_parser("open", help="在 Apple Mail 中打开草稿")
-    draft_open.add_argument("draft_ref")
-    draft_open.set_defaults(func=cmd_draft_open)
 
-    draft_send = draft_actions.add_parser("send", help="使用当前审批指纹单次发送")
-    draft_send.add_argument("draft_ref")
-    draft_send.add_argument("--approval", required=True)
-    draft_send.set_defaults(func=cmd_draft_send)
+# ---------------------------------------------------------------------------
+# Typer execution entry & parser introspection helper
+# ---------------------------------------------------------------------------
 
-    return parser
+
+class _TyperParser:
+    """Thin introspection adapter backed directly by the Typer command tree."""
+
+    def __init__(self, typer_app: typer.Typer) -> None:
+        self._cmd = typer.main.get_command(typer_app)
+
+    def parse_args(self, argv: list[str] | None = None) -> SimpleNamespace:
+        raw_argv = list(sys.argv[1:] if argv is None else argv)
+        try:
+            ctx = self._cmd.make_context("opl-relay", list(raw_argv))
+            params: dict[str, Any] = dict(ctx.params)
+            current_cmd = self._cmd
+            current_ctx = ctx
+            while hasattr(current_cmd, "resolve_command"):
+                remaining = list(getattr(current_ctx, "_protected_args", [])) + list(current_ctx.args)
+                if not remaining:
+                    raise typer.BadParameter("missing subcommand")
+                name, subcmd, rest = current_cmd.resolve_command(current_ctx, remaining)
+                if subcmd is None:
+                    raise typer.BadParameter(f"unknown command: {name}")
+                current_ctx = subcmd.make_context(name, rest, parent=current_ctx)
+                params.update(current_ctx.params)
+                current_cmd = subcmd
+        except typer.Exit as exc:
+            raise SystemExit(exc.exit_code) from None
+        except typer.TyperException as exc:
+            exc.show()
+            raise SystemExit(getattr(exc, "exit_code", 2)) from None
+        if "as_json" in params:
+            params["json"] = params.pop("as_json")
+        params["func"] = lambda _args=None, _argv=raw_argv: main(_argv)
+        return SimpleNamespace(**params)
+
+
+def build_parser() -> _TyperParser:
+    return _TyperParser(app)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    as_json = "--json" in raw_argv
+    command = typer.main.get_command(app)
     try:
-        return int(args.func(args))
+        result = command.main(args=raw_argv, prog_name="opl-relay", standalone_mode=False)
+        return int(result) if isinstance(result, int) else 0
+    except typer.Exit as exc:
+        return int(exc.exit_code)
+    except typer.TyperException as exc:
+        exc.show()
+        raise SystemExit(getattr(exc, "exit_code", 2)) from None
     except Exception as exc:
-        return fail(str(exc), as_json=getattr(args, "json", False))
+        return fail(str(exc), as_json=as_json)
 
 
 if __name__ == "__main__":

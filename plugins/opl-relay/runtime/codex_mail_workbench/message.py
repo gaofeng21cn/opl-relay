@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from email import policy
 from email.header import decode_header, make_header
-from email.message import EmailMessage, Message
+from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
@@ -10,36 +11,44 @@ from html.parser import HTMLParser
 
 class QuoteText(HTMLParser):
     """Readable HTML projection; never execute markup or retain CSS/scripts."""
-    def __init__(self):
+
+    def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.parts = []
+        self.parts: list[str] = []
         self.suppressed = 0
 
-    def handle_starttag(self, tag, attrs):
-        if tag in {"script", "style"}:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        lowered = tag.casefold()
+        if lowered in {"script", "style"}:
             self.suppressed += 1
-        elif not self.suppressed and tag in {"br", "p", "div", "li", "tr", "blockquote"}:
+        elif not self.suppressed and lowered in {"br", "p", "div", "li", "tr", "blockquote"}:
             self.parts.append("\n")
 
-    def handle_endtag(self, tag):
-        if tag in {"script", "style"}:
+    def handle_endtag(self, tag: str) -> None:
+        lowered = tag.casefold()
+        if lowered in {"script", "style"}:
             self.suppressed = max(0, self.suppressed - 1)
-        elif not self.suppressed and tag in {"p", "div", "li", "tr", "blockquote"}:
+        elif not self.suppressed and lowered in {"p", "div", "li", "tr", "blockquote"}:
             self.parts.append("\n")
-        elif not self.suppressed and tag in {"td", "th"}:
+        elif not self.suppressed and lowered in {"td", "th"}:
             self.parts.append("\t")
 
-    def handle_data(self, data):
+    def handle_data(self, data: str) -> None:
         if not self.suppressed:
             self.parts.append(data)
 
 
-def html_to_text(content):
+def html_to_text(content: str, *, preserve_blank_lines: bool = False) -> str:
     parser = QuoteText()
     parser.feed(content)
+    parser.close()
+    raw_text = "".join(parser.parts).replace("\xa0", " ")
+    if preserve_blank_lines:
+        return re.sub(r"\n{3,}", "\n\n", raw_text).strip("\n")
     # Formatting whitespace is not mail prose. Keep each paragraph/table row
     # and all visible words; the unchanged MIME remains the original evidence.
-    return "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
+    return "\n".join(line.strip() for line in raw_text.splitlines() if line.strip())
 
 
 def decode_header_text(raw: str | None) -> str:

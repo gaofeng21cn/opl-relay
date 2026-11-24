@@ -2,11 +2,18 @@ import hashlib
 import json
 
 import pytest
-
 from codex_mail_workbench import graph
-from codex_mail_workbench.config import GraphEndpoint, MailAccount, add_account, load_accounts_config
-from codex_mail_workbench.store import connect_email_store, get_message_by_storage_ref, list_messages
-
+from codex_mail_workbench.config import (
+    GraphEndpoint,
+    MailAccount,
+    add_account,
+    load_accounts_config,
+)
+from codex_mail_workbench.store import (
+    connect_email_store,
+    get_message_by_storage_ref,
+    list_messages,
+)
 
 ACCOUNT = MailAccount("test_ms", "pi@example.test", None, ["*"], [],
                       "microsoft_graph", GraphEndpoint("app-test", "keychain.test.oauth"))
@@ -237,24 +244,133 @@ def test_unknown_move_reconciliation_only_reads_and_records_proof(fake, tmp_path
     assert again["messages"][0]["operation_ref"] == result["messages"][0]["operation_ref"]
 
 
+def _seed_msal_cache(secret: str = "rotated-refresh"):
+    import msal
+
+    cache = msal.SerializableTokenCache()
+    cache.add({
+        "client_id": "app-test",
+        "scope": ["User.Read", "Mail.Read"],
+        "token_endpoint": "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
+        "response": {
+            "token_type": "Bearer",
+            "scope": "User.Read Mail.Read",
+            "expires_in": 3600,
+            "access_token": "cached-access",
+            "refresh_token": secret,
+        },
+    })
+    return cache
+
+
 def test_token_refresh_keeps_rotated_credentials_in_keychain_only(monkeypatch, tmp_path):
     from codex_mail_workbench import paths
     monkeypatch.setattr(paths, "default_state_dir", lambda: tmp_path)
-    token = {"client_id": "app-test", "email": ACCOUNT.email, "expires_at": 0,
-             "access_token": "old-access", "refresh_token": "old-refresh", "scope": "Mail.Read User.Read"}
+    legacy_token = {
+        "client_id": "app-test",
+        "email": ACCOUNT.email,
+        "expires_at": 0,
+        "access_token": "old-access",
+        "refresh_token": "old-refresh",
+        "scope": "Mail.Read User.Read",
+    }
     saved = []
-    monkeypatch.setattr(graph, "get_oauth_secret", lambda ref: json.dumps(token))
-    monkeypatch.setattr(graph, "_token_request", lambda account, parameters:
-                        {"access_token": "fresh-access", "refresh_token": "rotated-refresh"})
-    monkeypatch.setattr(graph, "_save_token", lambda account, value: saved.append(value))
+
+    class FakeMsalApp:
+        def __init__(self, cache):
+            self._cache = cache
+
+        def acquire_token_by_refresh_token(self, refresh_token, scopes):
+            assert refresh_token == "old-refresh"
+            assert scopes == ["Mail.Read", "User.Read"]
+            self._cache.deserialize(_seed_msal_cache("rotated-refresh").serialize())
+            return {"access_token": "fresh-access", "scope": "Mail.Read User.Read"}
+
+    monkeypatch.setattr(graph, "get_oauth_secret", lambda ref: json.dumps(legacy_token))
+    monkeypatch.setattr(graph, "_msal_app", lambda account, cache, timeout=30.0: FakeMsalApp(cache))
+    monkeypatch.setattr(
+        graph,
+        "_save_token_cache",
+        lambda account, cache, *, scope, allow_interaction=False: saved.append(
+            {"scope": scope, "allow_interaction": allow_interaction, "cache": cache.serialize()}
+        ),
+    )
     assert graph.GraphClient(ACCOUNT)._access_token() == "fresh-access"
-    assert saved[0]["refresh_token"] == "rotated-refresh"
+    assert saved and "rotated-refresh" in saved[0]["cache"]
+    assert saved[0]["allow_interaction"] is False
     assert not any("refresh" in p.read_text() for p in tmp_path.iterdir())
+
+
+def test_msal_cache_silent_refresh_persists_only_on_state_change(monkeypatch, tmp_path):
+    from codex_mail_workbench import paths
+    monkeypatch.setattr(paths, "default_state_dir", lambda: tmp_path)
+    initial_cache = _seed_msal_cache("initial-refresh")
+    envelope = {
+        "format": "msal_cache_v1",
+        "client_id": "app-test",
+        "email": ACCOUNT.email,
+        "scope": "User.Read Mail.Read",
+        "msal_cache": initial_cache.serialize(),
+    }
+    saved = []
+
+    class FakeMsalApp:
+        def __init__(self, cache):
+            self._cache = cache
+
+        def get_accounts(self, username=None):
+            return [{"username": ACCOUNT.email}]
+
+        def acquire_token_silent(self, scopes, account=None, force_refresh=False):
+            assert scopes == ["User.Read", "Mail.Read"]
+            self._cache.deserialize(_seed_msal_cache("rotated-msal-refresh").serialize())
+            self._cache.has_state_changed = True
+            return {"access_token": "msal-fresh-access", "scope": "User.Read Mail.Read"}
+
+    monkeypatch.setattr(graph, "get_oauth_secret", lambda ref: json.dumps(envelope))
+    monkeypatch.setattr(graph, "_msal_app", lambda account, cache, timeout=30.0: FakeMsalApp(cache))
+    monkeypatch.setattr(
+        graph,
+        "_save_token_cache",
+        lambda account, cache, *, scope, allow_interaction=False: saved.append(
+            {"scope": scope, "allow_interaction": allow_interaction, "cache": cache.serialize()}
+        ),
+    )
+    assert graph.GraphClient(ACCOUNT)._access_token() == "msal-fresh-access"
+    assert len(saved) == 1
+    assert "rotated-msal-refresh" in saved[0]["cache"]
+    assert saved[0]["allow_interaction"] is False
+
+
+def test_http_blocks_redirects_and_strips_raw_error_bodies(monkeypatch):
+    import httpx
+
+    def fake_request(self, method, url, headers=None, content=None):
+        assert self.follow_redirects is False
+        if "redirect" in url:
+            return httpx.Response(302, headers={"Location": "https://evil.example.test"})
+        return httpx.Response(
+            401,
+            json={"error": {"code": "InvalidAuthenticationToken", "message": "secret-token-leak"}},
+        )
+
+    monkeypatch.setattr(httpx.Client, "request", fake_request)
+    with pytest.raises(graph.GraphError) as redir_err:
+        graph._http("https://graph.microsoft.com/v1.0/redirect")
+    assert redir_err.value.status == 302
+    assert redir_err.value.code == "redirect_blocked"
+
+    with pytest.raises(graph.GraphError) as auth_err:
+        graph._http("https://graph.microsoft.com/v1.0/me")
+    assert auth_err.value.status == 401
+    assert auth_err.value.code == "InvalidAuthenticationToken"
+    assert "secret-token-leak" not in str(auth_err.value)
 
 
 def test_refresh_lock_cannot_outlive_sync_budget(monkeypatch, tmp_path):
     import fcntl
     import time
+
     from codex_mail_workbench import paths
     monkeypatch.setattr(paths, "default_state_dir", lambda: tmp_path)
     with (tmp_path / (ACCOUNT.account_id + ".oauth.lock")).open("a") as held:
@@ -277,5 +393,6 @@ def test_token_renewal_does_not_enable_keychain_dialogs(monkeypatch):
 
     monkeypatch.setattr(graph, "set_oauth_secret", store)
     monkeypatch.setattr(graph, "get_oauth_secret", read)
-    graph._save_token(ACCOUNT, {"access_token": "test-access", "refresh_token": "test-refresh"})
+    cache = _seed_msal_cache("test-refresh")
+    graph._save_token_cache(ACCOUNT, cache, scope="User.Read Mail.Read")
     assert interaction == [False, False]

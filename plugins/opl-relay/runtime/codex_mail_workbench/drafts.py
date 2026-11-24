@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import quote, unquote, urlparse
 
+from .schema import ensure_drafts_schema
+
 
 class DraftError(RuntimeError):
     pass
@@ -222,37 +224,7 @@ class DraftLedger:
         conn = sqlite3.connect(self.path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS mail_drafts (
-              draft_ref TEXT PRIMARY KEY,
-              account_id TEXT NOT NULL,
-              provider_account TEXT NOT NULL,
-              provider_uuid TEXT NOT NULL,
-              provider_message_id TEXT NOT NULL DEFAULT '',
-              state TEXT NOT NULL CHECK(state IN ('draft', 'sending', 'sent', 'unknown')),
-              created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL,
-              last_fingerprint TEXT NOT NULL DEFAULT '',
-              approval_fingerprint TEXT NOT NULL DEFAULT '',
-              send_started_at TEXT NOT NULL DEFAULT '',
-              sent_at TEXT NOT NULL DEFAULT '',
-              sent_receipt_json TEXT NOT NULL DEFAULT ''
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS mail_draft_events (
-              event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-              draft_ref TEXT NOT NULL,
-              event_type TEXT NOT NULL,
-              event_at TEXT NOT NULL,
-              fingerprint TEXT NOT NULL DEFAULT '',
-              detail_json TEXT NOT NULL DEFAULT ''
-            )
-            """
-        )
+        ensure_drafts_schema(conn)
         return conn
 
     def _event(
