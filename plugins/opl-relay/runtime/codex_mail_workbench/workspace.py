@@ -15,7 +15,7 @@ from ._opl_profile_workspace import (
 )
 ROOT_FILES = ("AGENTS.md", "profile.md")
 CONTENT_DIRS = ("profile", "policies", "context", "templates")
-MANAGED_DIRS = PROFILE_WORKSPACE_DIRS
+MANAGED_DIRS = (*PROFILE_WORKSPACE_DIRS, "data/relay")
 PRIVATE_STATE_NAMES = {
     "accounts.toml",
     "drafts.sqlite",
@@ -164,7 +164,7 @@ def setup_status(path: Path) -> dict[str, Any]:
 
 def initialize_workspace(path: Path) -> dict[str, Any]:
     root = _resolve(path)
-    created = initialize_profile_workspace(root, _TEMPLATES)
+    created = initialize_profile_workspace(root, _TEMPLATES, extra_dirs=("data/relay",))
     return inspect_workspace(root) | {"created": created, "setup": setup_status(root)}
 
 

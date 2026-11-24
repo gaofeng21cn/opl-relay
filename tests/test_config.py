@@ -34,7 +34,18 @@ exclude = ["Archive"]
     assert list(accounts) == ["work"]
     assert accounts["work"].imap.host == "imap.example.com"
     assert accounts["work"].imap.credential_ref == "keychain.work.imap"
-    assert not hasattr(accounts["work"], "smtp")
+    assert accounts["work"].smtp is None
+    with config.open("a", encoding="utf-8") as stream:
+        stream.write("""\n[accounts.smtp]
+host = "smtp.example.com"
+port = 587
+security = "starttls"
+username = "work@example.com"
+credential_ref = "keychain.work.smtp"
+""")
+    smtp = load_accounts_config(config)["work"].smtp
+    assert (smtp.host, smtp.port, smtp.security, smtp.credential_ref) == (
+        "smtp.example.com", 587, "starttls", "keychain.work.smtp")
     assert accounts["work"].include_folders == ["*"]
     assert accounts["work"].exclude_folders == ["Archive"]
 

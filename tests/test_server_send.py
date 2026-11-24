@@ -1,15 +1,10 @@
 from types import SimpleNamespace
-from email import policy
-from email.parser import BytesParser
-
 import pytest
 
 from codex_mail_workbench import server_drafts as drafts, server_send as delivery
 from codex_mail_workbench.drafts import (
-    ApprovalMismatch, Attachment, DraftAlreadyClaimed, DraftSnapshot,
-    Recipient, SendStatusUnknown,
+    ApprovalMismatch, DraftAlreadyClaimed,
 )
-from codex_mail_workbench.drafts import SendStart
 
 
 class Mailbox:
@@ -18,6 +13,8 @@ class Mailbox:
         self.sent = None
         self.sends = 0
         self.unknown = False
+        self.submitted = None
+        self.append_count = 0
 
     def folders(self):
         return [{"name": "Drafts", "flags": frozenset({"\\drafts"})},
@@ -39,46 +36,25 @@ class Mailbox:
     def create_draft(self, raw, *, folder):
         self.draft = raw
 
-    def send_message(self, raw, *, sent_folder):
+    def check_smtp(self):
+        pass
+
+    def submit_draft(self, raw, *, sender, recipients):
+        assert sender == "owner@example.test"
+        assert recipients == ["recipient@example.test", "copied@example.test"]
         self.sends += 1
-        self.sent = raw
+        self.submitted = raw
         if self.unknown:
             raise TimeoutError("connection lost after submission")
 
+    def append_sent(self, raw, *, folder):
+        assert folder == "Sent Items"
+        assert raw == self.submitted
+        self.append_count += 1
+        self.sent = raw
+
     def remove_exact(self, folder, uid):
         self.draft = None
-
-
-class Provider:
-    def __init__(self, client):
-        self.client = client
-
-    def inspect_server_draft(self, *, sender, message_id, expected_raw):
-        if self.client.draft != expected_raw:
-            raise ValueError("Server draft changed")
-        return self.inspect()
-
-    def inspect(self, **kwargs):
-        message = BytesParser(policy=policy.default).parsebytes(self.client.draft)
-        body = message.get_body(preferencelist=("plain", "html"))
-        return DraftSnapshot(
-            provider_account="Work", provider_uuid="controlled-draft-uuid",
-            provider_message_id=str(message["Message-ID"]), sender=str(message["From"]),
-            to=[Recipient(address="recipient@example.test")], cc=[], bcc=[],
-            subject=str(message["Subject"]), body_text=body.get_content(), attachments=[],
-            provider_threading={"in_reply_to_value": str(message.get("In-Reply-To", "")),
-                                "references_value": str(message.get("References", ""))},
-        )
-
-    def find_sent(self, **kwargs):
-        if not self.client.sent:
-            return None
-        return {"message_id": drafts.content_snapshot(self.client.sent)["headers"]["Message-ID"],
-                "mailbox": "Sent Items", "subject": "Controlled self check"}
-
-    def send(self, snapshot):
-        self.client.send_message(self.client.draft, sent_folder="Sent Items")
-        return SendStart(snapshot.provider_message_id, snapshot.provider_uuid)
 
 
 @pytest.fixture
@@ -88,10 +64,12 @@ def service(tmp_path, monkeypatch):
     monkeypatch.setattr(drafts, "load_accounts_config", lambda path: {"work": account})
     monkeypatch.setattr(delivery, "load_account", lambda *args: account)
     monkeypatch.setattr(drafts, "Himalaya", lambda *args: client)
-    monkeypatch.setattr(delivery, "AppleMailProvider", lambda: Provider(client))
+    monkeypatch.setattr(delivery, "Himalaya", lambda *args: client)
+    monkeypatch.setattr(delivery.time, "sleep", lambda _: None)
     inputs = dict(config_path=tmp_path / "accounts.toml", ledger_path=tmp_path / "drafts.db",
                   db_path=tmp_path / "mail.db", account_id="work", request_id="one",
-                  to=["recipient@example.test"], subject="Controlled self check",
+                  to=["recipient@example.test"], cc=["copied@example.test"], subject="Re: 转发：Controlled self check",
+                  in_reply_to="<original@example.test>", references=["<ancestor@example.test>"],
                   body="Reviewed prose", signature="Best regards,\nOwner")
     prepared = drafts.server_draft(**inputs, apply=True)
     send = {key: inputs[key] for key in ("config_path", "ledger_path", "account_id", "request_id")}
@@ -102,8 +80,13 @@ def test_send_verifies_same_content_and_cleans_only_its_draft(service):
     client, inputs, send = service
     result = delivery.send_server_draft(**send)
     assert result["state"] == "sent" and result["draft_cleanup"] == "cleaned"
-    assert result["sent_receipt"]["message_id"]
-    assert client.sends == 1 and client.draft is None
+    assert result["server_verified"] and result["sent_receipt"]["mailbox"] == "Sent Items"
+    headers = drafts.content_snapshot(client.sent)["headers"]
+    assert headers["Message-ID"] == result["sent_receipt"]["message_id"]
+    assert headers["Subject"] == "Re: Controlled self check"
+    assert headers["In-Reply-To"] == "<original@example.test>"
+    assert headers["References"] == "<ancestor@example.test> <original@example.test>"
+    assert client.sends == client.append_count == 1 and client.draft is None
     with pytest.raises(DraftAlreadyClaimed):
         delivery.send_server_draft(**send)
     assert drafts.server_draft(**inputs, inspect=True)["state"] == "sent"
@@ -129,10 +112,12 @@ def test_changed_live_draft_is_preserved_without_sending(service):
 def test_timeout_can_only_reconcile_never_retry_send(service):
     client, inputs, send = service
     client.unknown = True
-    with pytest.raises(SendStatusUnknown):
-        delivery.send_server_draft(**send)
+    result = delivery.send_server_draft(**send)
+    assert result["state"] == "unknown" and result["smtp_accepted"] is False
+    assert client.append_count == 0
     with pytest.raises(DraftAlreadyClaimed):
         delivery.send_server_draft(**send)
+    client.sent = client.submitted
     result = drafts.server_draft(**inputs, inspect=True)
     assert result["state"] == "sent" and result["sent_receipt"]["message_id"]
     assert client.sends == 1
@@ -140,12 +125,8 @@ def test_timeout_can_only_reconcile_never_retry_send(service):
 
 def test_unresolved_send_stays_unknown_even_if_draft_still_exists(service):
     client, inputs, send = service
-    def unknown(raw, **kwargs):
-        client.sends += 1
-        raise TimeoutError("unknown delivery")
-    client.send_message = unknown
-    with pytest.raises(SendStatusUnknown):
-        delivery.send_server_draft(**send)
+    client.unknown = True
+    assert delivery.send_server_draft(**send)["state"] == "unknown"
     assert drafts.server_draft(**inputs, inspect=True)["state"] == "unknown"
     with pytest.raises(DraftAlreadyClaimed):
         delivery.send_server_draft(**send)
@@ -172,13 +153,45 @@ def test_cleanup_failure_does_not_turn_verified_send_into_retryable_failure(serv
     assert client.sends == 1
 
 
-def test_missing_synchronized_apple_mail_draft_does_not_claim_send(service, monkeypatch):
+def test_imap_delivery_needs_no_apple_mail(service, monkeypatch):
     client, inputs, send = service
-    class Unavailable:
-        def inspect_server_draft(self, **kwargs):
-            raise ValueError("Apple Mail has not synchronized the draft")
-    monkeypatch.setattr(delivery, "AppleMailProvider", Unavailable)
-    with pytest.raises(ValueError, match="synchronized"):
+    def unavailable():
+        raise AssertionError("Apple Mail must not be used for IMAP delivery")
+    monkeypatch.setattr(delivery, "AppleMailProvider", unavailable)
+    assert delivery.send_server_draft(**send)["state"] == "sent"
+
+
+def test_smtp_preflight_failure_leaves_draft_sendable(service):
+    client, inputs, send = service
+    def bad_auth():
+        raise ValueError("SMTP credentials unavailable")
+    client.check_smtp = bad_auth
+    with pytest.raises(ValueError, match="credentials"):
+        delivery.send_server_draft(**send)
+    assert client.sends == 0
+    assert drafts.server_draft(**inputs, inspect=True)["state"] == "draft"
+
+
+def test_smtp_acceptance_with_unconfirmed_sent_copy_never_resubmits(service):
+    client, inputs, send = service
+    def failed_append(raw, *, folder):
+        client.append_count += 1
+        raise TimeoutError("Sent APPEND result unknown")
+    client.append_sent = failed_append
+    result = delivery.send_server_draft(**send)
+    assert result["state"] == "unknown" and result["smtp_accepted"] is True
+    assert drafts.server_draft(**inputs, inspect=True)["state"] == "unknown"
+    with pytest.raises(DraftAlreadyClaimed):
+        delivery.send_server_draft(**send)
+    assert client.sends == client.append_count == 1
+
+
+def test_existing_apple_mail_handoff_cannot_switch_to_smtp(service):
+    client, inputs, send = service
+    with drafts._ledger(inputs["ledger_path"]) as conn:
+        delivery._schema(conn)
+        conn.execute("INSERT INTO server_draft_handoffs VALUES (?,?)", (inputs["request_id"], "old"))
+    with pytest.raises(DraftAlreadyClaimed, match="Apple Mail handoff"):
         delivery.send_server_draft(**send)
     assert client.sends == 0
 

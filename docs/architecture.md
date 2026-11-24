@@ -140,12 +140,17 @@ are separate acceptance surfaces.
 
 `draft server-create` and `draft server-reply-all` support IMAP and Microsoft
 Graph as alternatives to the desktop draft provider. They prepare locally by
-default; `--apply` writes only to the account's server Drafts folder. They do
-not add an SMTP transport, overwrite a live draft, or mark the source message.
-The user reviews the server draft. An explicitly authorized `draft server-send`
-uses the existing Apple Mail delivery adapter: it locates the synchronized
-server draft by exact `Message-ID`, compares MIME, routing, attachments and
-thread headers, then uses the existing single-send ledger and Sent readback.
+default; `--apply` writes only to the account's server Drafts folder.
+The user reviews the server draft. For an IMAP account, an explicitly
+authorized `draft server-send` compares the approval fingerprint with the live
+Drafts copy, claims the request before submission, and sends the approved
+raw MIME via the account's [Himalaya SMTP configuration](local-profile.md#mature-mail-backend).
+After SMTP acceptance, Relay uses an existing matching Sent copy or appends
+the approved copy via IMAP. Success requires exact Message-ID, routing,
+thread headers, and MIME readback from the server's Sent folder. An unknown
+result remains claimed, with `smtp_accepted` showing whether SMTP acceptance
+was recorded. `draft server-inspect` reconciles the same request through Sent.
+Graph server drafts use the existing synchronized Apple Mail delivery adapter.
 
 To reply to an original message that someone forwarded to you, set the
 recipients explicitly and use that original message's Message-ID:
