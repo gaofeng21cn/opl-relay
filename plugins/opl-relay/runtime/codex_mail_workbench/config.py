@@ -50,6 +50,7 @@ class MailAccount:
     provider: str = "imap"
     graph: GraphEndpoint | None = None
     backend: str = "himalaya"
+    smtp: MailEndpoint | None = None
 
 
 def load_toml(path: Path) -> dict[str, Any]:
@@ -133,6 +134,7 @@ def load_accounts_config(path: Path) -> dict[str, MailAccount]:
             provider=provider,
             graph=graph,
             backend=backend,
+            smtp=_endpoint(_dict(raw["smtp"], "smtp"), "smtp") if provider == "imap" and "smtp" in raw else None,
             include_folders=_string_list(
                 folders.get("include"), f"accounts[{idx}].folders.include", ["*"]
             ),

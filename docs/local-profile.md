@@ -123,6 +123,24 @@ It is not a package installer or updater, and contains no Profile or credentials
 Configured native operations fail explicitly rather than silently falling back.
 `account check --connect` validates the native backend as well as the provider.
 
+IMAP accounts that use `draft server-send` need an explicit SMTP endpoint in
+the corresponding `[[accounts]]` block. For example:
+
+```toml
+[accounts.smtp]
+host = "smtp.example.test"
+port = 587
+security = "starttls"
+username = "work@example.test"
+credential_ref = "dt.mail.work.smtp.password"
+```
+
+Use `security = "ssl"` for implicit TLS. Store the credential in Relay's
+Keychain service. The endpoint accepts the same optional `fallback_keychain`
+as IMAP. Use the same credential reference only when the provider uses the
+same credential for both protocols. `draft server-send --check` tests SMTP
+authentication and the live approved draft without submitting mail.
+
 Himalaya handles authentication/transport, folder listings, IMAP UID snapshots,
 MIME reads, review-draft creation and movement. Relay verifies its structured
 receipts and retains Graph OAuth renewal, delta and ImmutableId binding because

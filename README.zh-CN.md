@@ -243,8 +243,9 @@ opl-relay --json draft server-send --account work \
   --request-id reply-unique-id --approval 'sha256:...'
 ```
 
-Relay 会核对 Apple Mail 中同一 `Message-ID` 的同步草稿、正文、收件人、附件和线程标头，
-然后执行一次性发送并回读 Sent；不会通过界面搜索数字草稿 ID，也不会在结果未知时重发。
+IMAP 账号通过已配置的 Himalaya SMTP 一次性提交审核过的 MIME，再从服务器 Sent
+回读核对同一 `Message-ID` 和内容。Graph 使用同步后的 Apple Mail。结果未知时，
+用同一请求 ID 执行 `server-inspect` 核对。[服务器草稿合同](docs/architecture.md#server-drafts-for-mobile-review)
 
 回复正文需要整体重写、逐句润色或重新生成时，优先沿用同一请求 ID 更新服务器草稿。
 这样不依赖桌面富文本编辑器，也不会因选区不完整留下重复段落。用户已发送后运行

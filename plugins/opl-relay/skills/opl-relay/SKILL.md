@@ -340,9 +340,7 @@ external-site content into public skill files.
 
 Use server Drafts for normal replies and revisions. Use `server-create` for
 new correspondence or a reply with explicitly authorized recipients.
-Mail servers own the saved draft. Apple Mail supplies
-the existing fingerprint-gated delivery adapter when Codex is asked to send;
-server drafting does not require Apple Mail. For desktop-local composition,
+Mail servers own the saved draft. For desktop-local composition,
 manual attachments or UI diagnosis, read [Apple Mail drafts](references/apple-mail.md).
 
 ### Routine Reply And Follow-up
@@ -378,12 +376,10 @@ manual attachments or UI diagnosis, read [Apple Mail drafts](references/apple-ma
 4. Stop at the requested review surface. Saving a draft never grants permission
    to send. If the user approves sending this exact content, call `draft
    server-send --account <id> --request-id <stable-id> --approval <reviewed-fingerprint>`.
-   It verifies the live server copy, finds the same Message-ID in Apple Mail,
-   compares MIME, routing, body, attachments and thread identifiers, and reuses
-   Relay's single-send ledger. It does not require UI search or numeric Mail
-   IDs. Apple Mail must have synchronized the draft. If the user has edited it
-   or added attachments, inspect and review that current Apple Mail draft
-   instead; never silently send the earlier server copy.
+   It verifies the live server copy. IMAP submits approved MIME once via the
+   configured Himalaya SMTP endpoint and verifies the same Message-ID and
+   content in server Sent. Graph uses synchronized Apple Mail. If the user
+   edited the draft or added attachments, inspect and review the current draft.
 5. The send result includes the Sent receipt and scoped leftover-draft cleanup.
    A verified Sent result completes sending even if cleanup is pending; never
    send again to repair cleanup. Use `server-inspect` after an unknown result.

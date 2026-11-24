@@ -1,6 +1,6 @@
-"""Typed Himalaya operations; Relay retains identities, review and readback.
+"""Typed Himalaya operations with Relay-owned approval, identity and readback.
 
-No generic shell, send, delete, flag or arbitrary-URL operation is exposed.
+The SMTP operation is scoped to the approved server-draft delivery path.
 Account metadata comes from Relay; credentials exist only in Keychain and the
 child environment, never in the generated configuration or process arguments.
 """
@@ -34,7 +34,7 @@ class Himalaya:
         if not Path(self.executable).is_absolute() or not os.access(self.executable, os.X_OK):
             raise NativeError("himalaya_not_installed")
 
-    def _run(self, argv, *, raw=False, body=None, mutation=False):
+    def _run(self, argv, *, raw=False, body=None, mutation=False, smtp=False):
         remaining = self.deadline - time.monotonic() if self.deadline else 120
         if remaining <= 0:
             raise NativeError("time_budget_exceeded")
@@ -50,7 +50,18 @@ class Himalaya:
                 argv[3] = self._mailbox_name(argv[3])
         quote = json.dumps
         lines = [f"[accounts.{quote(account.account_id)}]", f"email = {quote(account.email)}"]
-        if account.graph:
+        if smtp:
+            endpoint = account.smtp
+            if endpoint is None or endpoint.security not in {"ssl", "starttls"}:
+                raise NativeError("encrypted_smtp_endpoint_required")
+            secret = keychain_get_secret(endpoint.credential_ref, fallback_keychain=endpoint.fallback_keychain)
+            scheme = "smtps" if endpoint.security == "ssl" else "smtp"
+            lines.extend([f"smtp.server = {quote(f'{scheme}://{endpoint.host}:{endpoint.port}')}",
+                          f"smtp.sasl.login.username = {quote(endpoint.username)}",
+                          'smtp.sasl.login.password.command = ["/usr/bin/printenv", "OPL_MAIL_BACKEND_SECRET"]'])
+            if endpoint.security == "starttls":
+                lines.append("smtp.starttls = true")
+        elif account.graph:
             secret = self.token
             if not secret:
                 raise NativeError("oauth_token_required")
@@ -112,6 +123,19 @@ class Himalaya:
                 raise NativeError("draft_create_outcome_unknown")
             return {"id": match[1]}
         return self._run(["message", "add", "--mailbox", folder, "--flag", "draft"], body=raw)
+
+    def check_smtp(self):
+        reply = self._run(["smtp", "raw", "--", "NOOP"], smtp=True, raw=True)
+        if not re.search(rb"(?m)^250(?:[ \r\n]|$)", reply):
+            raise NativeError("smtp_noop_failed")
+
+    def submit_draft(self, raw, *, sender, recipients):
+        args = ["smtp", "send", f"--mail-from={sender}"]
+        args.extend(f"--rcpt-to={address}" for address in recipients)
+        self._run(args, smtp=True, body=raw, raw=True, mutation=True)
+
+    def append_sent(self, raw, *, folder):
+        self._run(["message", "add", "--mailbox", folder, "--flag", "seen"], body=raw)
 
     def move(self, remote_id, *, source="", destination):
         if self.account.graph:

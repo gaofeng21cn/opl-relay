@@ -1767,8 +1767,9 @@ def cmd_server_send(args: argparse.Namespace) -> int:
     payload = send_server_draft(config_path=Path(args.config).expanduser(),
                                 ledger_path=Path(args.draft_db).expanduser(), account_id=args.account,
                                 request_id=args.request_id, approval=args.approval, check=args.check)
-    emit({"ok": True, "draft": payload}, as_json=args.json)
-    return 0
+    ok = payload["state"] != "unknown"
+    emit({"ok": ok, "draft": payload}, as_json=args.json)
+    return 0 if ok else 1
 
 
 def cmd_reply_context(args: argparse.Namespace) -> int:

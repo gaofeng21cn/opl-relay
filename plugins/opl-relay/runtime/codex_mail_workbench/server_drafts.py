@@ -595,7 +595,7 @@ def server_draft(*, config_path, db_path, ledger_path, account_id, request_id,
                     "approval_fingerprint": server_fingerprint(raw),
                     "body_text": msg.get_body(preferencelist=("plain",)).get_content(),
                     "body_html": msg.get_body(preferencelist=("html",)).get_content()}
-        if row["state"] in {"cleaned", "absent"}:
+        if row["state"] in {"cleaned", "absent", "sending", "sent"}:
             raise ValueError("Draft is no longer pending; do not recreate or resend")
         if account.graph:
             from .graph_drafts import save_graph_draft

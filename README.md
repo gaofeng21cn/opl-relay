@@ -287,9 +287,10 @@ opl-relay --json draft server-send --account work \
   --request-id reply-unique-id --approval 'sha256:...'
 ```
 
-Relay checks the same `Message-ID` in synchronized Apple Mail, compares MIME,
-routing, attachments and thread headers, sends once, reads back Sent, and
-does not retry an unknown result.
+For IMAP accounts, Relay submits the approved MIME once via configured
+Himalaya SMTP and verifies the same `Message-ID` and content in server Sent.
+Graph uses synchronized Apple Mail. Inspect an unknown result using the same
+request ID. [Server draft contract](docs/architecture.md#server-drafts-for-mobile-review)
 
 Prefer this route when the reply needs to be rewritten, polished, or regenerated.
 Reuse the same request ID for the revised preview; it does not depend on desktop

@@ -109,11 +109,10 @@ ID after an uncertain result; do not mint a new ID to retry.
 
 When the user explicitly authorizes Relay to send the reviewed server draft,
 use `draft server-send --account <account-id> --request-id <id> --approval
-<fingerprint>`. Relay verifies the same Message-ID in synchronized Apple Mail,
-compares MIME, recipients, attachments and thread headers, and uses the
-existing one-send ledger and Sent readback. `server-send --check` only checks
-readiness; it does not claim or send. Unknown results are reconciled read-only,
-never retried blindly.
+<fingerprint>`. IMAP accounts submit the approved MIME once using configured
+Himalaya SMTP and verify the same Message-ID and content in server Sent.
+Graph uses synchronized Apple Mail. Use `server-send --check` for readiness
+and `server-inspect` with the original request ID to reconcile unknown results.
 
 After the user reports sending that draft, preview `draft server-reconcile`
 for the account. Apply only candidates whose sent reply matches the exact
@@ -123,7 +122,6 @@ to Deleted Items and verifies the new position. Check the Sent
 copy and the draft's absence afterward. A desktop mail client may retain a
 local cache copy; handle it through that client's own exact-message route.
 
-Apple Mail review drafts are a separate Relay path. A server Drafts save never
-authorizes `server-send`; the explicit approval fingerprint and live Apple Mail
-MIME comparison are required. A phone or desktop synchronization is not implied
-merely because IMAP APPEND succeeded.
+Sending a server draft requires separate user authorization, the approved
+fingerprint, and a matching live draft. Apple Mail also offers native draft
+review through Relay.
