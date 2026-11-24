@@ -3,7 +3,7 @@ import json
 import pytest
 
 from codex_mail_workbench import sync
-from codex_mail_workbench.config import CredentialSecret, MailAccount, MailEndpoint
+from codex_mail_workbench.config import MailAccount, MailEndpoint
 from codex_mail_workbench.store import (
     connect_email_store, fetch_raw_email_by_storage_ref, list_messages,
     folder_status, get_message_by_storage_ref,
