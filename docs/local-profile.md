@@ -13,8 +13,8 @@ Do not place new private state under a Git checkout or plugin directory.
 ## Data Root
 
 This guide owns workspace setup and explicit overlay copying. The default
-root, selector and durable-state invariants belong to
-[Workspace Contract](workspace-contract.md). Relay stores module state under
+root, selector, and durable-state invariants belong to
+[Runtime Ownership](architecture.md#runtime-ownership). Relay stores module state under
 the selected workspace's `data/relay` directory.
 
 Credentials remain in macOS Keychain service `codex-mail-workbench`. The service
@@ -89,8 +89,7 @@ and [message movement](https://learn.microsoft.com/en-us/graph/api/message-move)
 
 ## Mature Mail Backend
 
-Himalaya is the sole mail transport backend. Accounts default to
-`backend = "himalaya"`; the retired `builtin` selector is rejected. Configure a pinned Himalaya 2.2.x
+Himalaya is the sole mail transport backend (`backend = "himalaya"`). Configure a pinned Himalaya 2.2.x
 executable in `<profile>/data/relay/tools.toml`:
 
 ```toml
@@ -144,8 +143,7 @@ authentication and the live approved draft without submitting mail.
 Himalaya handles authentication/transport, folder listings, IMAP UID snapshots,
 MIME reads, review-draft creation and movement. Relay verifies its structured
 receipts and retains Graph OAuth renewal, delta and ImmutableId binding because
-the CLI does not expose those management contracts. No Python IMAP connection,
-direct Graph mail writer or automatic legacy fallback remains. On UIDPLUS-only
+the CLI does not expose those management contracts. On UIDPLUS-only
 servers, Relay verifies the copied target before asking Himalaya to remove the
 exact source UID; it never requests an unscoped EXPUNGE. Native search uses `search --remote`
 with an explicit account; it caches only selected matches, does not advance a
@@ -157,16 +155,15 @@ rebinds cached locations while preserving previously issued mail references and
 review records. `account folders` supports both IMAP and Graph and reports the
 actual remote directory tree without downloading messages.
 
-Gmail can presently use Himalaya through existing IMAP credentials. Native
-Gmail API via gog requires its own Google OAuth client and consent; an IMAP app
-password is not a Google API token. Do not claim a gog cutover before that
-account is authorized and server readback passes. Tool replacement must preserve
-current `email-store://` evidence and review records rather than creating a
-second assistant-specific store.
+Gmail presently uses Himalaya through existing IMAP credentials. Any backend
+change must preserve current `email-store://` evidence and review records
+rather than creating a second store.
 
 ## Profile Workspace
 
-`OPL_PROFILE_WORKSPACE` selects the active Profile Workspace.
+`OPL_PROFILE_WORKSPACE` selects the active Profile Workspace. `opl-relay workspace init`
+initializes the shared workspace layout plus `data/relay/` via `extra_dirs=("data/relay",)`
+(Persona initializes `data/persona/` independently when used):
 
 ```text
 <workspace>/
@@ -178,7 +175,6 @@ second assistant-specific store.
   templates/
   exports/
   data/relay/
-  data/persona/
 ```
 
 Initialize or inspect it:
@@ -250,17 +246,14 @@ current context. You do not need to register every file as accepted knowledge
 merely to discover it. `sources list` exposes accepted metadata and
 `sources search` queries accepted knowledge through Framework directly.
 `sources index` is optional: it rebuilds a local
-metadata catalog in `memory.sqlite` and removes the old derived document cache.
-It neither accepts an edited source nor changes grants. Existing `sources.toml`
-files are retired configuration and are not read as authorization.
+metadata catalog in `memory.sqlite`.
+It neither accepts an edited source nor changes authorization grants, which are
+owned solely by Framework's registry.
 
 ### Memory review and promotion
 
-Use `memory candidates` and `memory inspect` to review exact evidence.
-`memory search --include-stale` also shows historical, unlinked or stale records
-with their current review status. Approval retains a mail-domain review record;
-shared personal knowledge uses the canonical source's identity and accepted
-revision.
+Use `memory candidates`, `memory inspect`, and `memory search --include-stale`
+to review evidence and current status.
 
 ```bash
 opl-relay --json memory export --output /private/path/relay-memory.json
@@ -271,18 +264,10 @@ opl-relay --json memory link 'mail-memory://fact/...' \
   --knowledge-id '<registered-knowledge-id>'
 ```
 
-`memory promote` creates a proposal-only handoff for Persona, including the
-original evidence; it does not write a knowledge body. Persona decides its
-meaning, scope and destination, and Framework performs the accepted source
-writeback. After that writeback, `memory link` reads and verifies the accepted
-source before storing its canonical reference. An export or link never deletes
-the original memory or mail evidence.
-
-Observation dates and review deadlines distinguish current facts from historical
-events. A still-verifiable email does not automatically refresh a role,
-commitment or other changing fact. An unlinked `user://` personal fact can be
-reviewed in Relay but is not shared as current long-term knowledge. The full
-read and write boundary is defined in
+`memory promote` creates a proposal-only handoff for Persona; Persona decides
+its meaning and destination, Framework performs accepted writebacks, and
+`memory link` records the verified source reference without deleting original
+mail evidence. Currentness, freshness, and unlinked-fact boundaries live in
 [Knowledge And Memory Currentness](architecture.md#knowledge-and-memory-currentness).
 
 ## Publication Check

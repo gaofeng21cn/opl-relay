@@ -10,6 +10,10 @@
       "role": "repo_agent_working_rules"
     },
     {
+      "path": "docs/README.md",
+      "role": "docs_entry"
+    },
+    {
       "path": "docs/architecture.md",
       "role": "architecture_boundary"
     }
@@ -23,7 +27,9 @@
   ],
   "owned_by_repo": [
     "contracts/**",
-    "src/**",
+    "plugins/opl-relay/**",
+    "workbench/**",
+    "scripts/**",
     "tests/**"
   ],
   "plugin_native_status": "profile_declared",

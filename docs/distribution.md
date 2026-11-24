@@ -69,13 +69,10 @@ The build refreshes the Package's existing content lock after writing the final
 bundled bytes; CI checks both the build output and that manifest for drift.
 Content-lock encoding uses the Framework-generated Python helper in
 `workbench/_opl_package_content_lock.py`, through Relay's existing Python
-prerequisite (`PYTHON` selects the executable). Refresh it with Framework's
-`scripts/materialize-python-support.mjs --module package_content_lock
---target workbench/_opl_package_content_lock.py`; `make check-framework-support`
-checks both generated helpers when `OPL_FRAMEWORK_ROOT` selects the source.
+prerequisite (`PYTHON` selects the executable).
 The build bundles the official MCP SDK, official MCP App bridge and DOMPurify;
 `package-lock.json` pins dependencies and the packaged notices carry their
-licenses. No MiniMax plugin implementation or artwork is redistributed.
+licenses.
 
 `open_workbench` negotiates the `io.modelcontextprotocol/ui` capability and the
 `text/html;profile=mcp-app` MIME type. A supporting host receives the standard
@@ -196,43 +193,12 @@ generic discovery, delegation, and aggregation.
 
 ## Profile Workspace
 
-Package installation and user data have different lifecycles.
-
-```text
-Package installation
-  replaceable code, Skills, manifests, and dependencies
-
-Profile Workspace
-  user identity, policies, context, mail, memory, proposals, and receipts
-```
-
-Relay receives one selector:
-
-```bash
-OPL_PROFILE_WORKSPACE=/absolute/path/to/profile
-```
-
-It stores module data only under:
-
-```text
-<profile>/data/relay/
-```
-
-Persona uses `<profile>/data/persona/`. Both modules share the same person's
-Profile Workspace without sharing or overwriting their private state files.
-
-The following never belong in the source repository, immutable Package payload,
-Plugin snapshot, or installed-package lock:
-
-- account configuration and credential references;
-- raw mail and SQLite databases;
-- draft ledgers and send receipts;
-- approved relationship memory;
-- synchronization cursors;
-- private policies and Obsidian paths;
-- credentials or Keychain exports.
-
-Install, update, repair, and uninstall must preserve the Profile Workspace.
+Package installation and user data have separate lifecycles: `OPL_PROFILE_WORKSPACE`
+selects the user's workspace and Relay writes state only under `<profile>/data/relay/`.
+Install, update, repair, and uninstall preserve the Profile Workspace. See
+[Runtime Ownership](architecture.md#runtime-ownership) for invariants and the
+ownership matrix, and [Local Profile](local-profile.md#profile-workspace) for
+workspace initialization commands.
 
 ## Distribution Verification
 

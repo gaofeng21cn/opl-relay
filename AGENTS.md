@@ -16,9 +16,10 @@ Himalaya 是唯一邮件传输与写入后端；不恢复内置 Python IMAP 或�
 
 ## 文档生命周期
 
-- 双语 README 是公开安装与使用入口；`docs/architecture.md` 负责内部实现，
+- 双语 README 是公开安装与使用入口；`docs/README.md` 是文档索引，
+  `docs/architecture.md` 负责内部实现与工作区数据不变量，
   `product-architecture.md` 负责跨仓交接，`distribution.md` 负责 carrier 与分发，
-  `workspace-contract.md` 负责数据不变量，`local-profile.md` 负责配置操作。
+  `local-profile.md` 负责配置操作，`connect-provider.md` 负责 `--json connect` 合同。
 - 每个主题只有一个正文 owner，其他文档只摘要和链接；源码、命令或合同改变时同步更新正文与
   全部引用，删除被替代段落，不按日期追加旧状态、测试数量或完成清单。
 - 已退役接口与模块的使用说明直接移除，不建立文档兼容页。历史默认留在 Git；只保留仍解释

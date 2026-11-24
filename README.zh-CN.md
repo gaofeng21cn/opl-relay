@@ -329,11 +329,12 @@ Package publication 必须从公开不可变 GHCR digest 回读；installed/curr
 
 ## 文档
 
+- [文档导览](docs/README.md)
 - [分发与更新](docs/distribution.md)
-- [整体架构](docs/architecture.md)
+- [整体架构与工作区不变量](docs/architecture.md)
 - [数字分身工作空间](docs/local-profile.md)
-- [运行合同](docs/workspace-contract.md)
 - [Relay、Persona 与 OPL App](docs/product-architecture.md)
+- [Connect Provider 合同](docs/connect-provider.md)
 
 ## 开发与验证
 

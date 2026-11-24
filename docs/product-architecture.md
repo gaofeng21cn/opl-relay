@@ -5,8 +5,8 @@ Purpose: `relay_cross_repo_product_boundary`
 State: `active_current`
 
 This document owns Relay's handoffs to Persona and App. Relay's internal
-implementation belongs to [Architecture](architecture.md), runtime data
-invariants to [Workspace Contract](workspace-contract.md), and physical
+implementation and runtime workspace invariants belong to
+[Architecture](architecture.md), and physical
 delivery to [Distribution](distribution.md). Other repositories own their
 actual implementation and operational state.
 
@@ -38,7 +38,6 @@ or a browser panel. There is no separate Relay UI repository or Persona desktop 
 
 App selects the current implementation through its
 [Shell adapter](https://github.com/gaofeng21cn/one-person-lab-app/blob/main/contracts/app-shell-adapter.json).
-The retired Aion Shell remains a historical migration and fixture source.
 [OPL DSH](https://github.com/gaofeng21cn/opl-dsh) is the independent enhancement
 suite for the official DeepSeek Harness desktop.
 
@@ -102,25 +101,11 @@ not prove App rendering, native-carrier installation, healthy accounts or a
 completed external write. A host can show unavailable contributions locally
 without blocking unrelated Packages.
 
-The shared workbench, Apple Mail and synchronized mail clients are review
-surfaces over Relay's existing draft contracts. Workbench edits stay local
-until explicitly published as server Drafts. The selected surface preserves
-the same exact source, draft identity, fingerprint, explicit send gate and final
-receipt. Unified review must not merge Persona proposal approval with Relay
-sending authority. See [implementation](architecture.md#shared-mail-workbench).
-
-Inbox and Drafts expose the same owner workbench through the declared
-`workbench.open` command. App's canonical action bridge returns a browser
-presentation that Studio renders as an explicit link. Supporting MCP App hosts
-embed the same built UI; official DSH's configuration-only bundle connects the
-same installed Relay server and uses its browser handoff. Installation and UI
-rendering are host responsibilities; mail state and execution remain in Relay.
-
-The dedicated workbench follows the shared Mini App interaction model while
-keeping mail composition and review specialized. It consumes host theme and
-viewport context, reports loading and owner results consistently, and updates
-model context with exact message or draft references. Browser fallback uses the
-same UI and business actions. Connection authorization and credential lifecycle
-remain with Connect/provider owners; the workbench only uses the existing
-authenticated Relay transport. Interaction details belong to the
+The shared workbench, Apple Mail, and synchronized mail clients are review
+surfaces over Relay's existing draft contracts without merging Persona proposal
+approval and Relay sending authority. Inbox and Drafts expose `workbench.open`
+via App's action bridge and MCP Apps / browser handoff (with official DSH receiving
+a configuration-only bundle); installation and rendering belong to hosts while
+mail state and interaction details remain in
+[Shared Mail Workbench](architecture.md#shared-mail-workbench) and the
 [workbench specification](../workbench/SPEC.md).

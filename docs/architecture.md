@@ -14,31 +14,21 @@ OPL Persona or OPL App.
 
 ## Layers
 
-1. The management layer owns stable references, review and follow-up state,
-   selected cached evidence, structured memory and draft approval semantics.
-   Mail servers own actual mail state. Replaceable tools perform supported
-   retrieval/write operations. Relay validates backend identity and receipts;
-   its remaining Graph adapter owns OAuth renewal, delta and ImmutableId binding.
-2. The Codex Plugin supplies the `opl-relay` Skill. It is an installable
-   capability carrier, not a database owner.
-3. The owner Package descriptor exposes the same capability and its current
-   role-neutral `app_contributions`; installed availability still requires
-   fresh native-carrier readback.
-4. OPL App is the long-term user entry and visual management surface. It calls
-   Relay through the same runtime boundary as Codex rather than implementing a
-   second mail engine.
-5. OPL Persona is the cross-domain orchestration product that may call Relay
-   together with other domain modules. It does not absorb Relay's mail truth.
+Relay provides the shared mail-management layer (`opl-relay` CLI, Himalaya
+transport + Graph OAuth/delta/ImmutableId sync, local raw EML SQLite store,
+relationship memory, server/Apple Mail drafts, and `app_contributions`)
+packaged as a Codex Plugin and OPL Package. Cross-repository handoffs across
+Persona, Framework, App, and Studio live in
+[Product Integration](product-architecture.md).
 
 ## Engine Modules
 
 - Configuration: account metadata and Keychain credential references.
-- Backend: Himalaya is the only transport and mail-write implementation. It
-  performs IMAP snapshots, MIME retrieval, server-draft creation and UID/Graph
-  operations. Relay retains exact preflight, source/target readback and
-  unknown-result handling, plus Graph delta/ImmutableId and renewable credentials.
-  The built-in Python IMAP engine and direct Graph mail-write fallback are retired.
-  UIDPLUS-only servers use native copy, verified target readback and exact UID
+- Backend: Himalaya is the sole transport and mail-write implementation for IMAP
+  snapshots, MIME retrieval, server-draft creation, and UID/Graph operations.
+  Relay retains exact preflight, source/target readback, and unknown-result
+  handling, plus Graph delta/ImmutableId and renewable credentials.
+  UIDPLUS-only servers use native copy, verified target readback, and exact UID
   removal. The private backend seam accepts only fixed capability/identity/cleanup
   commands; no arbitrary raw-command interface is exposed to assistants.
   Graph moves bind the returned destination ID, verify identical MIME and source
@@ -67,24 +57,47 @@ OPL Persona or OPL App.
 ## Runtime Ownership
 
 Relay separates replaceable installation bytes from one user-owned Profile
-Workspace:
+Workspace (`OPL_PROFILE_WORKSPACE`, defaulting to `~/OPL/profiles/<user>`),
+with Relay state stored solely under `<profile>/data/relay`. Framework owns
+the shared selector, marker, and initialization mechanics in
+`python/opl_framework/profile_workspace.py`; Relay embeds a generated copy in
+`plugins/opl-relay/runtime/codex_mail_workbench/_opl_profile_workspace.py` and
+passes `extra_dirs=("data/relay",)` from `workspace.py` so Relay initializes its
+own state directory independently. Operational setup and overlay migration live
+in [Local Data And Workspace](local-profile.md).
 
-| Surface | Owner | Contents |
+### Workspace Invariants
+
+1. The installed plugin or Package contains code and capability declarations only.
+2. The data root is user-owned and survives reinstall, upgrade, cache removal, and checkout deletion.
+3. The single Profile Workspace is the human context and owns the module data subtree; Relay does not introduce an independent workspace or data root.
+4. Credentials remain in the platform credential store, never in code or workspace roots.
+5. Codex App, OPL App, and OPL Persona share configured user-owned runtime roots without moving them into an installed Package or plugin cache.
+6. Each personal knowledge body keeps one registered source in an Obsidian vault, Profile, or project directory; Framework owns grants, scope, accepted revisions, and source writeback, while Relay retains evidence and canonical references.
+7. Relay's knowledge catalog is metadata-only and rebuildable; local catalogs or approvals never bypass Framework authorization and version checks.
+
+### Ownership Matrix
+
+| Artifact | Authority | Git allowed |
 | --- | --- | --- |
-| Package owner descriptor | Relay | Package identity, capabilities, content lock, role-neutral App contributions, and publication references |
-| Installation | Configured native carrier | Replaceable code, manifest, Skills, lifecycle actions, and physical installed-state readback |
-| Profile Workspace | User | Profile, policies, context, templates, exports, and Relay state under `data/relay` |
+| Plugin manifest and Skills | Plugin source | Yes |
+| Package contribution manifest | OPL Package source | Yes |
+| Accounts, sync cursors, derived catalog, SQLite evidence/drafts/memory | Data root (`data/relay`) | No |
+| Workbench edits, imported attachments, loopback capability, and log | Data root (`data/relay`) | No |
+| Editable knowledge bodies | User-owned registered vault, Profile, or project source | User decides |
+| Knowledge registry, grants, accepted revisions, and writeback | Framework control plane | User decides |
+| Keychain secrets | Keychain | No |
+| Profile, policies, context, templates, notes | Workspace | Only in a deliberately private repo |
+| Exports | Workspace | User decides |
 
-The installation root is replaceable. Removing, repairing, or upgrading a
-carrier installation must not delete the user-owned `OPL_PROFILE_WORKSPACE`.
-Framework may discover the installed descriptor, delegate an action, and
-aggregate the carrier result, but it does not become a second physical
-installation owner. Codex App and OPL App must use the same configured Relay
-state under that workspace when they act for the same user.
+### Host Contract
 
-See [Workspace Contract](workspace-contract.md) for the single-root rule and
-[Product Architecture](product-architecture.md) for the broader OPL
-integration.
+Hosts integrate Relay by supplying the shared `OPL_PROFILE_WORKSPACE` locator,
+process/service lifecycle, explicit write approvals, view contributions, and
+credential-store availability. Hosts must not recreate Relay mail identities,
+memory rules, draft fingerprints, controlled mailbox-move receipts, or send
+receipts as a second authority. See [Product Integration](product-architecture.md)
+for cross-repository handoffs.
 
 ## Shared Mail Workbench
 
@@ -101,8 +114,7 @@ an App resource or a focused browser handoff; ordinary MCP tools stay callable
 in either case. App-only tools are removed for non-UI clients, and their
 callbacks reject use without that capability. OPL App's `workbench.open`
 contribution returns the same browser presentation through its canonical action
-ABI. Host connection generation describes the existing installed engine and
-Profile; DSH receives a native configuration-only bundle. See
+ABI. Host connection generation and DSH bundle configuration are documented in
 [host installation](distribution.md#host-installation-adapters).
 
 `workbench.py` uses existing mailbox identities, Reply All derivation,
@@ -271,9 +283,9 @@ The selected `OPL_PROFILE_WORKSPACE` and `relay` domain accompany each call;
 project authorization boundary.
 
 Obsidian, Profile and project Markdown are physical source locations. Each
-knowledge item has one registered body and canonical `knowledge_id`. Relay no
-longer reads `sources.toml` to grant itself access. `sources index` rebuilds a
-metadata-only catalog and removes the old derived `knowledge_documents` cache;
+knowledge item has one registered body and canonical `knowledge_id` authorized
+solely through Framework's registry. `sources index` rebuilds a
+metadata-only catalog and refreshes derived metadata;
 `sources search` obtains accepted results directly from Framework, so indexing
 is optional. A catalog entry cannot authorize a read or supply an old body after
 revocation, drift or expiry.
@@ -485,7 +497,8 @@ The decoded body index is keyed by raw SHA-256, so identical copies are parsed
 once. SQLite FTS5 trigram accelerates substring search, including Chinese;
 shorter-than-three-character queries scan decoded text. `index` backfills old
 stores. Search refuses an incomplete body index rather than claiming no matches.
-The retained `--max-scan` option no longer truncates candidate history. Results
+Search refuses an incomplete body index rather than claiming no matches, and scans
+the full candidate index before applying result limits. Results
 deduplicate by account and Message-ID (falling back to hash), preferring a
 current location. A result limit bounds output, not the searchable history.
 

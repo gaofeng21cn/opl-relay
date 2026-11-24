@@ -402,11 +402,12 @@ boundaries.
 
 ## Documentation
 
+- [Documentation index](docs/README.md)
 - [Distribution and update model](docs/distribution.md)
-- [Architecture](docs/architecture.md)
+- [Architecture and workspace invariants](docs/architecture.md)
 - [Profile Workspace](docs/local-profile.md)
-- [Runtime contract](docs/workspace-contract.md)
 - [Relay, Persona, and OPL App](docs/product-architecture.md)
+- [Connect Provider contract](docs/connect-provider.md)
 
 ## Development
 
