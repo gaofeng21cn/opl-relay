@@ -5,8 +5,12 @@ from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
-
-from codex_mail_workbench.apple_mail import AppleMailError, JXA_SOURCE, AppleMailProvider, _snapshot
+from codex_mail_workbench.apple_mail import (
+    JXA_SOURCE,
+    AppleMailError,
+    AppleMailProvider,
+    _snapshot,
+)
 from codex_mail_workbench.drafts import Recipient
 
 
@@ -192,3 +196,67 @@ def test_jxa_discard_closes_matching_compose_window() -> None:
     assert "outgoingForRoute(app, routingKey(message))" in discard_source
     assert "app.delete(outgoing)" in discard_source
     assert "app.delete(message)" in discard_source
+
+
+def test_snapshot_html_extraction_reuses_shared_sanitizer_and_strips_scripts() -> None:
+    message = EmailMessage()
+    message["From"] = "work@example.test"
+    message["To"] = "reviewer@example.test"
+    message["Subject"] = "HTML only"
+    message.set_content(
+        "<html><head><style>body{color:red}</style></head>"
+        "<body><p>Hello&nbsp;team</p><script>alert(1)</script><p>Second line</p></body></html>",
+        subtype="html",
+    )
+    raw = raw_draft()
+    raw["source"] = message.as_bytes().decode("utf-8")
+    current = _snapshot(raw)
+    assert "Hello team" in current.body_text
+    assert "Second line" in current.body_text
+    assert "alert(1)" not in current.body_text
+    assert "color:red" not in current.body_text
+
+
+def test_provider_readonly_apple_mail_api_and_cli_surface(monkeypatch, capsys) -> None:
+    import json
+
+    from codex_mail_workbench import cli
+
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def runner(action: str, payload: dict[str, object]) -> object:
+        calls.append((action, payload))
+        if action == "accounts":
+            return [{"id": "acc-1", "name": "Work", "emails": ["work@example.test"]}]
+        if action == "mailboxes":
+            return [{"name": "INBOX", "path": "INBOX", "account": "Work", "unreadCount": 2}]
+        if action == "recent":
+            return [{"id": 42, "subject": "Status", "account": "Work", "mailboxPath": "INBOX", "read": False}]
+        if action == "read":
+            return {"id": 42, "subject": "Status", "content": "Hello", "allHeaders": "Subject: Status"}
+        if action == "resolveAccount":
+            return {"providerAccount": "Work"}
+        raise AssertionError(f"unexpected action {action}")
+
+    provider = AppleMailProvider(runner)
+    monkeypatch.setattr(cli, "_apple_mail_provider", lambda: provider)
+
+    assert cli.main(["--json", "apple-mail", "accounts"]) == 0
+    assert json.loads(capsys.readouterr().out)["accounts"][0]["name"] == "Work"
+
+    assert cli.main(["--json", "apple-mail", "mailboxes", "--account", "Work"]) == 0
+    assert json.loads(capsys.readouterr().out)["mailboxes"][0]["path"] == "INBOX"
+
+    assert cli.main(["--json", "apple-mail", "recent", "--account", "Work", "--limit", "5", "--include-read"]) == 0
+    assert json.loads(capsys.readouterr().out)["messages"][0]["id"] == 42
+
+    assert cli.main(["--json", "apple-mail", "read", "--account", "Work", "--mailbox-path", "INBOX", "--id", "42"]) == 0
+    assert json.loads(capsys.readouterr().out)["message"]["content"] == "Hello"
+
+    assert cli.main(["--json", "apple-mail", "resolve-account", "--sender", "work@example.test"]) == 0
+    assert json.loads(capsys.readouterr().out)["provider_account"] == "Work"
+
+    # Verify opl-relay never exposes destructive Mail.app delete or mark commands.
+    for forbidden in ("delete", "mark"):
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(["apple-mail", forbidden])

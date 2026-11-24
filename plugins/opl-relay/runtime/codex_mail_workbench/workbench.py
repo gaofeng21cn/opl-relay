@@ -62,16 +62,7 @@ class Workbench:
             conn = sqlite3.connect(self.ledger_path.resolve().as_uri() + "?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             return conn
-        conn = _ledger(self.ledger_path)
-        conn.execute("""CREATE TABLE IF NOT EXISTS workbench_edits (
-            id TEXT PRIMARY KEY, account_id TEXT NOT NULL, source_ref TEXT NOT NULL,
-            body TEXT NOT NULL, attachment_ids TEXT NOT NULL, revision INTEGER NOT NULL,
-            state TEXT NOT NULL, server_request_id TEXT NOT NULL, updated_at TEXT NOT NULL)""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS workbench_attachments (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL, sha256 TEXT NOT NULL,
-            size INTEGER NOT NULL, relative_path TEXT NOT NULL)""")
-        conn.commit()
-        return conn
+        return _ledger(self.ledger_path)
 
     def _source(self, account_id, storage_ref):
         self._account(account_id)

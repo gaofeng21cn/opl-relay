@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .schema import ensure_memory_schema
+
 
 ENTITY_KINDS = {"person", "organization", "project"}
 MEMORY_CATEGORIES = {
@@ -82,95 +84,7 @@ class MemoryStore:
 
     @staticmethod
     def _ensure_schema(conn: sqlite3.Connection) -> None:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS memory_entities (
-              entity_ref TEXT PRIMARY KEY,
-              kind TEXT NOT NULL,
-              canonical_name TEXT NOT NULL,
-              canonical_key TEXT NOT NULL,
-              created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL,
-              CHECK (kind IN ('person', 'organization', 'project'))
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_memory_entities_name
-            ON memory_entities(kind, canonical_key);
-
-            CREATE TABLE IF NOT EXISTS memory_entity_aliases (
-              entity_ref TEXT NOT NULL REFERENCES memory_entities(entity_ref) ON DELETE CASCADE,
-              alias TEXT NOT NULL,
-              normalized_alias TEXT NOT NULL,
-              PRIMARY KEY (entity_ref, normalized_alias)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_memory_aliases_normalized
-            ON memory_entity_aliases(normalized_alias);
-
-            CREATE TABLE IF NOT EXISTS memory_entity_emails (
-              entity_ref TEXT NOT NULL REFERENCES memory_entities(entity_ref) ON DELETE CASCADE,
-              email TEXT NOT NULL,
-              normalized_email TEXT NOT NULL UNIQUE,
-              PRIMARY KEY (entity_ref, normalized_email)
-            );
-
-            CREATE TABLE IF NOT EXISTS memories (
-              memory_ref TEXT PRIMARY KEY,
-              entity_ref TEXT NOT NULL REFERENCES memory_entities(entity_ref),
-              category TEXT NOT NULL,
-              content TEXT NOT NULL,
-              status TEXT NOT NULL,
-              confidence REAL NOT NULL,
-              sensitivity TEXT NOT NULL,
-              occurred_at TEXT NOT NULL DEFAULT '',
-              valid_from TEXT NOT NULL DEFAULT '',
-              valid_until TEXT NOT NULL DEFAULT '',
-              supersedes_ref TEXT REFERENCES memories(memory_ref),
-              fingerprint TEXT NOT NULL UNIQUE,
-              created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL,
-              CHECK (status IN ('candidate', 'approved', 'rejected', 'superseded', 'forgotten'))
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_memories_entity_status
-            ON memories(entity_ref, status, updated_at);
-
-            CREATE TABLE IF NOT EXISTS memory_semantics (
-              memory_ref TEXT PRIMARY KEY REFERENCES memories(memory_ref),
-              observed_at TEXT NOT NULL DEFAULT '',
-              next_review_at TEXT NOT NULL DEFAULT '',
-              content_kind TEXT NOT NULL DEFAULT 'state',
-              scope_json TEXT NOT NULL DEFAULT '{}',
-              knowledge_id TEXT NOT NULL DEFAULT '',
-              source_versions_json TEXT NOT NULL DEFAULT '{}',
-              canonical_target_json TEXT NOT NULL DEFAULT '{}',
-              writeback_status TEXT NOT NULL DEFAULT 'candidate',
-              proposal_ref TEXT NOT NULL DEFAULT '',
-              promotion_target_id TEXT NOT NULL DEFAULT ''
-            );
-
-            CREATE TABLE IF NOT EXISTS memory_semantic_events (
-              event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-              memory_ref TEXT NOT NULL REFERENCES memories(memory_ref),
-              event_kind TEXT NOT NULL,
-              payload_json TEXT NOT NULL,
-              recorded_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS memory_sources (
-              memory_ref TEXT NOT NULL REFERENCES memories(memory_ref) ON DELETE CASCADE,
-              source_ref TEXT NOT NULL,
-              source_kind TEXT NOT NULL,
-              excerpt TEXT NOT NULL DEFAULT '',
-              source_sha256 TEXT NOT NULL DEFAULT '',
-              PRIMARY KEY (memory_ref, source_ref)
-            );
-            """
-        )
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_semantics)")}
-        if "promotion_target_id" not in columns:
-            conn.execute("ALTER TABLE memory_semantics ADD COLUMN promotion_target_id TEXT NOT NULL DEFAULT ''")
-        conn.commit()
+        ensure_memory_schema(conn)
 
     @staticmethod
     def _entity_payload(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:

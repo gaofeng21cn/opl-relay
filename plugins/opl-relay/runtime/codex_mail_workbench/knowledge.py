@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .paths import default_profile_workspace
+from .schema import ensure_memory_schema
 
 
 def utc_now() -> str:
@@ -107,7 +108,7 @@ class KnowledgeIndex:
         items = framework.sources()  # Validate before mutating the derived catalog.
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS knowledge_catalog (knowledge_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, metadata_json TEXT NOT NULL, indexed_at TEXT NOT NULL)")
+            ensure_memory_schema(conn)
             conn.execute("DELETE FROM knowledge_catalog")
             # Only the retired, reconstructible source-body index is removed.
             # memories, memory_sources and original mail are retained.

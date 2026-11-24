@@ -11,14 +11,13 @@ from email.utils import getaddresses
 from urllib.parse import quote, urlencode
 
 from .graph import GraphClient, GraphError
+from .schema import ensure_drafts_schema
 from .server_drafts import (_is_superseded, _ledger, _message_date,
                             _subject_key, content_snapshot, review_payload)
 
 
 def _schema(conn):
-    conn.execute("""CREATE TABLE IF NOT EXISTS graph_server_drafts (
-        request_id TEXT PRIMARY KEY, remote_id TEXT NOT NULL,
-        verified_raw BLOB NOT NULL)""")
+    ensure_drafts_schema(conn)
 
 
 def _canonical(raw):

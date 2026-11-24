@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import subprocess
 import time
+from collections.abc import Callable
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
-from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .drafts import Attachment, DraftSnapshot, Recipient, SendStart, normalize_body
+from .message import html_to_text
 
 
 class AppleMailError(RuntimeError):
@@ -686,6 +686,111 @@ function findSent(app, payload) {
   return null;
 }
 
+function listAccounts(app) {
+  var accounts = app.accounts();
+  var out = [];
+  for (var i = 0; i < accounts.length; i++) {
+    var emails = [];
+    try {
+      emails = accounts[i].emailAddresses().map(function (value) { return String(value || ""); });
+    } catch (ignored) {}
+    out.push({
+      id: String(accounts[i].id ? accounts[i].id() : ""),
+      name: String(accounts[i].name()),
+      emails: emails
+    });
+  }
+  return out;
+}
+
+function walkMailboxes(boxes, prefix, accountName, out) {
+  for (var i = 0; i < boxes.length; i++) {
+    var box = boxes[i];
+    var name = String(box.name());
+    var path = prefix ? (prefix + "/" + name) : name;
+    var unread = 0;
+    try { unread = Number(box.unreadCount()); } catch (ignored) {}
+    out.push({name: name, path: path, account: accountName, unreadCount: unread});
+    try {
+      var children = box.mailboxes();
+      if (children && children.length > 0) {
+        walkMailboxes(children, path, accountName, out);
+      }
+    } catch (ignored) {}
+  }
+}
+
+function listMailboxes(app, payload) {
+  var account = accountByName(app, payload.providerAccount);
+  var out = [];
+  walkMailboxes(account.mailboxes(), "", String(account.name()), out);
+  return out;
+}
+
+function recentMessages(app, payload) {
+  var account = accountByName(app, payload.providerAccount);
+  var mailboxPath = String(payload.mailboxPath || "INBOX");
+  var box = mailboxByPath(account, mailboxPath);
+  var limit = Math.max(1, Math.min(200, Number(payload.limit || 20)));
+  var includeRead = Boolean(payload.includeRead);
+  var messages = box.messages();
+  var out = [];
+  for (var i = 0; i < messages.length && out.length < limit; i++) {
+    try {
+      var msg = messages[i];
+      var isRead = Boolean(msg.readStatus());
+      if (!includeRead && isRead) {
+        continue;
+      }
+      var received = null;
+      var sent = null;
+      try { var dr = msg.dateReceived(); received = dr ? dr.toISOString() : null; } catch (ignored) {}
+      try { var ds = msg.dateSent(); sent = ds ? ds.toISOString() : null; } catch (ignored) {}
+      out.push({
+        id: Number(msg.id()),
+        messageId: String(msg.messageId() || ""),
+        subject: String(msg.subject() || ""),
+        sender: String(msg.sender() || ""),
+        read: isRead,
+        mailbox: String(box.name()),
+        mailboxPath: mailboxPath,
+        account: String(account.name()),
+        dateReceived: received,
+        dateSent: sent
+      });
+    } catch (ignored) {
+      continue;
+    }
+  }
+  return out;
+}
+
+function readMessage(app, payload) {
+  var account = accountByName(app, payload.providerAccount);
+  var mailboxPath = String(payload.mailboxPath || "INBOX");
+  var box = mailboxByPath(account, mailboxPath);
+  var msg = messageById(box, payload.messageId);
+  var received = null;
+  var sent = null;
+  try { var dr = msg.dateReceived(); received = dr ? dr.toISOString() : null; } catch (ignored) {}
+  try { var ds = msg.dateSent(); sent = ds ? ds.toISOString() : null; } catch (ignored) {}
+  return {
+    id: Number(msg.id()),
+    messageId: String(msg.messageId() || ""),
+    subject: String(msg.subject() || ""),
+    sender: String(msg.sender() || ""),
+    read: Boolean(msg.readStatus()),
+    flagged: Boolean(msg.flaggedStatus()),
+    dateReceived: received,
+    dateSent: sent,
+    account: String(account.name()),
+    mailbox: String(box.name()),
+    mailboxPath: mailboxPath,
+    content: String(msg.content() || ""),
+    allHeaders: String(msg.allHeaders() || "")
+  };
+}
+
 function discardDraft(app, payload) {
   var account = accountByName(app, payload.providerAccount);
   var drafts = mailboxByRole(account, "drafts");
@@ -725,6 +830,14 @@ function run(argv) {
     result = sendDraft(app, payload);
   } else if (action === "findSent") {
     result = findSent(app, payload);
+  } else if (action === "accounts") {
+    result = listAccounts(app);
+  } else if (action === "mailboxes") {
+    result = listMailboxes(app, payload);
+  } else if (action === "recent") {
+    result = recentMessages(app, payload);
+  } else if (action === "read") {
+    result = readMessage(app, payload);
   } else if (action === "discard") {
     result = discardDraft(app, payload);
   } else {
@@ -735,31 +848,7 @@ function run(argv) {
 """
 
 
-class _HTMLTextExtractor(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
 
-    def handle_starttag(
-        self,
-        tag: str,
-        attrs: list[tuple[str, str | None]],
-    ) -> None:
-        del attrs
-        if tag.casefold() == "br":
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.casefold() in {"div", "p", "li"}:
-            self.parts.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        self.parts.append(data)
-
-    def text(self) -> str:
-        value = "".join(self.parts).replace("\xa0", " ")
-        value = re.sub(r"\n{3,}", "\n\n", value)
-        return normalize_body(value).strip("\n")
 
 
 def _message_from_source(source: str) -> Message | None:
@@ -789,9 +878,9 @@ def _body_from_source(source: str, fallback: str) -> str:
         if part.get_content_type() == "text/html" and not part.get_filename()
     ]
     if html_parts:
-        parser = _HTMLTextExtractor()
-        parser.feed(str(html_parts[0].get_content()))
-        html_body = parser.text()
+        html_body = normalize_body(
+            html_to_text(str(html_parts[0].get_content()), preserve_blank_lines=True)
+        ).strip("\n")
         if html_body:
             return html_body
     return normalize_body(fallback).strip("\n")
@@ -1051,6 +1140,58 @@ class AppleMailProvider:
             if time.monotonic() >= deadline:
                 return None
             time.sleep(1)
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        raw = self._runner("accounts", {})
+        if not isinstance(raw, list):
+            raise AppleMailError("Apple Mail 未返回账户列表")
+        return [item for item in raw if isinstance(item, dict)]
+
+    def list_mailboxes(self, *, provider_account: str) -> list[dict[str, Any]]:
+        raw = self._runner("mailboxes", {"providerAccount": provider_account})
+        if not isinstance(raw, list):
+            raise AppleMailError("Apple Mail 未返回邮箱目录列表")
+        return [item for item in raw if isinstance(item, dict)]
+
+    def recent_messages(
+        self,
+        *,
+        provider_account: str,
+        mailbox_path: str = "INBOX",
+        limit: int = 20,
+        include_read: bool = False,
+    ) -> list[dict[str, Any]]:
+        raw = self._runner(
+            "recent",
+            {
+                "providerAccount": provider_account,
+                "mailboxPath": mailbox_path,
+                "limit": limit,
+                "includeRead": include_read,
+            },
+        )
+        if not isinstance(raw, list):
+            raise AppleMailError("Apple Mail 未返回最近邮件列表")
+        return [item for item in raw if isinstance(item, dict)]
+
+    def read_message(
+        self,
+        *,
+        provider_account: str,
+        mailbox_path: str,
+        message_id: int,
+    ) -> dict[str, Any]:
+        raw = self._runner(
+            "read",
+            {
+                "providerAccount": provider_account,
+                "mailboxPath": mailbox_path,
+                "messageId": message_id,
+            },
+        )
+        if not isinstance(raw, dict):
+            raise AppleMailError("Apple Mail 未返回邮件对象")
+        return raw
 
     def discard(self, *, provider_account: str, provider_uuid: str) -> bool:
         raw = self._runner(

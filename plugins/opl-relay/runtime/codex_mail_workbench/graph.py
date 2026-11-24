@@ -12,24 +12,31 @@ import hashlib
 import json
 import secrets
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+import httpx
+import msal
 
 from .config import MailAccount
 from .keychain import get_oauth_secret, set_oauth_secret
 from .message import extract_attachments, parse_headers
-from .store import (connect_email_store, fetch_raw_email_by_storage_ref,
-                    get_message_by_storage_ref, reconcile_folder,
-                    record_mailbox_move, upsert_email_message)
+from .schema import ensure_mail_schema
+from .store import (
+    connect_email_store,
+    get_message_by_storage_ref,
+    reconcile_folder,
+    record_mailbox_move,
+    upsert_email_message,
+)
 
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
-READ_SCOPES = ("User.Read", "Mail.Read", "offline_access")
-WRITE_SCOPES = ("User.Read", "Mail.ReadWrite", "offline_access")
+READ_SCOPES = ("User.Read", "Mail.Read")
+WRITE_SCOPES = ("User.Read", "Mail.ReadWrite")
+_MSAL_RESERVED_SCOPES = frozenset({"openid", "profile", "offline_access"})
 
 
 class GraphError(RuntimeError):
@@ -38,109 +45,200 @@ class GraphError(RuntimeError):
         super().__init__(f"Microsoft request failed ({status}, {code})")
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None  # Never forward credentials to an unexpected host.
+class _MsalHttpResponse:
+    """Minimal response adapter for MSAL's http_client contract."""
+
+    def __init__(self, status_code: int, text: str):
+        self.status_code = status_code
+        self.text = text
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise GraphError(self.status_code, "http_error")
+
+
+class _HttpxNoRedirectClient:
+    """Fail-closed httpx client for MSAL that never follows redirects."""
+
+    def __init__(self, *, timeout: float = 30.0):
+        self._timeout = max(0.01, float(timeout))
+
+    def _send(self, method: str, url: str, *, params=None, data=None, headers=None, timeout=None):
+        effective_timeout = max(0.01, float(timeout or self._timeout))
+        try:
+            with httpx.Client(follow_redirects=False, timeout=effective_timeout) as client:
+                response = client.request(method, url, params=params, data=data, headers=headers)
+        except (httpx.HTTPError, TimeoutError, OSError):
+            raise GraphError(0, "network_unavailable") from None
+        if 300 <= response.status_code < 400:
+            raise GraphError(response.status_code, "redirect_blocked")
+        return _MsalHttpResponse(response.status_code, response.text)
+
+    def get(self, url: str, params=None, headers=None, **kwargs):
+        return self._send("GET", url, params=params, headers=headers, timeout=kwargs.get("timeout"))
+
+    def post(self, url: str, params=None, data=None, headers=None, **kwargs):
+        return self._send("POST", url, params=params, data=data, headers=headers, timeout=kwargs.get("timeout"))
+
+
+def _extract_error_code(response: httpx.Response) -> str:
+    # Error descriptions may echo identifiers or credentials. Return codes
+    # only; do not propagate raw bodies/URLs into logs.
+    if 300 <= response.status_code < 400:
+        return "redirect_blocked"
+    try:
+        error = response.json().get("error", "http_error")
+        code = error.get("code", "http_error") if isinstance(error, dict) else error
+    except (ValueError, AttributeError):
+        code = "http_error"
+    return str(code or "http_error")
 
 
 def _http(url, *, method="GET", headers=None, body=None, timeout=30, raw=False):
-    request = Request(url, data=body, headers=headers or {}, method=method)
     try:
-        with build_opener(NoRedirect).open(request, timeout=max(0.01, timeout)) as response:
-            value = response.read()
-            return value if raw else (json.loads(value) if value else {})
-    except HTTPError as exc:
-        # Error descriptions may echo identifiers or credentials. Return codes
-        # only; do not propagate raw bodies/URLs into logs.
-        try:
-            error = json.loads(exc.read()).get("error", "http_error")
-            code = error.get("code", "http_error") if isinstance(error, dict) else error
-        except (ValueError, AttributeError):
-            code = "http_error"
-        raise GraphError(exc.code, str(code)) from None
-    except (URLError, TimeoutError, OSError):
+        with httpx.Client(follow_redirects=False, timeout=max(0.01, float(timeout))) as client:
+            response = client.request(method, url, headers=headers or {}, content=body)
+    except (httpx.HTTPError, TimeoutError, OSError):
         raise GraphError(0, "network_unavailable") from None
+    if response.status_code >= 300:
+        raise GraphError(response.status_code, _extract_error_code(response))
+    value = response.content
+    return value if raw else (json.loads(value) if value else {})
 
 
-def _authority(account):
+def _authority(account: MailAccount) -> str:
     if account.graph is None:
         raise ValueError("Microsoft Graph account required")
-    return f"https://login.microsoftonline.com/{account.graph.tenant}/oauth2/v2.0"
+    return f"https://login.microsoftonline.com/{account.graph.tenant}"
 
 
-def _token_request(account, parameters):
-    return _http(_authority(account) + "/token", method="POST",
-                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-                 body=urlencode({"client_id": account.graph.client_id, **parameters}).encode())
+def _filter_msal_scopes(raw_scopes) -> list[str]:
+    if isinstance(raw_scopes, str):
+        items = raw_scopes.split()
+    else:
+        items = list(raw_scopes or ())
+    filtered = [scope for scope in items if scope and scope.lower() not in _MSAL_RESERVED_SCOPES]
+    return filtered or list(READ_SCOPES)
 
 
-def _save_token(account, token, *, allow_interaction=False):
-    if not token.get("access_token") or not token.get("refresh_token"):
+def _msal_app(
+    account: MailAccount,
+    cache: msal.SerializableTokenCache,
+    *,
+    timeout: float = 30.0,
+) -> msal.PublicClientApplication:
+    if account.graph is None:
+        raise ValueError("Microsoft Graph account required")
+    return msal.PublicClientApplication(
+        client_id=account.graph.client_id,
+        authority=_authority(account),
+        token_cache=cache,
+        http_client=_HttpxNoRedirectClient(timeout=timeout),
+        instance_discovery=False,
+    )
+
+
+def _save_token_cache(
+    account: MailAccount,
+    cache: msal.SerializableTokenCache,
+    *,
+    scope: str,
+    allow_interaction: bool = False,
+) -> None:
+    if account.graph is None:
+        raise ValueError("Microsoft Graph account required")
+    if not any(cache.search(cache.CredentialType.REFRESH_TOKEN)):
         raise ValueError("Microsoft did not return renewable delegated credentials")
-    token = {**token, "expires_at": time.time() + int(token.get("expires_in", 3600)),
-             "client_id": account.graph.client_id, "email": account.email.lower()}
-    serialized = json.dumps(token, separators=(",", ":"))
+    envelope = {
+        "format": "msal_cache_v1",
+        "client_id": account.graph.client_id,
+        "email": account.email.lower(),
+        "scope": scope,
+        "msal_cache": cache.serialize(),
+    }
+    serialized = json.dumps(envelope, separators=(",", ":"))
     set_oauth_secret(account.graph.credential_ref, serialized, allow_interaction=allow_interaction)
     if get_oauth_secret(account.graph.credential_ref, allow_interaction=allow_interaction) != serialized:
         raise RuntimeError("OAuth Keychain readback mismatch")
 
 
 def login_graph(account: MailAccount, *, write=False, notify=None, timeout=600):
-    """PKCE authorization-code flow; the browser receives no client secret.
+    """PKCE authorization-code flow via MSAL; the browser receives no client secret.
 
     notify receives the login URL. Bind only loopback, validate Host and state,
-    suppress access logs, and save tokens only after /me matches this account.
+    suppress access logs, and save the MSAL token cache to Keychain only after
+    /me matches this account.
     """
-    authority = _authority(account)
-    verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
-    state = secrets.token_urlsafe(32)
-    result = {}
+    cache = msal.SerializableTokenCache()
+    app = _msal_app(account, cache, timeout=min(30.0, max(1.0, float(timeout))))
+    scopes = list(WRITE_SCOPES if write else READ_SCOPES)
+    auth_response: dict[str, str] = {}
+    expected_state = ""
 
     class Callback(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
         def do_GET(self):
-            query = parse_qs(urlsplit(self.path).query)
-            valid = (urlsplit(self.path).path == "/" and
-                     self.headers.get("Host") == f"localhost:{self.server.server_port}" and
-                     secrets.compare_digest(query.get("state", [""])[0], state))
+            parsed = urlsplit(self.path)
+            query = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+            valid = (
+                parsed.path == "/"
+                and self.headers.get("Host") == f"localhost:{self.server.server_port}"
+                and bool(expected_state)
+                and secrets.compare_digest(query.get("state", ""), expected_state)
+            )
             if valid:
-                result.update(code=query.get("code", [""])[0], error=query.get("error", [""])[0])
+                auth_response.update(query)
             self.send_response(200 if valid else 400)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(("Microsoft login received. You can return to Codex." if valid
-                              else "Invalid login callback.").encode())
+            self.wfile.write((
+                "Microsoft login received. You can return to Codex."
+                if valid
+                else "Invalid login callback."
+            ).encode())
 
     with HTTPServer(("127.0.0.1", 0), Callback) as server:
         redirect = f"http://localhost:{server.server_port}"
-        scopes = WRITE_SCOPES if write else READ_SCOPES
-        url = authority + "/authorize?" + urlencode({
-            "client_id": account.graph.client_id, "response_type": "code",
-            "redirect_uri": redirect, "response_mode": "query", "scope": " ".join(scopes),
-            "state": state, "code_challenge": challenge, "code_challenge_method": "S256",
-            "login_hint": account.email, "prompt": "select_account",
-        })
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            flow = app.initiate_auth_code_flow(
+                scopes=scopes,
+                redirect_uri=redirect,
+                login_hint=account.email,
+                prompt="select_account",
+                response_mode="query",
+            )
+        expected_state = str(flow.get("state") or "")
         if notify is not None:
-            notify(url)
+            notify(flow["auth_uri"])
         deadline = time.monotonic() + timeout
-        while not result and time.monotonic() < deadline:
+        while not auth_response and time.monotonic() < deadline:
             server.timeout = min(1, max(0.01, deadline - time.monotonic()))
             server.handle_request()
-    if not result.get("code"):
+    if not auth_response.get("code"):
         raise ValueError("Microsoft login was cancelled or timed out")
-    token = _token_request(account, {"grant_type": "authorization_code", "code": result["code"],
-                                   "redirect_uri": redirect, "code_verifier": verifier,
-                                   "scope": " ".join(scopes)})
+    token = app.acquire_token_by_auth_code_flow(flow, auth_response)
+    if not isinstance(token, dict) or not token.get("access_token"):
+        code = str((token or {}).get("error") or "oauth_exchange_failed")
+        raise GraphError(400, code)
+    granted_scope = token.get("scope") or " ".join(scopes)
+    if isinstance(granted_scope, list):
+        granted_scope = " ".join(str(item) for item in granted_scope)
     client = GraphClient(account, token=token["access_token"])
     client.identity()
-    _save_token(account, token, allow_interaction=True)
-    return {"ok": True, "account": account.account_id, "provider": "microsoft_graph",
-            "email": account.email, "credential_configured": True,
-            "scopes": token.get("scope", "").split(), "send_allowed": False}
+    _save_token_cache(account, cache, scope=str(granted_scope), allow_interaction=True)
+    return {
+        "ok": True,
+        "account": account.account_id,
+        "provider": "microsoft_graph",
+        "email": account.email,
+        "credential_configured": True,
+        "scopes": str(granted_scope).split(),
+        "send_allowed": False,
+    }
 
 
 class GraphClient:
@@ -167,19 +265,60 @@ class GraphClient:
                     if remaining <= 0:
                         raise GraphError(0, "oauth_refresh_busy") from None
                     time.sleep(min(0.1, remaining))
-            token = json.loads(get_oauth_secret(self.account.graph.credential_ref))
-            if (token.get("client_id") != self.account.graph.client_id or
-                    token.get("email") != self.account.email.lower()):
+            stored = json.loads(get_oauth_secret(self.account.graph.credential_ref))
+            if (
+                stored.get("client_id") != self.account.graph.client_id
+                or str(stored.get("email") or "").lower() != self.account.email.lower()
+            ):
                 raise ValueError("OAuth credentials belong to a different Relay account/application")
-            if force_refresh or token.get("expires_at", 0) < time.time() + 120:
-                fresh = _token_request(self.account, {"grant_type": "refresh_token",
-                                                     "refresh_token": token["refresh_token"]})
-                fresh.setdefault("refresh_token", token["refresh_token"])
-                fresh.setdefault("scope", token.get("scope", ""))
-                _save_token(self.account, fresh)
-                token = fresh
-            self.scopes = set(token.get("scope", "").lower().split())
-            self.token = token["access_token"]
+
+            timeout = min(30.0, max(0.01, lock_deadline - time.monotonic()))
+            scopes = _filter_msal_scopes(stored.get("scope"))
+            cache = msal.SerializableTokenCache()
+            app = _msal_app(self.account, cache, timeout=timeout)
+
+            if "msal_cache" in stored:
+                cache.deserialize(str(stored["msal_cache"]))
+                accounts = app.get_accounts(username=self.account.email) or app.get_accounts()
+                msal_account = accounts[0] if accounts else None
+                result = app.acquire_token_silent(
+                    scopes,
+                    account=msal_account,
+                    force_refresh=force_refresh,
+                )
+                if not isinstance(result, dict) or not result.get("access_token"):
+                    code = str((result or {}).get("error") or "oauth_refresh_failed")
+                    raise GraphError(400, code)
+                granted = result.get("scope") or stored.get("scope") or " ".join(scopes)
+                if isinstance(granted, list):
+                    granted = " ".join(str(item) for item in granted)
+                if cache.has_state_changed:
+                    _save_token_cache(self.account, cache, scope=str(granted), allow_interaction=False)
+                self.scopes = set(str(granted).lower().split())
+                self.token = str(result["access_token"])
+            else:
+                # Transparent upgrade path for pre-MSAL Keychain credentials.
+                if (
+                    not force_refresh
+                    and stored.get("access_token")
+                    and stored.get("expires_at", 0) >= time.time() + 120
+                ):
+                    self.scopes = set(str(stored.get("scope", "")).lower().split())
+                    self.token = str(stored["access_token"])
+                else:
+                    refresh_token = str(stored.get("refresh_token") or "")
+                    if not refresh_token:
+                        raise ValueError("Microsoft OAuth credentials lack a refresh token")
+                    result = app.acquire_token_by_refresh_token(refresh_token, scopes=scopes)
+                    if not isinstance(result, dict) or not result.get("access_token"):
+                        code = str((result or {}).get("error") or "oauth_refresh_failed")
+                        raise GraphError(400, code)
+                    granted = result.get("scope") or stored.get("scope") or " ".join(scopes)
+                    if isinstance(granted, list):
+                        granted = " ".join(str(item) for item in granted)
+                    _save_token_cache(self.account, cache, scope=str(granted), allow_interaction=False)
+                    self.scopes = set(str(granted).lower().split())
+                    self.token = str(result["access_token"])
         return self.token
 
     def request(self, path, *, method="GET", data=None, raw=False):
@@ -271,20 +410,7 @@ class GraphClient:
 
 
 def _schema(conn):
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS graph_message_ids (
-          uid INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL,
-          remote_id TEXT NOT NULL, UNIQUE(account_id,remote_id));
-        CREATE TABLE IF NOT EXISTS graph_folder_members (
-          account_id TEXT NOT NULL, folder_id TEXT NOT NULL, remote_id TEXT NOT NULL,
-          change_key TEXT NOT NULL, generation INTEGER NOT NULL,
-          PRIMARY KEY(account_id,folder_id,remote_id));
-        CREATE TABLE IF NOT EXISTS graph_folder_cursors (
-          account_id TEXT NOT NULL, folder_id TEXT NOT NULL,
-          link TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL DEFAULT 1,
-          baseline INTEGER NOT NULL DEFAULT 1,
-          PRIMARY KEY(account_id,folder_id));
-    """)
+    ensure_mail_schema(conn)
 
 
 def _uid(conn, account, remote_id):
@@ -299,7 +425,7 @@ def _slug(item):
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _store_mime(conn, account, item, remote_id, raw):
@@ -315,8 +441,8 @@ def _store_mime(conn, account, item, remote_id, raw):
 
 def sync_graph_account(*, account, db_path, state_dir, mode="incremental", limit_per_folder=None,
                        dry_run=False, scope="all", folder="", max_duration_sec=120):
-    from .sync import should_sync_folder
     from .store import ACTIVE_FOLDERS, HISTORY_FOLDERS
+    from .sync import should_sync_folder
     seconds = 120 if max_duration_sec is None else float(max_duration_sec)
     if seconds <= 0:
         raise ValueError("max_duration_sec must be greater than zero")

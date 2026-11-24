@@ -18,6 +18,7 @@ from .config import load_accounts_config
 from .drafts import normalize_body
 from .mailbox import _list_mailboxes
 from .message import QuoteText
+from .schema import ensure_drafts_schema
 from .store import connect_email_store, fetch_raw_email_by_storage_ref, get_message_by_storage_ref
 from .native import Himalaya
 
@@ -486,10 +487,7 @@ def _ledger(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=5)
     conn.row_factory = sqlite3.Row
-    conn.execute("""CREATE TABLE IF NOT EXISTS server_draft_requests (
-        request_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, input_hash TEXT NOT NULL,
-        raw BLOB NOT NULL, state TEXT NOT NULL, folder TEXT NOT NULL DEFAULT '')""")
-    conn.commit()
+    ensure_drafts_schema(conn)
     return conn
 
 

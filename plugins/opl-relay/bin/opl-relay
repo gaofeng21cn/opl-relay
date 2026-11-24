@@ -3,16 +3,47 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
 import runpy
+import shutil
 import sys
 from pathlib import Path
 
-
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = PACKAGE_ROOT / "runtime"
+RUNTIME_REQUIREMENTS = (
+    ("httpx", "httpx>=0.28,<1"),
+    ("msal", "msal>=1.31,<2"),
+    ("pydantic", "pydantic>=2.10,<3"),
+    ("typer", "typer>=0.15,<1"),
+)
 
 if not RUNTIME_ROOT.is_dir():
     raise SystemExit("opl-relay: installed package runtime is unavailable")
 
+
+def _ensure_runtime_dependencies() -> None:
+    missing = [spec for module, spec in RUNTIME_REQUIREMENTS if importlib.util.find_spec(module) is None]
+    if not missing or os.environ.get("_OPL_RELAY_UV_REEXEC") == "1":
+        return
+
+    script = str(Path(__file__).resolve())
+    repo_root = PACKAGE_ROOT.parent.parent
+    local_venv_python = repo_root / ".venv" / "bin" / "python"
+    env = {**os.environ, "_OPL_RELAY_UV_REEXEC": "1"}
+    if local_venv_python.is_file() and Path(sys.executable).resolve() != local_venv_python.resolve():
+        os.execve(str(local_venv_python), [str(local_venv_python), script, *sys.argv[1:]], env)
+
+    uv = shutil.which("uv")
+    if uv:
+        cmd = [uv, "run", "--quiet", "--no-project"]
+        for _, spec in RUNTIME_REQUIREMENTS:
+            cmd.extend(["--with", spec])
+        cmd.extend(["python", script, *sys.argv[1:]])
+        os.execve(uv, cmd, env)
+
+
+_ensure_runtime_dependencies()
 sys.path.insert(0, str(RUNTIME_ROOT))
 runpy.run_module("codex_mail_workbench.cli", run_name="__main__")

@@ -13,6 +13,7 @@ from .drafts import (
     approval_fingerprint,
 )
 from .native import Himalaya, NativeError
+from .schema import ensure_drafts_schema
 from .server_drafts import (
     _ledger, _search_message, addresses, content_snapshot, inspect_message,
     reconcile_server_drafts, resolve_sent, server_draft, server_fingerprint,
@@ -20,11 +21,7 @@ from .server_drafts import (
 
 
 def _schema(conn):
-    conn.execute("""CREATE TABLE IF NOT EXISTS server_draft_handoffs (
-        request_id TEXT PRIMARY KEY, draft_ref TEXT NOT NULL)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS server_draft_smtp_deliveries (
-        request_id TEXT PRIMARY KEY, sent_folder TEXT NOT NULL,
-        smtp_accepted INTEGER NOT NULL DEFAULT 0, sent_receipt TEXT)""")
+    ensure_drafts_schema(conn)
 
 
 def _imap_sent_receipt(client, folder, raw):
