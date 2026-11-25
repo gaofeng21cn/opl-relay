@@ -262,3 +262,94 @@ def test_repo_marketplace_exposes_the_plugin_without_owning_user_data() -> None:
             "category": "Productivity",
         }
     ]
+
+
+def test_launcher_falls_back_to_uv_when_repo_venv_lacks_dependencies(tmp_path: Path) -> None:
+    import shutil
+    import sys
+
+    repo = tmp_path / "repo"
+    launcher = repo / "plugins" / "opl-relay" / "bin" / "opl-relay"
+    runtime_dir = repo / "plugins" / "opl-relay" / "runtime"
+    venv_python = repo / ".venv" / "bin" / "python"
+    fake_bin = tmp_path / "bin"
+    fake_uv = fake_bin / "uv"
+    uv_log = tmp_path / "uv-argv.json"
+    sitecustomize = tmp_path / "isolated-site" / "sitecustomize.py"
+
+    launcher.parent.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    venv_python.parent.mkdir(parents=True)
+    fake_bin.mkdir(parents=True)
+    sitecustomize.parent.mkdir(parents=True)
+
+    shutil.copy2(PLUGIN_ROOT / "bin" / "opl-relay", launcher)
+    launcher.chmod(0o755)
+
+    # Simulate a stale .venv missing required dependencies like typer.
+    venv_python.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n", encoding="utf-8")
+    venv_python.chmod(0o755)
+
+    # Simulate uv handling the fallback re-exec cleanly.
+    fake_uv.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        f"Path({str(uv_log)!r}).write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+
+    # Force importlib.util.find_spec('typer') -> None in the initial interpreter so fallback runs.
+    sitecustomize.write_text(
+        "import importlib.util\n"
+        "_orig = importlib.util.find_spec\n"
+        "def _patched(name, *args, **kwargs):\n"
+        "    if name == 'typer':\n"
+        "        return None\n"
+        "    return _orig(name, *args, **kwargs)\n"
+        "importlib.util.find_spec = _patched\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.pop("_OPL_RELAY_UV_REEXEC", None)
+    env.pop("_OPL_RELAY_VENV_REEXEC", None)
+    env["PYTHONPATH"] = str(sitecustomize.parent)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    result = subprocess.run(
+        [sys.executable, str(launcher), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    recorded = json.loads(uv_log.read_text(encoding="utf-8"))
+    assert recorded[:3] == ["run", "--quiet", "--no-project"]
+    assert "typer>=0.15,<1" in recorded
+    assert str(launcher.resolve()) in recorded
+    assert recorded[-1] == "--version"
+
+    # When .venv satisfies runtime requirements, launcher uses .venv and does not call uv.
+    uv_log.unlink()
+    venv_python.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "if sys.argv[1:2] == ['-c']:\n"
+        "    sys.exit(0)\n"
+        "print('venv-ok')\n",
+        encoding="utf-8",
+    )
+    venv_python.chmod(0o755)
+    result_venv = subprocess.run(
+        [sys.executable, str(launcher), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result_venv.returncode == 0, result_venv.stderr
+    assert "venv-ok" in result_venv.stdout
+    assert not uv_log.exists()

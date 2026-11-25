@@ -7,6 +7,7 @@ import importlib.util
 import os
 import runpy
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,25 +24,58 @@ if not RUNTIME_ROOT.is_dir():
     raise SystemExit("opl-relay: installed package runtime is unavailable")
 
 
+def _python_has_runtime(python_bin: Path) -> bool:
+    if not python_bin.is_file() or not os.access(python_bin, os.X_OK):
+        return False
+    modules = [module for module, _ in RUNTIME_REQUIREMENTS]
+    check_code = (
+        "import importlib.util, sys; "
+        f"modules = {modules!r}; "
+        "sys.exit(0 if sys.version_info >= (3, 11) and all(importlib.util.find_spec(m) is not None for m in modules) else 1)"
+    )
+    try:
+        result = subprocess.run(
+            [str(python_bin), "-c", check_code],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _ensure_runtime_dependencies() -> None:
     missing = [spec for module, spec in RUNTIME_REQUIREMENTS if importlib.util.find_spec(module) is None]
-    if not missing or os.environ.get("_OPL_RELAY_UV_REEXEC") == "1":
+    if not missing:
         return
 
     script = str(Path(__file__).resolve())
     repo_root = PACKAGE_ROOT.parent.parent
     local_venv_python = repo_root / ".venv" / "bin" / "python"
-    env = {**os.environ, "_OPL_RELAY_UV_REEXEC": "1"}
-    if local_venv_python.is_file() and Path(sys.executable).resolve() != local_venv_python.resolve():
-        os.execve(str(local_venv_python), [str(local_venv_python), script, *sys.argv[1:]], env)
+    if (
+        os.environ.get("_OPL_RELAY_VENV_REEXEC") != "1"
+        and os.environ.get("_OPL_RELAY_UV_REEXEC") != "1"
+        and local_venv_python.is_file()
+        and Path(sys.executable).resolve() != local_venv_python.resolve()
+        and _python_has_runtime(local_venv_python)
+    ):
+        try:
+            env = {**os.environ, "_OPL_RELAY_VENV_REEXEC": "1"}
+            os.execve(str(local_venv_python), [str(local_venv_python), script, *sys.argv[1:]], env)
+        except OSError:
+            pass
 
-    uv = shutil.which("uv")
-    if uv:
-        cmd = [uv, "run", "--quiet", "--no-project"]
-        for _, spec in RUNTIME_REQUIREMENTS:
-            cmd.extend(["--with", spec])
-        cmd.extend(["python", script, *sys.argv[1:]])
-        os.execve(uv, cmd, env)
+    if os.environ.get("_OPL_RELAY_UV_REEXEC") != "1":
+        uv = shutil.which("uv")
+        if uv:
+            cmd = [uv, "run", "--quiet", "--no-project"]
+            for _, spec in RUNTIME_REQUIREMENTS:
+                cmd.extend(["--with", spec])
+            cmd.extend(["python", script, *sys.argv[1:]])
+            env = {**os.environ, "_OPL_RELAY_UV_REEXEC": "1"}
+            os.execve(uv, cmd, env)
 
 
 _ensure_runtime_dependencies()
