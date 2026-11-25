@@ -353,3 +353,106 @@ def test_launcher_falls_back_to_uv_when_repo_venv_lacks_dependencies(tmp_path: P
     assert result_venv.returncode == 0, result_venv.stderr
     assert "venv-ok" in result_venv.stdout
     assert not uv_log.exists()
+
+
+def _install_fake_dist(site_dir: Path, name: str, version: str, extra_files: dict[str, str] | None = None) -> None:
+    pkg_dir = site_dir / name
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    (pkg_dir / "__init__.py").write_text(f"__version__ = {version!r}\n", encoding="utf-8")
+    dist_info = site_dir / f"{name}-{version}.dist-info"
+    dist_info.mkdir(parents=True, exist_ok=True)
+    (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n", encoding="utf-8")
+    for rel, content in (extra_files or {}).items():
+        target = site_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+
+def test_launcher_rejects_incompatible_pydantic_v1_in_venv_and_current_interpreter(tmp_path: Path) -> None:
+    import shutil
+    import sys
+
+    if sys.version_info < (3, 11):
+        return
+
+    repo = tmp_path / "repo"
+    launcher = repo / "plugins" / "opl-relay" / "bin" / "opl-relay"
+    runtime_dir = repo / "plugins" / "opl-relay" / "runtime"
+    venv_python = repo / ".venv" / "bin" / "python"
+    fake_bin = tmp_path / "bin"
+    fake_uv = fake_bin / "uv"
+    uv_log = tmp_path / "uv-argv.json"
+    v1_site = tmp_path / "v1-site"
+    v2_site = tmp_path / "v2-site"
+
+    launcher.parent.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    venv_python.parent.mkdir(parents=True)
+    fake_bin.mkdir(parents=True)
+    shutil.copy2(PLUGIN_ROOT / "bin" / "opl-relay", launcher)
+    launcher.chmod(0o755)
+
+    for pkg, ver in (("httpx", "0.28.1"), ("msal", "1.31.1"), ("pydantic", "1.10.18"), ("typer", "0.15.2")):
+        _install_fake_dist(v1_site, pkg, ver)
+    for pkg, ver in (("httpx", "0.28.1"), ("msal", "1.31.1"), ("pydantic", "2.10.6"), ("typer", "0.15.2")):
+        _install_fake_dist(v2_site, pkg, ver, {"pydantic_core/__init__.py": ""})
+
+    fake_uv.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        f"Path({str(uv_log)!r}).write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+
+    # 1. .venv has all 4 modules, but pydantic is 1.10.18 -> reject .venv and fall back to uv.
+    venv_python.write_text(
+        f"#!/bin/sh\nPYTHONPATH={str(v1_site)!r} exec {sys.executable!r} -S \"$@\"\n",
+        encoding="utf-8",
+    )
+    venv_python.chmod(0o755)
+    isolated_site = tmp_path / "empty-site"
+    isolated_site.mkdir()
+    (isolated_site / "sitecustomize.py").write_text(
+        "import importlib.util\n"
+        "_orig = importlib.util.find_spec\n"
+        "importlib.util.find_spec = lambda n, *a, **kw: None if n in {'httpx','msal','pydantic','typer'} else _orig(n, *a, **kw)\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.pop("_OPL_RELAY_UV_REEXEC", None)
+    env.pop("_OPL_RELAY_VENV_REEXEC", None)
+    env["PYTHONPATH"] = str(isolated_site)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    res_v1_venv = subprocess.run([sys.executable, str(launcher), "--version"], check=False, capture_output=True, text=True, env=env)
+    assert res_v1_venv.returncode == 0, res_v1_venv.stderr
+    recorded = json.loads(uv_log.read_text(encoding="utf-8"))
+    assert recorded[:5] == ["run", "--quiet", "--no-project", "--python", ">=3.11"]
+    assert "pydantic>=2.10,<3" in recorded
+
+    # 2. Current interpreter itself has pydantic 1.10.18 via -S PYTHONPATH -> reject current interpreter and fall back to uv.
+    uv_log.unlink()
+    env_cur_v1 = os.environ.copy()
+    env_cur_v1.pop("_OPL_RELAY_UV_REEXEC", None)
+    env_cur_v1.pop("_OPL_RELAY_VENV_REEXEC", None)
+    env_cur_v1["PYTHONPATH"] = str(v1_site)
+    env_cur_v1["PATH"] = f"{fake_bin}{os.pathsep}{env_cur_v1.get('PATH', '')}"
+    res_cur_v1 = subprocess.run([sys.executable, "-S", str(launcher), "--version"], check=False, capture_output=True, text=True, env=env_cur_v1)
+    assert res_cur_v1.returncode == 0, res_cur_v1.stderr
+    assert uv_log.is_file()
+
+    # 3. .venv has compatible versions (pydantic 2.10.6 + pydantic_core) -> accept .venv without uv.
+    uv_log.unlink()
+    venv_python.write_text(
+        "#!/bin/sh\n"
+        f"if [ \"$1\" = \"-c\" ]; then PYTHONPATH={str(v2_site)!r} exec {sys.executable!r} -S \"$@\"; fi\n"
+        "echo venv-v2-ok\n",
+        encoding="utf-8",
+    )
+    venv_python.chmod(0o755)
+    res_v2_venv = subprocess.run([sys.executable, str(launcher), "--version"], check=False, capture_output=True, text=True, env=env)
+    assert res_v2_venv.returncode == 0, res_v2_venv.stderr
+    assert "venv-v2-ok" in res_v2_venv.stdout
+    assert not uv_log.exists()

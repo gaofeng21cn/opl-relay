@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import os
+import re
 import runpy
 import shutil
 import subprocess
@@ -14,24 +16,77 @@ from pathlib import Path
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = PACKAGE_ROOT / "runtime"
 RUNTIME_REQUIREMENTS = (
-    ("httpx", "httpx>=0.28,<1"),
-    ("msal", "msal>=1.31,<2"),
-    ("pydantic", "pydantic>=2.10,<3"),
-    ("typer", "typer>=0.15,<1"),
+    ("httpx", "httpx>=0.28,<1", (0, 28), (1, 0)),
+    ("msal", "msal>=1.31,<2", (1, 31), (2, 0)),
+    ("pydantic", "pydantic>=2.10,<3", (2, 10), (3, 0)),
+    ("typer", "typer>=0.15,<1", (0, 15), (1, 0)),
+)
+_PEP440_RE = re.compile(
+    r"^\s*(?:(?P<epoch>\d+)!)?(?P<release>\d+(?:\.\d+)*)"
+    r"(?P<pre>(?:a|b|rc|alpha|beta|pre|preview|\.dev)\d*)?"
+    r"(?P<post>\.post\d+)?(?P<dev>\.dev\d+)?(?:\+.*)?\s*$",
+    re.IGNORECASE,
 )
 
 if not RUNTIME_ROOT.is_dir():
     raise SystemExit("opl-relay: installed package runtime is unavailable")
 
 
+def _version_satisfies(
+    raw: str, minimum: tuple[int, ...], maximum: tuple[int, ...]
+) -> bool:
+    match = _PEP440_RE.match(raw)
+    if not match or (match.group("epoch") and int(match.group("epoch")) != 0):
+        return False
+    release = tuple(int(part) for part in match.group("release").split("."))
+    width = max(len(release), len(minimum), len(maximum))
+    rel_pad = release + (0,) * (width - len(release))
+    min_pad = minimum + (0,) * (width - len(minimum))
+    max_pad = maximum + (0,) * (width - len(maximum))
+    if not (min_pad <= rel_pad < max_pad):
+        return False
+    if (match.group("pre") or match.group("dev")) and rel_pad == min_pad:
+        return False
+    return True
+
+
+def _current_python_has_runtime() -> bool:
+    if sys.version_info < (3, 11):
+        return False
+    if importlib.util.find_spec("pydantic_core") is None:
+        return False
+    for module, _, minimum, maximum in RUNTIME_REQUIREMENTS:
+        if importlib.util.find_spec(module) is None:
+            return False
+        try:
+            installed = importlib.metadata.version(module)
+        except importlib.metadata.PackageNotFoundError:
+            return False
+        if not _version_satisfies(installed, minimum, maximum):
+            return False
+    return True
+
+
 def _python_has_runtime(python_bin: Path) -> bool:
     if not python_bin.is_file() or not os.access(python_bin, os.X_OK):
         return False
-    modules = [module for module, _ in RUNTIME_REQUIREMENTS]
+    requirements = [(module, minimum, maximum) for module, _, minimum, maximum in RUNTIME_REQUIREMENTS]
     check_code = (
-        "import importlib.util, sys; "
-        f"modules = {modules!r}; "
-        "sys.exit(0 if sys.version_info >= (3, 11) and all(importlib.util.find_spec(m) is not None for m in modules) else 1)"
+        "import importlib.metadata, importlib.util, re, sys\n"
+        f"reqs = {requirements!r}\n"
+        f"pat = re.compile({_PEP440_RE.pattern!r}, re.I)\n"
+        "def ok(raw, lo, hi):\n"
+        "  m = pat.match(raw)\n"
+        "  if not m or (m.group('epoch') and int(m.group('epoch')) != 0): return False\n"
+        "  rel = tuple(int(p) for p in m.group('release').split('.'))\n"
+        "  w = max(len(rel), len(lo), len(hi))\n"
+        "  r, l, h = rel + (0,)*(w-len(rel)), lo + (0,)*(w-len(lo)), hi + (0,)*(w-len(hi))\n"
+        "  return l <= r < h and not ((m.group('pre') or m.group('dev')) and r == l)\n"
+        "def has(mod, lo, hi):\n"
+        "  if importlib.util.find_spec(mod) is None: return False\n"
+        "  try: return ok(importlib.metadata.version(mod), lo, hi)\n"
+        "  except importlib.metadata.PackageNotFoundError: return False\n"
+        "sys.exit(0 if sys.version_info >= (3, 11) and importlib.util.find_spec('pydantic_core') is not None and all(has(m, lo, hi) for m, lo, hi in reqs) else 1)"
     )
     try:
         result = subprocess.run(
@@ -47,8 +102,7 @@ def _python_has_runtime(python_bin: Path) -> bool:
 
 
 def _ensure_runtime_dependencies() -> None:
-    missing = [spec for module, spec in RUNTIME_REQUIREMENTS if importlib.util.find_spec(module) is None]
-    if not missing:
+    if _current_python_has_runtime():
         return
 
     script = str(Path(__file__).resolve())
@@ -70,8 +124,8 @@ def _ensure_runtime_dependencies() -> None:
     if os.environ.get("_OPL_RELAY_UV_REEXEC") != "1":
         uv = shutil.which("uv")
         if uv:
-            cmd = [uv, "run", "--quiet", "--no-project"]
-            for _, spec in RUNTIME_REQUIREMENTS:
+            cmd = [uv, "run", "--quiet", "--no-project", "--python", ">=3.11"]
+            for _, spec, _, _ in RUNTIME_REQUIREMENTS:
                 cmd.extend(["--with", spec])
             cmd.extend(["python", script, *sys.argv[1:]])
             env = {**os.environ, "_OPL_RELAY_UV_REEXEC": "1"}
