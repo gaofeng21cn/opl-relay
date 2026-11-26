@@ -11,7 +11,7 @@ const profile = await mkdtemp(join(tmpdir(), 'relay-app-host-'));
 const seed = spawnSync('python3', ['test/seed_profile.py', profile], { encoding: 'utf8' });
 if (seed.status !== 0) throw new Error(seed.stderr);
 const client = new Client({ name: 'Relay SDK qualification host', version: '1.0.0' }, { capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] } } } });
-await client.connect(new StdioClientTransport({ command: 'python3', args: ['../plugins/opl-relay/bin/opl-relay', '--json', 'workbench', 'mcp'], env: { ...process.env, OPL_PROFILE_WORKSPACE: profile } }));
+await client.connect(new StdioClientTransport({ command: 'python3', args: ['../bin/opl-relay', '--json', 'workbench', 'mcp'], env: { ...process.env, OPL_PROFILE_WORKSPACE: profile } }));
 const resource = await client.readResource({ uri: 'ui://opl-relay/mail-workbench.html' });
 const bundle = await build({ entryPoints: ['test/app-host.js'], bundle: true, write: false, format: 'esm', platform: 'browser' });
 const allowed = new Set(['open_workbench', 'relay_accounts', 'relay_messages', 'relay_read', 'relay_reply', 'relay_draft', 'relay_save', 'relay_drafts', 'relay_upload', 'relay_uploaded_attachment', 'relay_attachment']);

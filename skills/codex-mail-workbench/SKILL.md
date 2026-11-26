@@ -61,7 +61,7 @@ read coverage; do not quote long message bodies.
 This Skill owns audit scope, explicit date bounds, per-account freshness,
 review coverage, and evidence-backed reporting. Memory proposals, contextual
 drafting, native Reply All, mailbox movement, draft review and sending use the
-current [OPL Relay workflow](https://github.com/gaofeng21cn/opl-relay/blob/main/plugins/opl-relay/skills/opl-relay/SKILL.md)
+current [OPL Relay workflow](https://github.com/gaofeng21cn/opl-relay/blob/main/skills/opl-relay/SKILL.md)
 and its actual CLI contract. Do not duplicate those workflows here.
 
 An audit result does not authorize a memory approval, draft, mailbox change,

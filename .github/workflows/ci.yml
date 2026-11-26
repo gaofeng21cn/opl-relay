@@ -46,7 +46,7 @@ jobs:
           npm ci
           npm run build
           npm test
-          git diff --exit-code -- ../plugins/opl-relay/workbench/ ../plugins/opl-relay/opl-package.json
+          git diff --exit-code -- ../workbench-dist/ ../assets/icon.png
 
       - name: Run test suite
         run: python -m pytest -q
@@ -68,70 +68,42 @@ jobs:
             @deepseek-ai/dsh-tool-executor-native@0.2.2-rc.1
           npm run qualify:dsh -- "$RUNNER_TEMP/relay-dsh-runtime"
 
-      - name: Validate Plugin structure
+      - name: Validate Package v2 structure
         run: |
           python - <<'PY'
           import json
+          import tomllib
           from pathlib import Path
 
           root = Path.cwd().resolve()
-          plugin_root = root / "plugins" / "opl-relay"
-          plugin = json.loads(
-              (plugin_root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
-          )
-          package = json.loads(
-              (plugin_root / "opl-package.json").read_text(encoding="utf-8")
-          )
-          marketplace = json.loads(
-              (root / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
-          )
+          package = json.loads((root / "opl-package.json").read_text(encoding="utf-8"))
+          pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
-          assert plugin["name"] == package["package_id"] == "opl-relay"
-          assert plugin["version"] == package["version"]
-          assert plugin["license"] == "Apache-2.0"
-          assert plugin["skills"] == "./skills/"
-          assert (plugin_root / plugin["skills"]).is_dir()
-          assert list((plugin_root / plugin["skills"]).glob("*/SKILL.md"))
+          assert not (root / "plugins" / "opl-relay").exists()
+          assert not (root / ".codex-plugin").exists()
+          assert not (root / ".agents" / "plugins" / "marketplace.json").exists()
 
-          entries = marketplace["plugins"]
-          assert marketplace["name"] == "opl-relay"
-          assert len(entries) == 1
-          entry = entries[0]
-          assert entry["name"] == "opl-relay"
-          assert entry["source"] == {
-              "source": "local",
-              "path": "./plugins/opl-relay",
-          }
-          source = (root / entry["source"]["path"]).resolve()
-          source.relative_to(root)
-          assert source == plugin_root
-          assert entry["policy"]["installation"] == "AVAILABLE"
-          assert entry["policy"]["authentication"] in {"ON_INSTALL", "ON_USE"}
-          assert entry["category"]
+          assert package["schema_version"] == "opl.package.v2"
+          assert package["identity"]["id"] == "opl-relay"
+          assert package["identity"]["intent"] == "app"
+          assert package["identity"]["version"] == pyproject["project"]["version"]
+          assert package["identity"]["license"] == "Apache-2.0"
+          assert (root / package["identity"]["icon"]).is_file()
+
+          skills = package["provides"]["skills"]
+          assert skills
+          for skill in skills:
+              skill_dir = (root / skill["path"]).resolve()
+              skill_dir.relative_to(root)
+              assert (skill_dir / "SKILL.md").is_file()
+
+          mcp_servers = {srv["id"]: srv for srv in package["provides"]["mcp_servers"]}
+          assert "mail-workbench" in mcp_servers
+          for mcp_app in package["ui"]["mcp_apps"]:
+              assert mcp_app["mcp_server_id"] in mcp_servers
+
+          assert (root / "workbench-dist" / "server.mjs").is_file()
+          assert (root / "workbench-dist" / "index.html").is_file()
+          assert package["provides"]["connection_providers"][0]["provider_type"] == "opl-relay.mailbox"
+          assert package["provides"]["contribution_handler"]["kind"] == "cli"
           PY
-
-  plugin-installation-qualification:
-    name: Codex Plugin installation qualification
-    if: github.event_name == 'workflow_dispatch'
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-
-      - name: Exercise Codex Plugin installation
-        run: |
-          npm install --global @openai/codex@0.145.0
-          export CODEX_HOME="$RUNNER_TEMP/codex-home"
-          mkdir -p "$CODEX_HOME"
-          codex plugin marketplace add "$GITHUB_WORKSPACE" --json
-          codex plugin list --marketplace opl-relay --available --json
-          codex plugin add opl-relay@opl-relay --json
-          codex plugin list --marketplace opl-relay --json

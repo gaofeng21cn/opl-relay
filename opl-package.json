@@ -1,0 +1,432 @@
+{
+  "schema_version": "opl.package.v2",
+  "identity": {
+    "id": "opl-relay",
+    "version": "0.7.10",
+    "intent": "app",
+    "name": {
+      "zh-CN": "OPL Relay",
+      "en-US": "OPL Relay"
+    },
+    "summary": {
+      "zh-CN": "阅读邮件、核对附件和编辑回复草稿。",
+      "en-US": "Read mail, review attachments, and edit reply drafts."
+    },
+    "description": {
+      "zh-CN": "阅读邮件、编辑往来回复、核对附件并在共享工作台中显式审核发送。个人数据始终保留在用户 Profile 中。",
+      "en-US": "Read mail, edit threaded replies, review attachments and explicitly send verified drafts in a shared workbench. Private data stays in your Profile."
+    },
+    "publisher": "one-person-lab",
+    "license": "Apache-2.0",
+    "icon": "assets/icon.png",
+    "repository": "https://github.com/gaofeng21cn/opl-relay",
+    "keywords": [
+      "mail",
+      "memory",
+      "obsidian",
+      "apple-mail",
+      "local-first"
+    ],
+    "routing_summary": {
+      "zh-CN": "阅读邮件、核对附件和编辑回复草稿。",
+      "en-US": "Read mail, review attachments, and edit reply drafts."
+    },
+    "default_prompts": [
+      "检查最近三天的邮件并告诉我需要决定什么。",
+      "打开邮件工作台，结合往来和记忆起草回复所有人，等我审核。",
+      "初始化 Profile Workspace 并配置一个 IMAP 邮箱。"
+    ]
+  },
+  "dependencies": {
+    "opl_base": "^2.0.0",
+    "runtimes": [
+      {
+        "name": "python",
+        "version": ">=3.11"
+      },
+      {
+        "name": "node",
+        "version": ">=20"
+      }
+    ]
+  },
+  "permissions": {
+    "knowledge": [
+      {
+        "scope": "personal_profile",
+        "access": "propose_writeback",
+        "required": false,
+        "reason": {
+          "zh-CN": "按需引用已授权个人知识并提议往来与邮件摘要写回",
+          "en-US": "Reference authorized personal knowledge and propose contact/mail summary writebacks"
+        }
+      }
+    ],
+    "network": "outbound_api",
+    "execution_mode": "local_subprocess"
+  },
+  "provides": {
+    "cli_bin": [
+      {
+        "name": "opl-relay",
+        "path": "./bin/opl-relay"
+      }
+    ],
+    "skills": [
+      {
+        "id": "opl-relay",
+        "path": "./skills/opl-relay",
+        "exposure": "opt_in"
+      },
+      {
+        "id": "codex-mail-workbench",
+        "path": "./skills/codex-mail-workbench",
+        "exposure": "opt_in"
+      }
+    ],
+    "mcp_servers": [
+      {
+        "id": "mail-workbench",
+        "transport": "stdio",
+        "command": "node",
+        "args": [
+          "./workbench-dist/server.mjs"
+        ]
+      }
+    ],
+    "connection_providers": [
+      {
+        "provider_type": "opl-relay.mailbox",
+        "entrypoint": {
+          "kind": "cli",
+          "argv": [
+            "./bin/opl-relay",
+            "--json",
+            "connect"
+          ],
+          "transport": "stdin_json_stdout_json"
+        },
+        "capabilities": [
+          {
+            "id": "mailbox.search",
+            "title": {
+              "zh-CN": "检索本地邮件",
+              "en-US": "Search local mail"
+            },
+            "risk": "read"
+          },
+          {
+            "id": "mailbox.read",
+            "title": {
+              "zh-CN": "读取邮件正文",
+              "en-US": "Read mail content"
+            },
+            "risk": "read"
+          },
+          {
+            "id": "draft.create",
+            "title": {
+              "zh-CN": "创建待审邮件草稿（不发送）",
+              "en-US": "Create review draft (no send)"
+            },
+            "risk": "local_write"
+          }
+        ]
+      }
+    ],
+    "contribution_handler": {
+      "kind": "cli",
+      "argv": [
+        "./bin/opl-relay",
+        "--json",
+        "app-contribution"
+      ],
+      "transport": "stdin_json_stdout_json"
+    }
+  },
+  "ui": {
+    "declarative": {
+      "navigation": [
+        {
+          "id": "relay.inbox",
+          "label": {
+            "zh-CN": "收件箱",
+            "en-US": "Inbox"
+          },
+          "view_id": "relay.inbox",
+          "sort_order": 100
+        },
+        {
+          "id": "relay.triage",
+          "label": {
+            "zh-CN": "邮件判断证据",
+            "en-US": "Mail triage evidence"
+          },
+          "view_id": "relay.triage",
+          "sort_order": 105
+        },
+        {
+          "id": "relay.drafts",
+          "label": {
+            "zh-CN": "草稿",
+            "en-US": "Drafts"
+          },
+          "view_id": "relay.drafts",
+          "sort_order": 110
+        },
+        {
+          "id": "relay.people",
+          "label": {
+            "zh-CN": "联系人",
+            "en-US": "People"
+          },
+          "view_id": "relay.people",
+          "sort_order": 120
+        },
+        {
+          "id": "relay.memory",
+          "label": {
+            "zh-CN": "记忆证据",
+            "en-US": "Memory evidence"
+          },
+          "view_id": "relay.memory",
+          "sort_order": 125
+        }
+      ],
+      "views": [
+        {
+          "id": "relay.inbox",
+          "view_type": "list_detail",
+          "slot": "workbench.panel",
+          "title": {
+            "zh-CN": "收件箱",
+            "en-US": "Inbox"
+          },
+          "data_ref": "communications.mail.v1#recent",
+          "empty_state": {
+            "zh-CN": "没有可显示的本地邮件",
+            "en-US": "No local mail to show"
+          },
+          "actions": [
+            {
+              "id": "relay.workbench.open",
+              "label": {
+                "zh-CN": "打开邮件工作台",
+                "en-US": "Open mail workbench"
+              },
+              "action_ref": "communications.mail.v1#workbench.open",
+              "confirm": false,
+              "effect_timing": "immediate"
+            },
+            {
+              "id": "relay.mail.sync",
+              "label": {
+                "zh-CN": "同步邮件",
+                "en-US": "Sync mail"
+              },
+              "action_ref": "communications.mail.v1#sync.incremental",
+              "confirm": false,
+              "effect_timing": "immediate"
+            }
+          ]
+        },
+        {
+          "id": "relay.triage",
+          "view_type": "approval_diff",
+          "slot": "workbench.panel",
+          "title": {
+            "zh-CN": "邮件判断证据",
+            "en-US": "Mail triage evidence"
+          },
+          "data_ref": "communications.mail.v1#triage.evidence",
+          "empty_state": {
+            "zh-CN": "没有待交给 Persona 的邮件证据",
+            "en-US": "No mail evidence ready for Persona"
+          }
+        },
+        {
+          "id": "relay.drafts",
+          "view_type": "approval_diff",
+          "slot": "workbench.panel",
+          "title": {
+            "zh-CN": "草稿审核",
+            "en-US": "Draft review"
+          },
+          "data_ref": "communications.mail.v1#draft.inspect",
+          "empty_state": {
+            "zh-CN": "没有待审核草稿",
+            "en-US": "No drafts awaiting review"
+          },
+          "actions": [
+            {
+              "id": "relay.workbench.open",
+              "label": {
+                "zh-CN": "打开邮件工作台",
+                "en-US": "Open mail workbench"
+              },
+              "action_ref": "communications.mail.v1#workbench.open",
+              "confirm": false,
+              "effect_timing": "immediate"
+            },
+            {
+              "id": "relay.draft.create",
+              "label": {
+                "zh-CN": "新建草稿",
+                "en-US": "Create draft"
+              },
+              "action_ref": "communications.mail.v1#draft.create",
+              "confirm": false,
+              "effect_timing": "immediate"
+            },
+            {
+              "id": "relay.draft.create-from-persona",
+              "label": {
+                "zh-CN": "从 Persona 提案创建草稿",
+                "en-US": "Create draft from Persona proposal"
+              },
+              "action_ref": "communications.mail.v1#draft.create_from_persona",
+              "confirm": true,
+              "effect_timing": "immediate"
+            },
+            {
+              "id": "relay.draft.reply-all",
+              "label": {
+                "zh-CN": "回复全部审核草稿",
+                "en-US": "Reply All review draft"
+              },
+              "action_ref": "communications.mail.v1#draft.reply_all",
+              "confirm": false,
+              "effect_timing": "immediate"
+            },
+            {
+              "id": "relay.draft.inspect",
+              "label": {
+                "zh-CN": "回读草稿",
+                "en-US": "Inspect draft"
+              },
+              "action_ref": "communications.mail.v1#draft.inspect",
+              "confirm": false,
+              "effect_timing": "immediate"
+            },
+            {
+              "id": "relay.draft.open",
+              "label": {
+                "zh-CN": "在 Apple Mail 中打开",
+                "en-US": "Open in Apple Mail"
+              },
+              "action_ref": "communications.mail.v1#draft.open",
+              "confirm": false,
+              "effect_timing": "immediate"
+            },
+            {
+              "id": "relay.draft.send",
+              "label": {
+                "zh-CN": "发送已批准草稿",
+                "en-US": "Send approved draft"
+              },
+              "action_ref": "communications.mail.v1#draft.send",
+              "confirm": true,
+              "effect_timing": "immediate"
+            }
+          ]
+        },
+        {
+          "id": "relay.people",
+          "view_type": "list_detail",
+          "slot": "workbench.panel",
+          "title": {
+            "zh-CN": "联系人",
+            "en-US": "People"
+          },
+          "data_ref": "personal.memory.v1#people",
+          "empty_state": {
+            "zh-CN": "没有已登记的联系人、组织或项目",
+            "en-US": "No registered people, organizations, or projects"
+          },
+          "actions": [
+            {
+              "id": "relay.context.build",
+              "label": {
+                "zh-CN": "构建往来上下文",
+                "en-US": "Build relationship context"
+              },
+              "action_ref": "personal.context.v1#build",
+              "confirm": false,
+              "effect_timing": "immediate"
+            },
+            {
+              "id": "relay.memory.inspect",
+              "label": {
+                "zh-CN": "查看记忆证据",
+                "en-US": "Inspect memory evidence"
+              },
+              "action_ref": "personal.memory.v1#inspect",
+              "confirm": false,
+              "effect_timing": "immediate"
+            }
+          ]
+        },
+        {
+          "id": "relay.memory",
+          "view_type": "activity_log",
+          "slot": "workbench.panel",
+          "title": {
+            "zh-CN": "记忆证据",
+            "en-US": "Memory evidence"
+          },
+          "data_ref": "personal.memory.v1#search",
+          "empty_state": {
+            "zh-CN": "没有已批准的记忆证据",
+            "en-US": "No approved memory evidence"
+          },
+          "actions": [
+            {
+              "id": "relay.memory.inspect",
+              "label": {
+                "zh-CN": "查看记忆证据",
+                "en-US": "Inspect memory evidence"
+              },
+              "action_ref": "personal.memory.v1#inspect",
+              "confirm": false,
+              "effect_timing": "immediate"
+            }
+          ]
+        }
+      ]
+    },
+    "mcp_apps": [
+      {
+        "id": "opl-relay.workbench",
+        "title": {
+          "zh-CN": "邮件协作工作台",
+          "en-US": "Mail Workbench"
+        },
+        "mcp_server_id": "mail-workbench",
+        "resource_uri": "ui://opl-relay/mail-workbench.html",
+        "host_capabilities": [
+          "theme_sync",
+          "connect_package_grant"
+        ]
+      }
+    ]
+  },
+  "distribution": {
+    "oci": "ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay",
+    "visibility": "public"
+  },
+  "host_hints": {
+    "codex": {
+      "sync_enabled": true,
+      "plugin_name": "opl-relay",
+      "category": "Productivity",
+      "brand_color": "#1260E8",
+      "capabilities": [
+        "Mail evidence",
+        "Relationship context",
+        "Approved memory",
+        "Obsidian knowledge",
+        "Review-gated drafting"
+      ]
+    }
+  }
+}

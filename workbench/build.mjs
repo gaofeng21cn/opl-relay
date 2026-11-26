@@ -1,9 +1,8 @@
 import { build } from 'esbuild';
 import { readFile, writeFile, mkdir, readdir, copyFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
 
-const output = resolve('../plugins/opl-relay/workbench');
+const output = resolve('../workbench-dist');
 const stripTrailingWhitespace = (text) => text.replace(/[ \t]+$/gm, '');
 await mkdir(output, { recursive: true });
 const ui = await build({ entryPoints: ['app.js'], bundle: true, format: 'esm', platform: 'browser', write: false, minify: true, legalComments: 'inline', metafile: true });
@@ -13,7 +12,7 @@ const css = '/*\n' + await readFile('DSH-LICENSE.txt', 'utf8') + '\n*/\n' + awai
 await copyFile('../assets/branding/opl-relay-logo.png', resolve(output, '../assets/icon.png'));
 const logo = await readFile(resolve(output, '../assets/icon.png'));
 await writeFile(resolve(output, 'index.html'), template.replace('/* LOGO */', () => `data:image/png;base64,${logo.toString('base64')}`).replace('/* STYLE */', () => css).replace('/* SCRIPT */', () => script));
-await build({ entryPoints: ['server.mjs'], outfile: resolve(output, 'server.mjs'), bundle: true, external: ['opl-framework/*'], platform: 'node', format: 'esm', target: 'node20', minify: true, legalComments: 'inline', banner: { js: 'import { createRequire as _createRequire } from "node:module"; const require = _createRequire(import.meta.url);' } });
+await build({ entryPoints: ['server.mjs'], outfile: resolve(output, 'server.mjs'), bundle: true, platform: 'node', format: 'esm', target: 'node20', minify: true, legalComments: 'inline', banner: { js: 'import { createRequire as _createRequire } from "node:module"; const require = _createRequire(import.meta.url);' } });
 await writeFile(resolve(output, 'server.mjs'), stripTrailingWhitespace(await readFile(resolve(output, 'server.mjs'), 'utf8')));
 const lock = JSON.parse(await readFile('package-lock.json', 'utf8'));
 let notices = 'OPL Relay Workbench third-party notices\n\n';
@@ -28,15 +27,3 @@ for (const [path, dependency] of Object.entries(lock.packages)) {
   notices += `${pkg.name} ${pkg.version} (${pkg.license || dependency.license || 'See upstream'})\n${license || JSON.stringify(pkg.repository || '')}\n\n`;
 }
 await writeFile(resolve(output, 'THIRD_PARTY_NOTICES.txt'), notices);
-const manifestPath = resolve(output, '../opl-package.json');
-const manifestText = await readFile(manifestPath, 'utf8');
-const manifest = JSON.parse(manifestText);
-const locked = execFileSync(process.env.PYTHON || 'python3', ['-c', `
-import json, sys
-from pathlib import Path
-from _opl_package_content_lock import content_digest
-manifest_path = Path(sys.argv[1])
-paths = json.loads(manifest_path.read_text())["content_lock"]["paths"]
-print(content_digest(paths, lambda relative: (manifest_path.parent / relative).read_bytes()))
-`, manifestPath], { encoding: 'utf8' }).trim();
-await writeFile(manifestPath, manifestText.replace(`"digest": "${manifest.content_lock.digest}"`, `"digest": "${locked}"`));

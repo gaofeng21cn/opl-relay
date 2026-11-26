@@ -11,7 +11,7 @@ from codex_mail_workbench import cli
 def run_setup(tmp_path: Path, *args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     root = Path(__file__).resolve().parents[1]
-    env["PYTHONPATH"] = str(root / "plugins" / "opl-relay" / "runtime")
+    env["PYTHONPATH"] = str(root / "runtime")
     env["OPL_PROFILE_WORKSPACE"] = str(tmp_path / "profile")
     return subprocess.run(
         [sys.executable, "-m", "codex_mail_workbench.cli", "--json", *args],

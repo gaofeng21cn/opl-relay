@@ -26,11 +26,17 @@
     "pyproject.toml"
   ],
   "owned_by_repo": [
+    "opl-package.json",
+    "assets/**",
+    "bin/**",
     "contracts/**",
-    "plugins/opl-relay/**",
-    "workbench/**",
+    "openclaw/**",
+    "runtime/**",
     "scripts/**",
-    "tests/**"
+    "skills/**",
+    "tests/**",
+    "workbench/**",
+    "workbench-dist/**"
   ],
   "plugin_native_status": "profile_declared",
   "repo_id": "opl-relay",

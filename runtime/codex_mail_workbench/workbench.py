@@ -442,7 +442,7 @@ class Workbench:
 
 
 def bundle_root():
-    return Path(__file__).resolve().parents[2] / "workbench"
+    return Path(__file__).resolve().parents[2] / "workbench-dist"
 
 
 def connection_config(*, host="generic", output=None):
