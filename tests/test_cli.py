@@ -867,3 +867,29 @@ def test_cli_draft_reply_all_routes_exact_apple_mail_tuple(
         "attachments": [],
         "visible": False,
     }
+
+
+def test_bin_opl_relay_launcher_does_not_write_pycache(tmp_path: Path) -> None:
+    import shutil
+
+    pkg = tmp_path / "pkg"
+    (pkg / "bin").mkdir(parents=True)
+    shutil.copy2(Path(__file__).resolve().parents[1] / "bin" / "opl-relay", pkg / "bin" / "opl-relay")
+    shutil.copytree(
+        Path(__file__).resolve().parents[1] / "runtime",
+        pkg / "runtime",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+
+    env = os.environ.copy()
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    result = subprocess.run(
+        [sys.executable, str(pkg / "bin" / "opl-relay"), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert list((pkg / "runtime").rglob("__pycache__")) == []
