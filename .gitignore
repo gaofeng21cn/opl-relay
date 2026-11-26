@@ -33,8 +33,10 @@ sync-state/
 *.sqlite-wal
 
 # Local development artifacts.
+.venv/
 .worktrees/
 dist/
 build/
 *.egg-info/
 node_modules/
+opl-release.lock.json

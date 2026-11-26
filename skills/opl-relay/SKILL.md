@@ -43,7 +43,7 @@ opl-relay --json account check --account work --connect
 `account add` writes only IMAP metadata. `credential set` reads a password
 interactively (or from stdin with `--secret-stdin`) and stores it in macOS
 login Keychain. An optional account-level System-keychain fallback is documented
-in [the local profile guide](../../../../docs/local-profile.md); credential
+in [the local profile guide](../../docs/local-profile.md); credential
 rotation must update both copies. Never put a password in a prompt, JSON input, command argument, or
 Profile Workspace file. The optional `--connect` check is the first network
 operation. When it succeeds, use `sync` and inspect the local evidence.
@@ -58,7 +58,7 @@ the existing exact-reference move contract; it requests no mail-send permission.
 Tokens remain in Keychain; Graph uses the same Relay store, review queue and
 active/history scopes. Background OAuth renewal is automatic. Server-draft
 commands support Graph and IMAP; users may review on their synchronized phone.
-See [Microsoft setup](../../../../docs/local-profile.md#hotmail-and-outlookcom).
+See [Microsoft setup](../../docs/local-profile.md#hotmail-and-outlookcom).
 
 Routine operations reuse configured credentials and renew OAuth automatically.
 Do not request passwords or run `credential set`/`account login` before each
@@ -72,7 +72,7 @@ Relay owns shared mail-management records and execution checks, not a parallel
 mail client. Himalaya is the sole backend for IMAP transport, MIME reads, draft
 creation and mail writes. There is no built-in transport fallback. Keep its credentials and account config behind Relay's adapter; do
 not bypass exact references, approval or readback by issuing native tool writes.
-See [backend setup](../../../../docs/local-profile.md#mature-mail-backend).
+See [backend setup](../../docs/local-profile.md#mature-mail-backend).
 
 ## Stable Capabilities
 

@@ -106,7 +106,7 @@ def _ensure_runtime_dependencies() -> None:
         return
 
     script = str(Path(__file__).resolve())
-    repo_root = PACKAGE_ROOT.parent.parent
+    repo_root = PACKAGE_ROOT
     local_venv_python = repo_root / ".venv" / "bin" / "python"
     if (
         os.environ.get("_OPL_RELAY_VENV_REEXEC") != "1"

@@ -1,6 +1,5 @@
 import hashlib
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 from codex_mail_workbench import cli
@@ -74,24 +73,24 @@ def test_export_promote_and_link_preserve_evidence_without_writing_body(tmp_path
     assert len(json.loads(export.read_text())["memories"]) == 1
 
 
-def test_adapter_passes_profile_project_and_private_dependency_shape(tmp_path, monkeypatch):
+def test_adapter_uses_v2_workspace_cli_and_verifies_dependency_digests(tmp_path, monkeypatch):
     calls = []
-    dependency_path = None
+    digest = "sha256:" + "a" * 64
 
     def run(command, **kwargs):
-        nonlocal dependency_path
         calls.append(command)
-        assert command[:2] == ["node", "framework.js"]
-        assert command[command.index("--workspace") + 1] == str(tmp_path)
-        assert command[command.index("--project") + 1] == str(tmp_path / "project")
-        assert command[command.index("--domain") + 1] == "relay"
+        assert command[:3] == ["node", "framework.js", "workspace"]
         assert kwargs["check"] is False and "shell" not in kwargs
-        dependency_path = Path(command[command.index("--dependencies") + 1])
-        assert json.loads(dependency_path.read_text()) == [{"knowledge_id": "owner.mail", "sha256": "sha256:" + "a" * 64}]
-        assert dependency_path.stat().st_mode & 0o077 == 0
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"knowledge_dependencies": {"valid": True, "issues": []}}))
+        if command[3] == "list":
+            return SimpleNamespace(returncode=0, stdout=json.dumps({
+                "workspaces": [{"workspace_id": "ws-relay", "root_path": str(tmp_path / "project")}]
+            }))
+        assert command[3:7] == ["sources", "list", "--workspace", "ws-relay"]
+        return SimpleNamespace(returncode=0, stdout=json.dumps({
+            "sources": [{"knowledge_id": "owner.mail", "source_id": "profile", "source_ref": "policies/mail.md", "sha256": digest}]
+        }))
 
     monkeypatch.setattr("codex_mail_workbench.knowledge.subprocess.run", run)
     owner = FrameworkKnowledge(tmp_path, tmp_path / "project", command=["node", "framework.js"])
-    assert owner.verify_dependencies({"owner.mail": "sha256:" + "a" * 64})["valid"]
-    assert dependency_path is not None and not dependency_path.exists()
+    assert owner.verify_dependencies({"owner.mail": digest})["valid"]
+    assert len(calls) == 2

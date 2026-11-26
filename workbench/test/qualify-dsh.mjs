@@ -16,7 +16,7 @@ const [{ Context }, prompt, tools, native, resources, client] = await Promise.al
 ]);
 const profile = await mkdtemp(join(tmpdir(), 'relay-dsh-profile-'));
 const env = { ...process.env, OPL_PROFILE_WORKSPACE: profile };
-const cli = resolve(process.argv[3] || '../plugins/opl-relay/bin/opl-relay');
+const cli = resolve(process.argv[3] || '../bin/opl-relay');
 const config = spawnSync('python3', [cli, '--json', 'workbench', 'connection', '--host', 'dsh', '--output', join(profile, 'bundle')], { env, encoding: 'utf8' });
 assert.equal(config.status, 0, config.stderr);
 const seeded = spawnSync('python3', ['test/seed_profile.py', profile], { encoding: 'utf8' });

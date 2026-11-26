@@ -25,8 +25,8 @@ dev = [
 opl-relay = "codex_mail_workbench.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["plugins/opl-relay/runtime/codex_mail_workbench"]
+packages = ["runtime/codex_mail_workbench"]
 
 [tool.pytest.ini_options]
-pythonpath = ["plugins/opl-relay/runtime"]
+pythonpath = ["runtime"]
 testpaths = ["tests"]

@@ -3,7 +3,7 @@ import sys
 from email.message import EmailMessage
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "plugins" / "opl-relay" / "runtime"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "runtime"))
 from codex_mail_workbench.store import connect_email_store, upsert_email_message
 
 

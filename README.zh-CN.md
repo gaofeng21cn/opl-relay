@@ -134,7 +134,7 @@ codex plugin add opl-relay@opl-relay --json
 
 ## 在 OpenClaw 中使用
 
-同一份插件载体也包含 [OpenClaw 邮件接入说明](plugins/opl-relay/openclaw/SKILL.md)。
+同一份安装包也包含 [OpenClaw 邮件接入说明](openclaw/SKILL.md)。
 在 OpenClaw 的本机 Skill 中指定已安装 Relay 载体里的可执行文件和当前数字分身工作空间。
 OpenClaw 负责微信等对话入口；邮件库、处理进度和草稿操作仍由 Relay 统一维护。
 日常使用不需要依赖源码仓库，也不需要另装一套 IMAP 插件。

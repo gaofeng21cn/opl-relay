@@ -188,8 +188,13 @@ class _AppContributionEnvelope(BaseModel):
 
     schema_version: Literal["opl-package-app-contribution-request.v1"]
     operation: Literal["describe", "read", "execute"]
-    ref: NonEmptyStr
+    package_id: NonEmptyStr | None = None
+    ref: NonEmptyStr | None = None
+    action_id: NonEmptyStr | None = None
     input: Any = None
+    payload: Any = None
+    dry_run: bool | None = None
+    mode: NonEmptyStr | None = None
 
 
 def _unwrap_optional(annotation: Any) -> tuple[Any, list[Any]]:
@@ -846,14 +851,18 @@ def cmd_app_contribution(args: Any) -> int:
             envelope = _AppContributionEnvelope.model_validate(raw_request)
         except ValidationError as exc:
             raise ValueError(_format_validation_error(exc)) from None
-        ref = envelope.ref
+        if envelope.package_id is not None and envelope.package_id != "opl-relay":
+            raise ValueError("package_id does not match opl-relay")
         operation = envelope.operation
+        ref = envelope.ref or (envelope.action_id if operation == "execute" else None)
+        if not ref:
+            raise ValueError("ref is required")
         data_contract = APP_CONTRIBUTION_DATA_CONTRACTS.get(ref)
         action_contract = APP_CONTRIBUTION_ACTION_CONTRACTS.get(ref)
         if data_contract is None and action_contract is None:
             raise ValueError("ref is not declared by this package")
         if operation == "describe":
-            if "input" in raw_request:
+            if "input" in raw_request or "payload" in raw_request:
                 raise ValueError("describe does not accept input")
             cli.emit(
                 _app_contribution_response(
@@ -883,13 +892,29 @@ def cmd_app_contribution(args: Any) -> int:
             if spec is None:
                 raise ValueError(f"{ref} does not support {operation}")
             model_cls = spec[0]
-        raw_input = {} if envelope.input is None else envelope.input
+        if envelope.input is not None and envelope.payload is not None:
+            raise ValueError("provide input or payload, not both")
+        raw_input = (
+            envelope.input
+            if envelope.input is not None
+            else ({} if envelope.payload is None else envelope.payload)
+        )
         if not isinstance(raw_input, dict):
             raise ValueError("input must be an object")
         try:
             validated = model_cls.model_validate(raw_input)
         except ValidationError as exc:
             raise ValueError(_format_validation_error(exc)) from None
+        if operation == "execute" and (envelope.dry_run is True or envelope.mode == "preview"):
+            cli.emit(
+                _app_contribution_response(
+                    ref,
+                    operation,
+                    {"dry_run": True, "status": "preview", "action_id": ref},
+                ),
+                as_json=True,
+            )
+            return 0
         result = (
             _dispatch_data(args, ref, validated)
             if operation == "read"
@@ -898,6 +923,10 @@ def cmd_app_contribution(args: Any) -> int:
         cli.emit(_app_contribution_response(ref, operation, result), as_json=True)
         return 0
     except Exception as exc:
-        ref = raw_request["ref"] if isinstance(raw_request, dict) and isinstance(raw_request.get("ref"), str) else None
+        ref = None
+        if isinstance(raw_request, dict):
+            candidate = raw_request.get("ref") or raw_request.get("action_id")
+            if isinstance(candidate, str):
+                ref = candidate
         cli.emit(_app_contribution_error(ref, "invalid_request", str(exc)), as_json=True)
         return 2

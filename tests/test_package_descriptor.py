@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import subprocess
@@ -10,12 +9,11 @@ from codex_mail_workbench.workspace import initialize_workspace
 
 
 ROOT = Path(__file__).parents[1]
-PLUGIN_ROOT = ROOT / "plugins" / "opl-relay"
-PACKAGE_PATH = PLUGIN_ROOT / "opl-package.json"
+PACKAGE_PATH = ROOT / "opl-package.json"
 LEGACY_PACKAGE_PATH = ROOT / "packages" / "opl-relay" / "package.json"
-PLUGIN_PATH = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
-ICON_PATH = PLUGIN_ROOT / "assets" / "icon.png"
-SKILL_PATH = PLUGIN_ROOT / "skills" / "opl-relay" / "SKILL.md"
+LEGACY_PLUGIN_DIR = ROOT / "plugins" / "opl-relay"
+ICON_PATH = ROOT / "assets" / "icon.png"
+SKILL_PATH = ROOT / "skills" / "opl-relay" / "SKILL.md"
 
 CAPABILITY_IDS = {
     "communications.mail.v1",
@@ -23,7 +21,7 @@ CAPABILITY_IDS = {
     "personal.memory.v1",
     "knowledge.obsidian.v1",
 }
-VIEW_TYPES = {"list_detail", "timeline", "approval_diff"}
+VIEW_TYPES = {"list_detail", "activity_log", "approval_diff"}
 ACTION_REFS = {
     "communications.mail.v1#workbench.open",
     "communications.mail.v1#sync.incremental",
@@ -50,168 +48,123 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_package_identity_capabilities_and_plugin_version_are_aligned() -> None:
+def test_package_identity_capabilities_and_version_are_aligned() -> None:
     package = load_json(PACKAGE_PATH)
-    plugin = load_json(PLUGIN_PATH)
-    standard_plugin = load_json(PLUGIN_ROOT / "plugin.json")
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert package["surface_kind"] == "opl_capability_package_manifest.v2"
-    assert package["package_id"] == "opl-relay"
-    assert package["package_role"] == "capability_package"
-    assert (
-        package["version"]
-        == plugin["version"]
-        == standard_plugin["version"]
-        == project["project"]["version"]
-        == __version__
-    )
+    assert package["schema_version"] == "opl.package.v2"
+    identity = package["identity"]
+    assert identity["id"] == "opl-relay"
+    assert identity["intent"] == "app"
+    assert identity["version"] == project["project"]["version"] == __version__
+    assert identity["license"] == "Apache-2.0"
     assert set(project["project"]["scripts"]) == {"opl-relay"}
-    assert set(package["exports"]["core_module_ids"]) == CAPABILITY_IDS
-    assert package["exports"]["core_skill_ids"] == ["opl-relay"]
-    assert package["connect_skill_sync_policy"] == {
-        "default_scope": "codex",
-        "allowed_scopes": ["codex"],
-        "implicit_without_target": "require_target",
-    }
-    assert package["codex_surface"]["plugin_id"] == plugin["name"] == "opl-relay"
-    assert package["codex_surface"]["configured_codex_plugin_carrier"] == {
-        "kind": "codex_plugin_manager",
-        "plugin_selector": "opl-relay@opl-relay",
-        "executor_route": "codex_cli",
-        "marketplace_source": "gaofeng21cn/opl-relay",
-        "publication_ref": "ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable",
-    }
+
+    provides = package["provides"]
+    assert provides["cli_bin"] == [{"name": "opl-relay", "path": "./bin/opl-relay"}]
+    assert [s["id"] for s in provides["skills"]] == ["opl-relay", "codex-mail-workbench"]
+    for s in provides["skills"]:
+        assert (ROOT / s["path"] / "SKILL.md").is_file()
+    assert provides["mcp_servers"] == [
+        {
+            "id": "mail-workbench",
+            "transport": "stdio",
+            "command": "node",
+            "args": ["./workbench-dist/server.mjs"],
+        }
+    ]
+    assert provides["connection_providers"][0]["provider_type"] == "opl-relay.mailbox"
+    assert provides["connection_providers"][0]["entrypoint"]["argv"] == ["./bin/opl-relay", "--json", "connect"]
+    assert [c["id"] for c in provides["connection_providers"][0]["capabilities"]] == [
+        "mailbox.search",
+        "mailbox.read",
+        "draft.create",
+    ]
+    assert package["host_hints"]["codex"]["sync_enabled"] is True
+    assert package["host_hints"]["codex"]["plugin_name"] == "opl-relay"
+    assert package["distribution"]["oci"] == "ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay"
 
     skill = SKILL_PATH.read_text(encoding="utf-8")
     assert all(capability_id in skill for capability_id in CAPABILITY_IDS)
-    assert "app_contributions" not in plugin
 
 
-def test_package_descriptor_has_one_carrier_root_authority() -> None:
+def test_package_descriptor_has_one_root_authority_and_zero_mirrors() -> None:
     assert PACKAGE_PATH.is_file()
     assert not LEGACY_PACKAGE_PATH.exists()
-
-
-def test_package_content_lock_matches_plugin_bytes() -> None:
-    package = load_json(PACKAGE_PATH)
-    content_lock = package["content_lock"]
-    digest = hashlib.sha256()
-
-    assert content_lock["algorithm"] == "sha256"
-    assert content_lock["canonicalization"] == "ordered_path_length_file_length_bytes"
-    assert "opl-package.json" not in content_lock["paths"]
-    assert "runtime/codex_mail_workbench/people.py" in content_lock["paths"]
-    assert {"mcp.json", "runtime/codex_mail_workbench/workbench.py", "workbench/server.mjs",
-            "workbench/index.html", "workbench/THIRD_PARTY_NOTICES.txt"} <= set(content_lock["paths"])
-    for relative_path in content_lock["paths"]:
-        path_bytes = relative_path.encode("utf-8")
-        file_bytes = (PLUGIN_ROOT / relative_path).read_bytes()
-        digest.update(len(path_bytes).to_bytes(8, "big"))
-        digest.update(path_bytes)
-        digest.update(len(file_bytes).to_bytes(8, "big"))
-        digest.update(file_bytes)
-
-    assert content_lock["digest"] == f"sha256:{digest.hexdigest()}"
+    assert not LEGACY_PLUGIN_DIR.exists()
+    assert not (ROOT / ".codex-plugin").exists()
+    assert not (ROOT / ".agents" / "plugins" / "marketplace.json").exists()
+    assert not (ROOT / "plugin.json").exists()
+    assert (ROOT / "workbench-dist" / "server.mjs").is_file()
+    assert (ROOT / "workbench-dist" / "index.html").is_file()
+    assert (ROOT / "workbench-dist" / "THIRD_PARTY_NOTICES.txt").is_file()
 
 
 def test_plugin_default_prompts_fit_codex_limits() -> None:
-    plugin = load_json(PLUGIN_PATH)
-    interface = plugin["interface"]
-    prompts = interface["defaultPrompt"]
+    package = load_json(PACKAGE_PATH)
+    prompts = package["identity"]["default_prompts"]
     assert isinstance(prompts, list) and 1 <= len(prompts) <= 3
     assert all(isinstance(prompt, str) and 0 < len(prompt) <= 128 for prompt in prompts)
 
 
-def test_plugin_uses_family_brand_artwork() -> None:
-    plugin = load_json(PLUGIN_PATH)
-    interface = plugin["interface"]
+def test_package_uses_family_brand_artwork() -> None:
+    package = load_json(PACKAGE_PATH)
     icon = ICON_PATH.read_bytes()
 
-    assert interface["composerIcon"] == "./assets/icon.png"
-    assert interface["logo"] == "./assets/icon.png"
-    assert interface["websiteURL"] == "https://github.com/gaofeng21cn/opl-relay"
-    assert interface["brandColor"] == "#1260E8"
+    assert package["identity"]["icon"] == "assets/icon.png"
+    assert package["identity"]["repository"] == "https://github.com/gaofeng21cn/opl-relay"
+    assert package["host_hints"]["codex"]["brand_color"] == "#1260E8"
     assert icon.startswith(b"\x89PNG\r\n\x1a\n")
     assert icon == (ROOT / "assets/branding/opl-relay-logo.png").read_bytes()
-    assert "assets/icon.png" in load_json(PACKAGE_PATH)["content_lock"]["paths"]
 
 
 def test_app_contributions_are_role_neutral_and_reference_existing_cli_actions() -> None:
-    contributions = load_json(PACKAGE_PATH)["app_contributions"]
-    abi = load_json(PACKAGE_PATH)["codex_surface"]["app_contribution_abi"]
+    package = load_json(PACKAGE_PATH)
+    declarative = package["ui"]["declarative"]
+    handler = package["provides"]["contribution_handler"]
 
-    assert contributions["schema_version"] == "opl-app-contributions.v1"
-    assert set(contributions) <= {
-        "schema_version",
-        "navigation",
-        "views",
-        "commands",
-        "badges",
-        "ui",
-    }
-
-    navigation_ids = [item["navigation_id"] for item in contributions["navigation"]]
-    view_ids = [item["view_id"] for item in contributions["views"]]
-    command_ids = [item["command_id"] for item in contributions["commands"]]
-    assert len(navigation_ids) == len(set(navigation_ids))
+    nav_ids = [item["id"] for item in declarative["navigation"]]
+    view_ids = [item["id"] for item in declarative["views"]]
+    assert len(nav_ids) == len(set(nav_ids))
     assert len(view_ids) == len(set(view_ids))
-    assert len(command_ids) == len(set(command_ids))
+    assert {item["view_id"] for item in declarative["navigation"]} <= set(view_ids)
+    assert {item["view_type"] for item in declarative["views"]} == VIEW_TYPES
+    assert {item["data_ref"] for item in declarative["views"]} == DATA_REFS
 
-    assert {item["view_type"] for item in contributions["views"]} == VIEW_TYPES
-    assert {item["view_id"] for item in contributions["navigation"]} <= set(view_ids)
-    assert {
-        command_id
-        for view in contributions["views"]
-        for command_id in view.get("command_ids", [])
-    } <= set(command_ids)
-    assert {item["action_ref"] for item in contributions["commands"]} == ACTION_REFS
-    assert {item["data_ref"] for item in contributions["views"]} == DATA_REFS
-    assert {item["view_id"] for item in contributions["ui"]} == set(view_ids)
-    assert len({item["contribution_id"] for item in contributions["ui"]}) == len(view_ids)
-    for entry in contributions["ui"]:
-        assert set(entry) == {
-            "contribution_id", "slot", "contribution_kind", "trust_tier",
-            "scope", "view_id", "sort_order",
-        }
-        assert entry["slot"] == "settings.section"
-        assert entry["contribution_kind"] == "view"
-        assert entry["trust_tier"] == "declarative"
-        assert entry["scope"] == "root"
-    views_by_id = {item["view_id"]: item for item in contributions["views"]}
+    actions_by_ref = {
+        action["action_ref"]: action
+        for view in declarative["views"]
+        for action in view.get("actions", [])
+    }
+    assert set(actions_by_ref) == ACTION_REFS
+    assert all(view["slot"] == "workbench.panel" for view in declarative["views"])
+
+    views_by_id = {item["id"]: item for item in declarative["views"]}
     assert views_by_id["relay.people"]["view_type"] == "list_detail"
     assert views_by_id["relay.people"]["data_ref"] == "personal.memory.v1#people"
-    assert views_by_id["relay.memory"]["view_type"] == "timeline"
+    assert views_by_id["relay.memory"]["view_type"] == "activity_log"
     assert views_by_id["relay.memory"]["data_ref"] == "personal.memory.v1#search"
-    assert abi == {
-        "schema_version": "opl-package-app-contribution-cli.v1",
-        "transport": "stdin_json_stdout_json",
+
+    assert handler == {
+        "kind": "cli",
         "argv": ["./bin/opl-relay", "--json", "app-contribution"],
-        "request_schema": "opl-package-app-contribution-request.v1",
-        "response_schema": "opl-package-app-contribution-response.v1",
+        "transport": "stdin_json_stdout_json",
     }
-    assert abi["argv"][0].startswith("./bin/")
-    commands_by_id = {
-        item["command_id"]: item for item in contributions["commands"]
-    }
-    assert commands_by_id["relay.draft.send"]["confirmation_required"] is True
-    assert commands_by_id["relay.draft.create-from-persona"]["confirmation_required"] is True
-    assert commands_by_id["relay.draft.reply-all"]["action_ref"] == (
-        "communications.mail.v1#draft.reply_all"
-    )
+    assert actions_by_ref["communications.mail.v1#draft.send"]["confirm"] is True
+    assert actions_by_ref["communications.mail.v1#draft.create_from_persona"]["confirm"] is True
     assert all(
-        "confirmation_required" not in command
-        for command_id, command in commands_by_id.items()
-        if command_id not in {"relay.draft.send", "relay.draft.create-from-persona"}
+        action.get("confirm", False) is False
+        for ref, action in actions_by_ref.items()
+        if ref not in {"communications.mail.v1#draft.send", "communications.mail.v1#draft.create_from_persona"}
     )
+    assert package["ui"]["mcp_apps"][0]["mcp_server_id"] == "mail-workbench"
 
-    serialized = json.dumps(contributions)
+    serialized = json.dumps(declarative)
     assert "standard_agent" not in serialized
-    assert not ({"component", "code", "path", "url"} & set(contributions))
 
 
-def test_app_contribution_abi_executes_from_the_plugin_carrier(tmp_path: Path) -> None:
-    abi = load_json(PACKAGE_PATH)["codex_surface"]["app_contribution_abi"]
+def test_app_contribution_abi_executes_from_package_root(tmp_path: Path) -> None:
+    handler = load_json(PACKAGE_PATH)["provides"]["contribution_handler"]
     profile_workspace = tmp_path / "profile"
     initialize_workspace(profile_workspace)
 
@@ -219,12 +172,13 @@ def test_app_contribution_abi_executes_from_the_plugin_carrier(tmp_path: Path) -
     env.pop("PYTHONPATH", None)
     env["OPL_PROFILE_WORKSPACE"] = str(profile_workspace)
     result = subprocess.run(
-        abi["argv"],
-        cwd=PLUGIN_ROOT,
+        handler["argv"],
+        cwd=ROOT,
         input=json.dumps(
             {
                 "schema_version": "opl-package-app-contribution-request.v1",
                 "operation": "read",
+                "package_id": "opl-relay",
                 "ref": "communications.mail.v1#recent",
                 "input": {},
             }
@@ -247,30 +201,13 @@ def test_app_contribution_abi_executes_from_the_plugin_carrier(tmp_path: Path) -
     assert response["result"]["data"]["items"] == []
 
 
-def test_repo_marketplace_exposes_the_plugin_without_owning_user_data() -> None:
-    marketplace = load_json(ROOT / ".agents" / "plugins" / "marketplace.json")
-    assert marketplace["name"] == "opl-relay"
-    assert marketplace["interface"]["displayName"] == "OPL Relay"
-    assert marketplace["plugins"] == [
-        {
-            "name": "opl-relay",
-            "source": {"source": "local", "path": "./plugins/opl-relay"},
-            "policy": {
-                "installation": "AVAILABLE",
-                "authentication": "ON_INSTALL",
-            },
-            "category": "Productivity",
-        }
-    ]
-
-
 def test_launcher_falls_back_to_uv_when_repo_venv_lacks_dependencies(tmp_path: Path) -> None:
     import shutil
     import sys
 
     repo = tmp_path / "repo"
-    launcher = repo / "plugins" / "opl-relay" / "bin" / "opl-relay"
-    runtime_dir = repo / "plugins" / "opl-relay" / "runtime"
+    launcher = repo / "bin" / "opl-relay"
+    runtime_dir = repo / "runtime"
     venv_python = repo / ".venv" / "bin" / "python"
     fake_bin = tmp_path / "bin"
     fake_uv = fake_bin / "uv"
@@ -283,7 +220,7 @@ def test_launcher_falls_back_to_uv_when_repo_venv_lacks_dependencies(tmp_path: P
     fake_bin.mkdir(parents=True)
     sitecustomize.parent.mkdir(parents=True)
 
-    shutil.copy2(PLUGIN_ROOT / "bin" / "opl-relay", launcher)
+    shutil.copy2(ROOT / "bin" / "opl-relay", launcher)
     launcher.chmod(0o755)
 
     # Simulate a stale .venv missing required dependencies like typer.
@@ -376,8 +313,8 @@ def test_launcher_rejects_incompatible_pydantic_v1_in_venv_and_current_interpret
         return
 
     repo = tmp_path / "repo"
-    launcher = repo / "plugins" / "opl-relay" / "bin" / "opl-relay"
-    runtime_dir = repo / "plugins" / "opl-relay" / "runtime"
+    launcher = repo / "bin" / "opl-relay"
+    runtime_dir = repo / "runtime"
     venv_python = repo / ".venv" / "bin" / "python"
     fake_bin = tmp_path / "bin"
     fake_uv = fake_bin / "uv"
@@ -389,7 +326,7 @@ def test_launcher_rejects_incompatible_pydantic_v1_in_venv_and_current_interpret
     runtime_dir.mkdir(parents=True)
     venv_python.parent.mkdir(parents=True)
     fake_bin.mkdir(parents=True)
-    shutil.copy2(PLUGIN_ROOT / "bin" / "opl-relay", launcher)
+    shutil.copy2(ROOT / "bin" / "opl-relay", launcher)
     launcher.chmod(0o755)
 
     for pkg, ver in (("httpx", "0.28.1"), ("msal", "1.31.1"), ("pydantic", "1.10.18"), ("typer", "0.15.2")):

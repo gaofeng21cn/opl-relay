@@ -18,9 +18,10 @@ from test_drafts import registered_service
 from test_triage import seed_message
 
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "plugins" / "opl-relay"
-PACKAGE = json.loads((PLUGIN_ROOT / "opl-package.json").read_text())
-REQUEST_SCHEMA = PACKAGE["codex_surface"]["app_contribution_abi"]["request_schema"]
+ROOT = Path(__file__).resolve().parents[1]
+PACKAGE = json.loads((ROOT / "opl-package.json").read_text())
+CONTRIBUTION_ARGV = PACKAGE["provides"]["contribution_handler"]["argv"]
+REQUEST_SCHEMA = "opl-package-app-contribution-request.v1"
 
 
 def invoke(profile: Path, ref: str, *, operation: str = "read", payload=None):
@@ -31,7 +32,7 @@ def invoke(profile: Path, ref: str, *, operation: str = "read", payload=None):
     env.pop("PYTHONPATH", None)
     env["OPL_PROFILE_WORKSPACE"] = str(profile)
     process = subprocess.run(
-        PACKAGE["codex_surface"]["app_contribution_abi"]["argv"], cwd=PLUGIN_ROOT,
+        CONTRIBUTION_ARGV, cwd=ROOT,
         env=env, input=json.dumps(request), capture_output=True, text=True, check=False,
     )
     assert process.stderr == ""
@@ -73,19 +74,16 @@ def test_ui_entries_discover_people_and_evidence_from_descriptor(tmp_path: Path)
     profile = tmp_path / "profile"
     store, entity, memories = seed(profile)
     before = store.path.read_bytes()
-    contributions = PACKAGE["app_contributions"]
-    commands = {item["command_id"]: item for item in contributions["commands"]}
-    views = {item["view_id"]: item for item in contributions["views"]}
-    mounted = [views[entry["view_id"]] for entry in contributions["ui"]
-               if entry["slot"] == "settings.section" and entry["contribution_kind"] == "view"]
+    views = PACKAGE["ui"]["declarative"]["views"]
+    mounted = [view for view in views if view["slot"] == "workbench.panel"]
     memory_views = [view for view in mounted if view["data_ref"].startswith("personal.memory.v1#")]
-    assert {view["view_type"] for view in memory_views} == {"list_detail", "timeline"}
+    assert {view["view_type"] for view in memory_views} == {"list_detail", "activity_log"}
     for view in memory_views:
         code, response = invoke(profile, view["data_ref"], payload={"limit": 1})
         assert code == 0
         result = response["result"]
         assert result["kind"] == "data" and result["state"] == "ready"
-        allowed_refs = {commands[identifier]["action_ref"] for identifier in view["command_ids"]}
+        allowed_refs = {action["action_ref"] for action in view.get("actions", [])}
         assert set(result["data"]["command_inputs"]) == allowed_refs
         if view["data_ref"] == "personal.memory.v1#people":
             assert result["data"]["count"] == 1
@@ -110,7 +108,7 @@ def test_ui_entries_discover_people_and_evidence_from_descriptor(tmp_path: Path)
     assert code == 0
     assert result["result"]["data"]["items"] == []
     code, inspected = invoke(
-        profile, commands["relay.memory.inspect"]["action_ref"],
+        profile, "personal.memory.v1#inspect",
         operation="execute", payload={"memory_ref": memories[0]["memory_ref"]},
     )
     assert code == 0
@@ -163,8 +161,7 @@ def test_people_query_and_candidate_inspection_are_separate(tmp_path: Path):
 
 
 def test_every_read_view_supplies_only_descriptor_declared_command_schemas(tmp_path: Path):
-    commands = {item["command_id"]: item for item in PACKAGE["app_contributions"]["commands"]}
-    for view in PACKAGE["app_contributions"]["views"]:
+    for view in PACKAGE["ui"]["declarative"]["views"]:
         code, response = invoke(tmp_path / "missing-profile", view["data_ref"])
         assert code == 0
         result = response["result"]
@@ -172,7 +169,7 @@ def test_every_read_view_supplies_only_descriptor_declared_command_schemas(tmp_p
         assert result["state"] in {"ready", "input_required"}
         assert result["data"]["items"] == []
         assert set(result["input_schema"]) == set(APP_CONTRIBUTION_DATA_CONTRACTS[view["data_ref"]]["input"])
-        allowed_refs = {commands[identifier]["action_ref"] for identifier in view["command_ids"]}
+        allowed_refs = {action["action_ref"] for action in view.get("actions", [])}
         metadata = result["data"]["command_inputs"]
         assert set(metadata) == allowed_refs
         for ref, schema in metadata.items():
@@ -308,13 +305,13 @@ def test_plain_memory_search_cli_keeps_its_non_app_interface(tmp_path: Path):
     _, _, memories = seed(profile)
     env = os.environ.copy()
     env["OPL_PROFILE_WORKSPACE"] = str(profile)
-    process = subprocess.run([str(PLUGIN_ROOT / "bin" / "opl-relay"), "--json", "memory", "search"],
+    process = subprocess.run([str(ROOT / "bin" / "opl-relay"), "--json", "memory", "search"],
                              input="", capture_output=True, text=True, check=False, env=env)
     assert process.returncode == 0, process.stderr
     payload = json.loads(process.stdout)
     assert payload["ok"] is True
     assert payload["memories"] == []
-    process = subprocess.run([str(PLUGIN_ROOT / "bin" / "opl-relay"), "--json", "memory", "search", "--include-stale"],
+    process = subprocess.run([str(ROOT / "bin" / "opl-relay"), "--json", "memory", "search", "--include-stale"],
                              input="", capture_output=True, text=True, check=False, env=env)
     assert process.returncode == 0
     inspected = json.loads(process.stdout)["memories"]
@@ -575,3 +572,28 @@ def test_fresh_management_view_retains_unlinked_and_historical_approved_memory(t
     assert {item["memory_ref"] for item in person["review_memories"]} == set(by_ref)
     assert "CANDIDATE FACT" not in json.dumps(response)
     assert store.path.read_bytes() == before
+
+
+def test_opld_contribution_execute_accepts_action_id_payload_and_package_id(tmp_path: Path):
+    profile = tmp_path / "profile"
+    _, _, memories = seed(profile)
+    request = {
+        "schema_version": REQUEST_SCHEMA,
+        "operation": "execute",
+        "package_id": "opl-relay",
+        "action_id": "personal.memory.v1#inspect",
+        "payload": {"memory_ref": memories[0]["memory_ref"]},
+        "dry_run": False,
+    }
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env["OPL_PROFILE_WORKSPACE"] = str(profile)
+    process = subprocess.run(
+        CONTRIBUTION_ARGV, cwd=ROOT, env=env, input=json.dumps(request),
+        capture_output=True, text=True, check=False,
+    )
+    assert process.returncode == 0, process.stderr
+    response = json.loads(process.stdout)
+    assert response["ok"] is True
+    assert response["ref"] == "personal.memory.v1#inspect"
+    assert response["result"]["memory"]["memory_ref"] == memories[0]["memory_ref"]

@@ -151,7 +151,25 @@ def test_cli_connect_reads_and_writes_only_json_stdout(provider):
     command = [sys.executable, "-m", "codex_mail_workbench.cli", "--json", "--config", str(config),
                "--db", str(db), "--draft-db", str(ledger), "connect"]
     result = subprocess.run(command, input=json.dumps(envelope("list")), text=True, capture_output=True, check=False,
-                            env={"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "plugins" / "opl-relay" / "runtime")})
+                            env={"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "runtime")})
     assert result.returncode == 0
     assert result.stderr == ""
     assert json.loads(result.stdout)["ok"] is True
+
+
+def test_v2_invoke_envelope_supports_opld_connect_invoke(provider):
+    service, _, _, _, storage_ref = provider
+    res = service.dispatch({
+        "schema_version": "opl-connect-provider-invoke.v1",
+        "provider_type": "opl-relay.mailbox",
+        "connection": {"connection_id": "conn-work", "account_label": "work"},
+        "secret": "ignored-secret",
+        "consumer_package_id": "opl-relay",
+        "capability_id": "mailbox.search",
+        "invocation_id": "inv-test-1",
+        "input": {"query": "manuscript", "limit": 5},
+    })
+    assert res["ok"] is True
+    assert res["disposition"] == "completed"
+    assert res["result"]["messages"][0]["storage_ref"] == storage_ref
+    assert res["result"]["source"] == "relay-local-cache"

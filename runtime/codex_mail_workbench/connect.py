@@ -11,6 +11,8 @@ from .workbench import Workbench
 
 
 SCHEMA_VERSION = "opl-relay-connect.v1"
+V2_INVOKE_SCHEMA_VERSION = "opl-connect-provider-invoke.v1"
+PROVIDER_TYPE = "opl-relay.mailbox"
 CAPABILITIES = ("mailbox.search", "mailbox.read", "draft.create")
 _SEARCH_FIELDS = {"query", "scope", "folder", "limit"}
 _READ_FIELDS = {"storage_ref"}
@@ -67,6 +69,25 @@ def _account_for_ref(config_path, mailbox_ref: object) -> dict[str, Any]:
     raise ConnectError("MAILBOX_NOT_FOUND", "邮箱连接不存在或已变更")
 
 
+def _account_for_v2_connection(config_path, connection: object) -> dict[str, Any]:
+    if not isinstance(connection, dict):
+        raise ConnectError("INVALID_CREDENTIAL_HANDLE", "连接引用无效")
+    mailboxes = _public_mailboxes(config_path) if config_path.exists() else []
+    account_label = connection.get("account_label")
+    connection_id = connection.get("connection_id")
+    if isinstance(account_label, str) and account_label.strip():
+        label = account_label.strip()
+        for mailbox in mailboxes:
+            if mailbox["account_id"] == label or mailbox["email"] == label:
+                return mailbox
+    if isinstance(connection_id, str) and connection_id.strip():
+        cid = connection_id.strip()
+        for mailbox in mailboxes:
+            if mailbox["account_id"] == cid:
+                return mailbox
+    raise ConnectError("MAILBOX_NOT_FOUND", "邮箱连接不存在或未在 Relay 中配置")
+
+
 class ConnectProvider:
     def __init__(self, *, workbench: Workbench):
         self.workbench = workbench
@@ -75,30 +96,44 @@ class ConnectProvider:
     def dispatch(self, request: object) -> dict[str, Any]:
         dispatched = False
         try:
-            if not isinstance(request, dict) or request.get("schema_version") != SCHEMA_VERSION:
+            if not isinstance(request, dict):
                 raise ConnectError("INVALID_REQUEST", "连接请求无效")
-            operation = request.get("operation")
-            if operation == "list" and set(request) == {"schema_version", "operation"}:
-                return {"ok": True, "disposition": "completed", "result": {"mailboxes": _public_mailboxes(self.config_path)}}
-            if operation == "inspect" and set(request) == {"schema_version", "operation", "mailbox_ref"}:
-                mailbox = _account_for_ref(self.config_path, request["mailbox_ref"])
-                return {"ok": True, "disposition": "completed", "result": {"mailbox": mailbox, "capabilities": list(CAPABILITIES)}}
-            if operation != "invoke" or set(request) != {
-                "schema_version", "operation", "credential_handle", "capability", "input"
-            }:
-                raise ConnectError("INVALID_REQUEST", "连接请求无效")
+            schema_version = request.get("schema_version")
+            if schema_version == V2_INVOKE_SCHEMA_VERSION:
+                provider_type = request.get("provider_type")
+                if provider_type is not None and provider_type != PROVIDER_TYPE:
+                    raise ConnectError("INVALID_REQUEST", "连接请求无效")
+                mailbox = _account_for_v2_connection(self.config_path, request.get("connection"))
+                capability = request.get("capability_id")
+                args = {} if request.get("input") is None else request.get("input")
+                if not isinstance(capability, str) or not isinstance(args, dict):
+                    raise ConnectError("INVALID_ARGUMENTS", "调用参数无效")
+                account_id = mailbox["account_id"]
+            elif schema_version == SCHEMA_VERSION:
+                operation = request.get("operation")
+                if operation == "list" and set(request) == {"schema_version", "operation"}:
+                    return {"ok": True, "disposition": "completed", "result": {"mailboxes": _public_mailboxes(self.config_path)}}
+                if operation == "inspect" and set(request) == {"schema_version", "operation", "mailbox_ref"}:
+                    mailbox = _account_for_ref(self.config_path, request["mailbox_ref"])
+                    return {"ok": True, "disposition": "completed", "result": {"mailbox": mailbox, "capabilities": list(CAPABILITIES)}}
+                if operation != "invoke" or set(request) != {
+                    "schema_version", "operation", "credential_handle", "capability", "input"
+                }:
+                    raise ConnectError("INVALID_REQUEST", "连接请求无效")
 
-            handle = request["credential_handle"]
-            if not isinstance(handle, dict) or set(handle) != {"opaque", "revision"}:
-                raise ConnectError("INVALID_CREDENTIAL_HANDLE", "连接引用无效")
-            mailbox = _account_for_ref(self.config_path, handle["opaque"])
-            if handle["revision"] != mailbox["revision"]:
-                raise ConnectError("STALE_CREDENTIAL_HANDLE", "邮箱连接配置已变更")
-            capability = request["capability"]
-            args = request["input"]
-            if not isinstance(args, dict):
-                raise ConnectError("INVALID_ARGUMENTS", "调用参数无效")
-            account_id = mailbox["account_id"]
+                handle = request["credential_handle"]
+                if not isinstance(handle, dict) or set(handle) != {"opaque", "revision"}:
+                    raise ConnectError("INVALID_CREDENTIAL_HANDLE", "连接引用无效")
+                mailbox = _account_for_ref(self.config_path, handle["opaque"])
+                if handle["revision"] != mailbox["revision"]:
+                    raise ConnectError("STALE_CREDENTIAL_HANDLE", "邮箱连接配置已变更")
+                capability = request["capability"]
+                args = request["input"]
+                if not isinstance(args, dict):
+                    raise ConnectError("INVALID_ARGUMENTS", "调用参数无效")
+                account_id = mailbox["account_id"]
+            else:
+                raise ConnectError("INVALID_REQUEST", "连接请求无效")
 
             if capability == "mailbox.search":
                 if _bad_fields(args, _SEARCH_FIELDS):

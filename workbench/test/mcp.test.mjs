@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { runInNewContext } from 'node:vm';
-import { actions } from '../../plugins/opl-relay/workbench/server.mjs';
+import { actions } from '../../workbench-dist/server.mjs';
 
 test('save rejects oversized attachment arrays before collecting item errors', () => {
   const valid = actions.save.schema.safeParse({
@@ -47,7 +47,7 @@ test('opaque App sandboxes initialize without browser session storage', async ()
 });
 
 test('bundled browser module parses without template replacement corruption', async () => {
-  const html = await readFile('../plugins/opl-relay/workbench/index.html', 'utf8');
+  const html = await readFile('../workbench-dist/index.html', 'utf8');
   const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
   const result = spawnSync(process.execPath, ['--check', '--input-type=module'], { input: script, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
@@ -56,7 +56,7 @@ test('bundled browser module parses without template replacement corruption', as
 test('loopback adapter authenticates data and rejects foreign origins and undeclared operations', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'relay-http-test-'));
   const ready = join(profile, 'ready.json');
-  const child = spawn(process.execPath, ['../plugins/opl-relay/workbench/server.mjs', '--serve', '--ready-file', ready], {
+  const child = spawn(process.execPath, ['../workbench-dist/server.mjs', '--serve', '--ready-file', ready], {
     env: { ...process.env, OPL_PROFILE_WORKSPACE: profile }, stdio: 'ignore',
   });
   const closed = once(child, 'close');
@@ -76,7 +76,7 @@ test('loopback adapter authenticates data and rejects foreign origins and undecl
     assert.equal(health.profile, resolve(profile));
     assert.equal(health.pid, child.pid);
     assert.match(health.bundle_sha256, /^[a-f0-9]{64}$/);
-    assert.equal(health.cli, resolve('../plugins/opl-relay/bin/opl-relay'));
+    assert.equal(health.cli, resolve('../bin/opl-relay'));
     const accounts = await fetch(base + 'api/accounts', { method: 'POST', headers, body: '{}' });
     assert.deepEqual((await accounts.json()).accounts, []);
     const extra = await fetch(base + 'api/accounts', { method: 'POST', headers, body: '{"password":"rejected"}' });
@@ -95,7 +95,7 @@ test('loopback adapter authenticates data and rejects foreign origins and undecl
 
 test('packaged MCP server exposes a standard App without mailbox side effects', async () => {
   const client = new Client({ name: 'relay-protocol-test', version: '1.0.0' }, { capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] } } } });
-  const transport = new StdioClientTransport({ command: 'python3', args: ['../plugins/opl-relay/bin/opl-relay', '--json', 'workbench', 'mcp'] });
+  const transport = new StdioClientTransport({ command: 'python3', args: ['../bin/opl-relay', '--json', 'workbench', 'mcp'] });
   try {
     await client.connect(transport);
     const { tools } = await client.listTools();
@@ -122,7 +122,7 @@ test('ordinary MCP clients open the same workbench and cannot invoke App-only de
   const seeded = spawnSync('python3', ['test/seed_profile.py', profile], { encoding: 'utf8' });
   assert.equal(seeded.status, 0, seeded.stderr);
   const client = new Client({ name: 'ordinary-mcp-host', version: '1.0.0' });
-  const transport = new StdioClientTransport({ command: 'python3', args: ['../plugins/opl-relay/bin/opl-relay', '--json', 'workbench', 'mcp'], env: { ...process.env, OPL_PROFILE_WORKSPACE: profile } });
+  const transport = new StdioClientTransport({ command: 'python3', args: ['../bin/opl-relay', '--json', 'workbench', 'mcp'], env: { ...process.env, OPL_PROFILE_WORKSPACE: profile } });
   let pid;
   try {
     await client.connect(transport);

@@ -158,7 +158,7 @@ Start a new Codex task after installation so the new Plugin snapshot is loaded.
 
 ## Use With OpenClaw
 
-The same installed Plugin carries an [OpenClaw mail adapter](plugins/opl-relay/openclaw/SKILL.md).
+The same installed Package carries an [OpenClaw mail adapter](openclaw/SKILL.md).
 Configure the local OpenClaw Skill with the absolute executable from the
 installed Relay carrier and the selected Profile Workspace. OpenClaw handles
 the conversation channel; Relay remains the only mailbox store, review ledger,
