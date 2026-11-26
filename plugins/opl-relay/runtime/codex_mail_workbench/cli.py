@@ -58,11 +58,14 @@ from .persona import (
 )
 from .store import (
     connect_email_store,
+    connect_email_store_readonly,
     fetch_raw_email_by_storage_ref,
     folder_status,
     get_message_by_storage_ref,
     index_messages,
+    inspect_mail_storage,
     list_messages,
+    prune_mail_storage,
     record_reviews,
     review_pending,
     review_status,
@@ -665,6 +668,72 @@ def cmd_mail_status(
                 "folders": folder_status(conn, account),
                 "counts_are": "last verified provider snapshot, not a live server query",
             },
+            as_json=args.json,
+        )
+    finally:
+        conn.close()
+    return 0
+
+
+@app.command("storage-stats", help="只读统计 mail.sqlite 体积、孤儿/已删正文占比与残留临时目录")
+def cmd_storage_stats(ctx: typer.Context) -> int:
+    args = _state(ctx)
+    db_path = Path(args.db).expanduser()
+    conn = connect_email_store_readonly(db_path)
+    if conn is None:
+        emit(
+            {
+                "ok": True,
+                "db_path": str(db_path),
+                "db_exists": False,
+                "db_size_bytes": 0,
+            },
+            as_json=args.json,
+        )
+        return 0
+    try:
+        emit(
+            inspect_mail_storage(conn, state_dir=default_state_dir(), db_path=db_path),
+            as_json=args.json,
+        )
+    finally:
+        conn.close()
+    return 0
+
+
+@app.command("storage-prune", help="安全清理孤儿邮件正文/临时目录（默认 dry-run，需显式 --execute）")
+def cmd_storage_prune(
+    ctx: typer.Context,
+    execute: Annotated[bool, typer.Option("--execute", help="执行实际清理（默认仅 dry-run 预览）")] = False,
+    include_deleted: Annotated[
+        bool,
+        typer.Option("--include-deleted", help="一并回收超过保留天数且已标记 deleted=1 的历史邮件正文"),
+    ] = False,
+    deleted_retention_days: Annotated[
+        int,
+        typer.Option("--deleted-retention-days", min=0, help="已删除邮件正文的保留天数（默认 30 天）"),
+    ] = 30,
+    vacuum: Annotated[bool, typer.Option("--vacuum", help="清理后执行 SQLite VACUUM 回收磁盘文件体积")] = False,
+) -> int:
+    args = _state(ctx)
+    db_path = Path(args.db).expanduser()
+    if not execute:
+        conn = connect_email_store_readonly(db_path)
+        if conn is None:
+            emit({"ok": True, "dry_run": True, "db_exists": False}, as_json=args.json)
+            return 0
+    else:
+        conn = connect_email_store(db_path)
+    try:
+        emit(
+            prune_mail_storage(
+                conn,
+                state_dir=default_state_dir(),
+                deleted_retention_days=deleted_retention_days,
+                include_deleted=include_deleted,
+                vacuum=vacuum,
+                dry_run=not execute,
+            ),
             as_json=args.json,
         )
     finally:

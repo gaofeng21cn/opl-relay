@@ -10,6 +10,7 @@ import json
 import base64
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -18,6 +19,41 @@ from pathlib import Path
 from .config import keychain_get_secret, load_toml
 from .paths import default_state_dir
 from .folders import normalize_folder
+
+DEFAULT_MAIL_TOOL_STALE_SECONDS = 24 * 60 * 60
+
+
+def prune_stale_mail_tool_dirs(
+    state_dir: Path | None = None,
+    *,
+    max_age_seconds: float = DEFAULT_MAIL_TOOL_STALE_SECONDS,
+    now: float | None = None,
+    dry_run: bool = False,
+) -> list[str]:
+    """Safely prune orphaned mail-tool-* temporary directories older than max_age_seconds."""
+    root = Path(state_dir) if state_dir is not None else default_state_dir()
+    if not root.is_dir() or root.is_symlink():
+        return []
+    current = time.time() if now is None else now
+    removed: list[str] = []
+    try:
+        for entry in sorted(root.iterdir(), key=lambda p: p.name):
+            if not entry.name.startswith("mail-tool-"):
+                continue
+            try:
+                stat = entry.lstat()
+            except OSError:
+                continue
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            if current - stat.st_mtime < max_age_seconds:
+                continue
+            if not dry_run:
+                shutil.rmtree(entry, ignore_errors=True)
+            removed.append(entry.name)
+    except OSError:
+        return removed
+    return removed
 
 
 class NativeError(ValueError):
@@ -77,6 +113,8 @@ class Himalaya:
                 lines.append("imap.starttls = true")
             elif endpoint.security != "ssl":
                 raise NativeError("encrypted_transport_required")
+        # Best-effort cleanup of orphaned mail-tool-* dirs left by killed runs.
+        prune_stale_mail_tool_dirs(default_state_dir())
         # No persistent parallel account config and no credential-bearing file.
         with tempfile.TemporaryDirectory(prefix="mail-tool-", dir=default_state_dir()) as directory:
             path = Path(directory) / "config.toml"
