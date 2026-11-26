@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from .folders import folder_role, folder_slug, normalize_folder
 from .message import extract_text_body
+from .native import DEFAULT_MAIL_TOOL_STALE_SECONDS, prune_stale_mail_tool_dirs
 from .schema import ensure_mail_schema
 
 
@@ -528,3 +529,178 @@ def review_status(conn: sqlite3.Connection, *, account: str) -> dict[str, Any]:
             "reviewed_count": conn.execute("SELECT count(*) FROM mail_reviews WHERE account_id=?", (account,)).fetchone()[0],
             "last_reviewed_at": conn.execute("SELECT max(reviewed_at) FROM mail_reviews WHERE account_id=?", (account,)).fetchone()[0],
             "open_items": [dict(zip(("storage_ref", "action", "status", "note", "reviewed_at", "category", "suggested_folder"), r)) for r in rows]}
+
+
+def inspect_mail_storage(
+    conn: sqlite3.Connection,
+    *,
+    state_dir: Path | None = None,
+    db_path: Path | None = None,
+    stale_mail_tool_seconds: float = DEFAULT_MAIL_TOOL_STALE_SECONDS,
+) -> dict[str, Any]:
+    """Read-only storage breakdown for mail.sqlite and Relay temporary directories."""
+    page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+    page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+    freelist_count = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+    db_size_bytes = db_path.stat().st_size if (db_path and db_path.is_file()) else page_size * page_count
+    message_count = int(conn.execute("SELECT count(*) FROM email_messages").fetchone()[0])
+    live_message_count = int(conn.execute("SELECT count(*) FROM email_messages WHERE present=1 AND deleted=0").fetchone()[0])
+    deleted_message_count = int(conn.execute("SELECT count(*) FROM email_messages WHERE deleted=1").fetchone()[0])
+    not_present_message_count = int(conn.execute("SELECT count(*) FROM email_messages WHERE present=0 AND deleted=0").fetchone()[0])
+    blob_count, blob_total_bytes = conn.execute(
+        "SELECT count(*), coalesce(sum(length(raw_eml)), 0) FROM email_blobs"
+    ).fetchone()
+    orphan_count, orphan_bytes = conn.execute(
+        """
+        SELECT count(*), coalesce(sum(length(b.raw_eml)), 0)
+        FROM email_blobs b
+        WHERE NOT EXISTS (SELECT 1 FROM email_messages m WHERE m.raw_sha256 = b.raw_sha256)
+        """
+    ).fetchone()
+    deleted_only_count, deleted_only_bytes = conn.execute(
+        """
+        SELECT count(*), coalesce(sum(length(b.raw_eml)), 0)
+        FROM email_blobs b
+        WHERE EXISTS (SELECT 1 FROM email_messages m WHERE m.raw_sha256 = b.raw_sha256 AND m.deleted = 1)
+          AND NOT EXISTS (SELECT 1 FROM email_messages m WHERE m.raw_sha256 = b.raw_sha256 AND m.deleted = 0)
+        """
+    ).fetchone()
+    stale_mail_tool_dirs = (
+        prune_stale_mail_tool_dirs(state_dir, max_age_seconds=stale_mail_tool_seconds, dry_run=True)
+        if state_dir is not None
+        else []
+    )
+    return {
+        "ok": True,
+        "db_path": str(db_path) if db_path is not None else None,
+        "db_size_bytes": int(db_size_bytes),
+        "page_size": page_size,
+        "page_count": page_count,
+        "freelist_count": freelist_count,
+        "freelist_bytes": page_size * freelist_count,
+        "message_count": message_count,
+        "live_message_count": live_message_count,
+        "deleted_message_count": deleted_message_count,
+        "not_present_message_count": not_present_message_count,
+        "blob_count": int(blob_count or 0),
+        "blob_total_bytes": int(blob_total_bytes or 0),
+        "orphan_blob_count": int(orphan_count or 0),
+        "orphan_blob_bytes": int(orphan_bytes or 0),
+        "deleted_only_blob_count": int(deleted_only_count or 0),
+        "deleted_only_blob_bytes": int(deleted_only_bytes or 0),
+        "stale_mail_tool_dirs": stale_mail_tool_dirs,
+    }
+
+
+def prune_mail_storage(
+    conn: sqlite3.Connection,
+    *,
+    state_dir: Path | None = None,
+    deleted_retention_days: int = 30,
+    include_deleted: bool = False,
+    vacuum: bool = False,
+    dry_run: bool = True,
+    now: datetime | None = None,
+    stale_mail_tool_seconds: float = DEFAULT_MAIL_TOOL_STALE_SECONDS,
+) -> dict[str, Any]:
+    """Prune orphaned blobs, optional aged deleted messages/blobs, and stale mail-tool-* dirs."""
+    if deleted_retention_days < 0:
+        raise ValueError("deleted_retention_days must be non-negative")
+    current_dt = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff_iso = (current_dt - timedelta(days=deleted_retention_days)).isoformat()
+
+    stale_mail_tool_dirs = (
+        prune_stale_mail_tool_dirs(
+            state_dir,
+            max_age_seconds=stale_mail_tool_seconds,
+            now=current_dt.timestamp(),
+            dry_run=dry_run,
+        )
+        if state_dir is not None
+        else []
+    )
+
+    orphan_rows = conn.execute(
+        """
+        SELECT b.raw_sha256, length(b.raw_eml)
+        FROM email_blobs b
+        WHERE NOT EXISTS (SELECT 1 FROM email_messages m WHERE m.raw_sha256 = b.raw_sha256)
+        """
+    ).fetchall()
+    orphan_hashes = [str(row[0]) for row in orphan_rows]
+    orphan_bytes = sum(int(row[1] or 0) for row in orphan_rows)
+
+    deleted_message_refs: list[str] = []
+    deleted_blob_hashes: list[str] = []
+    deleted_blob_bytes = 0
+    if include_deleted:
+        deleted_msg_rows = conn.execute(
+            """
+            SELECT storage_ref, raw_sha256
+            FROM email_messages
+            WHERE deleted = 1 AND present = 0
+              AND deleted_ts != ''
+              AND datetime(deleted_ts) <= datetime(?)
+            """,
+            (cutoff_iso,),
+        ).fetchall()
+        deleted_message_refs = [str(row[0]) for row in deleted_msg_rows]
+        if deleted_message_refs:
+            candidate_hashes = sorted({str(row[1]) for row in deleted_msg_rows})
+            for raw_hash in candidate_hashes:
+                still_kept = conn.execute(
+                    """
+                    SELECT 1 FROM email_messages
+                    WHERE raw_sha256 = ?
+                      AND NOT (
+                        deleted = 1 AND present = 0
+                        AND deleted_ts != ''
+                        AND datetime(deleted_ts) <= datetime(?)
+                      )
+                    LIMIT 1
+                    """,
+                    (raw_hash, cutoff_iso),
+                ).fetchone()
+                if still_kept is None:
+                    row = conn.execute(
+                        "SELECT length(raw_eml) FROM email_blobs WHERE raw_sha256 = ?",
+                        (raw_hash,),
+                    ).fetchone()
+                    if row is not None:
+                        deleted_blob_hashes.append(raw_hash)
+                        deleted_blob_bytes += int(row[0] or 0)
+
+    all_blob_hashes = list(dict.fromkeys(orphan_hashes + deleted_blob_hashes))
+    vacuumed = False
+    if not dry_run:
+        with conn:
+            if deleted_message_refs:
+                conn.executemany(
+                    "DELETE FROM email_messages WHERE storage_ref = ?",
+                    ((ref,) for ref in deleted_message_refs),
+                )
+            if all_blob_hashes:
+                conn.executemany(
+                    "DELETE FROM email_blobs WHERE raw_sha256 = ?",
+                    ((raw_hash,) for raw_hash in all_blob_hashes),
+                )
+        if vacuum:
+            conn.execute("VACUUM")
+            vacuumed = True
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "include_deleted": include_deleted,
+        "deleted_retention_days": deleted_retention_days,
+        "cutoff_iso": cutoff_iso,
+        "orphan_blob_count": len(orphan_hashes),
+        "orphan_blob_bytes": orphan_bytes,
+        "pruned_deleted_message_count": len(deleted_message_refs),
+        "pruned_deleted_blob_count": len(deleted_blob_hashes),
+        "pruned_deleted_blob_bytes": deleted_blob_bytes,
+        "removed_blob_count": len(all_blob_hashes),
+        "reclaimed_blob_bytes": orphan_bytes + deleted_blob_bytes,
+        "removed_mail_tool_dirs": stale_mail_tool_dirs,
+        "vacuumed": vacuumed,
+    }
