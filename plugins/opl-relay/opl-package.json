@@ -3,7 +3,7 @@
   "package_id": "opl-relay",
   "display_name": "OPL Relay",
   "publisher": "one-person-lab",
-  "version": "0.7.9",
+  "version": "0.7.10",
   "source": "first_party",
   "package_role": "capability_package",
   "source_repo": "https://github.com/gaofeng21cn/opl-relay",
@@ -82,7 +82,7 @@
       "skills/opl-relay/references/apple-mail.md",
       "runtime/codex_mail_workbench/_opl_profile_workspace.py"
     ],
-    "digest": "sha256:33d7aac568839ddf20c27c8bc8de4d5a17d7c7a065fc67f51700a15ad9d39fb9"
+    "digest": "sha256:8def690cee5a16884659cdf69827e25071fd5189c398d9b023d81b6178febaa3"
   },
   "codex_surface": {
     "plugin_id": "opl-relay",
