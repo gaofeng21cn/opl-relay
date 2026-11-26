@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import net from 'node:net';
+import { join } from 'node:path';
 import test from 'node:test';
-import { createRelayConnectionService } from '../connection-context.mjs';
+import { createRelayConnectionService, loadOpldConnectionHost } from '../connection-context.mjs';
 
 const root = '/installed/opl-relay';
 function fixture() {
@@ -18,7 +21,11 @@ function fixture() {
         async invoke(id, capability, input) {
           if (!active || !authorized) throw Object.assign(new Error('denied'), { details: { reason_code: 'connection_grant_missing', disposition: 'not_dispatched' } });
           calls.push({ id, capability, input });
-          return { invocation_id: 'inv-1', disposition: 'completed', result: { messages: [] } };
+          return {
+            invocation_id: 'inv-1',
+            disposition: 'completed',
+            result: { ok: true, disposition: 'completed', result: { messages: [], source: 'relay-local-cache' } },
+          };
         },
       } };
     },
@@ -29,7 +36,11 @@ function fixture() {
 test('Agent and App actions share one installed consumer and fixed mailbox capabilities', async () => {
   const f = fixture();
   assert.deepEqual((await f.service.invoke('connections', {})).connections.map(x => x.connection_id), ['mail']);
-  await f.service.invoke('connection_search', { connection_id: 'mail', query: 'review' });
+  const searchRes = await f.service.invoke('connection_search', { connection_id: 'mail', query: 'review' });
+  assert.deepEqual(searchRes.messages, []);
+  assert.equal(searchRes.source, 'relay-local-cache');
+  assert.equal(searchRes.ok, true);
+  assert.equal(searchRes.invocation_id, 'inv-1');
   await f.service.invoke('connection_read', { connection_id: 'mail', storage_ref: 'email-store://message' });
   assert.equal(f.starts(), 1);
   assert.deepEqual(f.calls.map(x => x.capability), ['mailbox.search', 'mailbox.read']);
@@ -40,6 +51,42 @@ test('Agent and App actions share one installed consumer and fixed mailbox capab
   f.revoke();
   await assert.rejects(f.service.invoke('connection_read', { connection_id: 'mail', storage_ref: 'email-store://message' }), error => error.envelope.code === 'connection_grant_missing' && error.envelope.disposition === 'not_dispatched');
   assert.equal(f.calls.length, 2);
+});
+
+test('provider failure inside invocation.result preserves ok: false, error code, message and disposition', async () => {
+  const service = createRelayConnectionService({
+    packageRoot: root,
+    loadHost: async () => ({
+      activateInstalledPackageConnectionContext: () => ({
+        dispose() {},
+        connect: {
+          async invoke() {
+            return {
+              invocation_id: 'inv-err-1',
+              disposition: 'completed',
+              result: {
+                ok: false,
+                disposition: 'not_dispatched',
+                error: { code: 'MAILBOX_NOT_FOUND', message: '邮箱连接不存在或未在 Relay 中配置' },
+              },
+            };
+          },
+        },
+      }),
+    }),
+  });
+
+  await assert.rejects(
+    service.invoke('connection_search', { connection_id: 'mail', query: 'missing' }),
+    (error) => (
+      error.envelope?.ok === false
+      && error.envelope?.code === 'MAILBOX_NOT_FOUND'
+      && error.envelope?.error?.code === 'MAILBOX_NOT_FOUND'
+      && error.envelope?.error?.message === '邮箱连接不存在或未在 Relay 中配置'
+      && error.envelope?.disposition === 'not_dispatched'
+      && error.envelope?.invocation_id === 'inv-err-1'
+    ),
+  );
 });
 
 test('an unavailable Framework produces a repair result without calling the local mailbox owner', async () => {
@@ -54,4 +101,146 @@ test('unknown invocation is returned once with its identity and is never retried
   } }) }) });
   await assert.rejects(service.invoke('connection_reply', { connection_id: 'mail', storage_ref: 'email-store://message', request_id: 'same-request' }), error => error.envelope.invocation_id === 'exact-invocation' && error.envelope.disposition === 'unknown_after_dispatch');
   assert.equal(count, 1);
+});
+
+test('loadOpldConnectionHost uses one persistent handshake session, forwards session-bound token, and propagates opld errors', async () => {
+  const sandbox = await mkdtemp('/tmp/relay-opld-ctx-');
+  const runDir = join(sandbox, 'run');
+  await mkdir(runDir, { recursive: true });
+  const sockPath = join(runDir, 'opld.sock');
+  const expectedToken = 'test-daemon-secret-token';
+
+  let handshakeCount = 0;
+  let lastSessionId = null;
+  let observedClientKinds = [];
+  const sockets = new Set();
+
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    let buf = '';
+    let sessionId = null;
+    let clientKind = null;
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk) => {
+      buf += chunk;
+      let idx;
+      while ((idx = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        const req = JSON.parse(line);
+        if (req.method === 'daemon.handshake') {
+          handshakeCount++;
+          assert.equal(req.params.token, expectedToken);
+          clientKind = req.params.client_kind;
+          observedClientKinds.push(clientKind);
+          sessionId = `sess_${handshakeCount}`;
+          lastSessionId = sessionId;
+          socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { ok: true, session_id: sessionId, client_kind: clientKind } }) + '\n');
+          continue;
+        }
+        if (req.method === 'daemon.health') {
+          socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { ok: true } }) + '\n');
+          continue;
+        }
+        if (req.method === 'connect.list') {
+          // Emit a server-push notification before the RPC response to verify event tolerance.
+          socket.write(JSON.stringify({ jsonrpc: '2.0', method: 'event.connect.changed', params: { kind: 'ping' } }) + '\n');
+          socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { connections: [{ connection_id: 'conn-1', name: 'Demo', provider_type: 'opl-relay.mailbox' }] } }) + '\n');
+          continue;
+        }
+        if (req.method === 'connect.requestAccess') {
+          if (!req.params.consumer_bind_token || req.params.session_id !== sessionId) {
+            socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32001, message: 'BIND_TOKEN_SESSION_MISMATCH', data: { code: 'BIND_TOKEN_SESSION_MISMATCH', reason_code: 'bind_token_session_mismatch', disposition: 'not_dispatched' } } }) + '\n');
+            continue;
+          }
+          socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { request_id: 'req-1', status: 'requested' } }) + '\n');
+          continue;
+        }
+        if (req.method === 'connect.invoke') {
+          if (!req.params.consumer_bind_token) {
+            socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32003, message: `TRUSTED_HOST_REQUIRED: client_kind=${clientKind}`, data: { code: 'TRUSTED_HOST_REQUIRED', reason_code: 'trusted_host_required', disposition: 'not_dispatched' } } }) + '\n');
+            continue;
+          }
+          if (req.params.consumer_bind_token !== `bind:${sessionId}` || req.params.session_id !== sessionId) {
+            socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32001, message: 'BIND_TOKEN_SESSION_MISMATCH', data: { code: 'BIND_TOKEN_SESSION_MISMATCH', reason_code: 'bind_token_session_mismatch', disposition: 'not_dispatched' } } }) + '\n');
+            continue;
+          }
+          socket.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id: req.id,
+            result: {
+              invocation_id: 'inv-live-1',
+              disposition: 'completed',
+              result: {
+                ok: true,
+                disposition: 'completed',
+                result: { messages: [{ storage_ref: 'email-store://demo/1', subject: 'Hello' }], source: 'relay-local-cache' },
+              },
+            },
+          }) + '\n');
+        }
+      }
+    });
+  });
+
+  await new Promise((resolve) => server.listen(sockPath, resolve));
+  await writeFile(join(runDir, 'opld.session.json'), JSON.stringify({ socket_path: sockPath, token: expectedToken }), 'utf8');
+
+  const prevStateDir = process.env.OPL_STATE_DIR;
+  const prevBindToken = process.env.OPL_CONSUMER_BIND_TOKEN;
+  const prevClientKind = process.env.OPL_CLIENT_KIND;
+  process.env.OPL_STATE_DIR = sandbox;
+  delete process.env.OPL_CONSUMER_BIND_TOKEN;
+  delete process.env.OPL_CLIENT_KIND;
+
+  let service;
+  try {
+    service = createRelayConnectionService({ packageRoot: root, loadHost: () => loadOpldConnectionHost() });
+
+    // 1. Default client_kind remains 'external' (never spoofed) and fails closed without bind token.
+    const listed = await service.invoke('connections', {});
+    assert.equal(listed.connections.length, 1);
+    assert.equal(handshakeCount, 1);
+    assert.deepEqual(observedClientKinds, ['external']);
+
+    await assert.rejects(
+      service.invoke('connection_search', { connection_id: 'conn-1', query: 'hi' }),
+      (error) => error.envelope?.ok === false && error.envelope?.code === 'TRUSTED_HOST_REQUIRED' && error.envelope?.disposition === 'not_dispatched',
+    );
+    assert.equal(handshakeCount, 1);
+
+    // 2. Session-matched bind token succeeds across requestAccess + invoke on the SAME persistent handshake.
+    process.env.OPL_CONSUMER_BIND_TOKEN = `bind:${lastSessionId}`;
+    const reqRes = await service.invoke('connection_request', { connection_id: 'conn-1', capability_ids: ['mailbox.search'] });
+    assert.equal(reqRes.request.request_id, 'req-1');
+    const searchRes = await service.invoke('connection_search', { connection_id: 'conn-1', query: 'hi' });
+    assert.equal(searchRes.ok, true);
+    assert.equal(searchRes.invocation_id, 'inv-live-1');
+    assert.equal(searchRes.source, 'relay-local-cache');
+    assert.equal(searchRes.messages.length, 1);
+    assert.equal(handshakeCount, 1);
+
+    // 3. After server drops the socket, client reconnects cleanly with a new handshake.
+    for (const s of sockets) s.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Old token now mismatches new session_id -> fails closed with BIND_TOKEN_SESSION_MISMATCH.
+    await assert.rejects(
+      service.invoke('connection_search', { connection_id: 'conn-1', query: 'hi' }),
+      (error) => error.envelope?.ok === false && error.envelope?.code === 'BIND_TOKEN_SESSION_MISMATCH',
+    );
+    assert.equal(handshakeCount, 2);
+  } finally {
+    service?.dispose();
+    for (const s of sockets) s.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    if (prevStateDir === undefined) delete process.env.OPL_STATE_DIR;
+    else process.env.OPL_STATE_DIR = prevStateDir;
+    if (prevBindToken === undefined) delete process.env.OPL_CONSUMER_BIND_TOKEN;
+    else process.env.OPL_CONSUMER_BIND_TOKEN = prevBindToken;
+    if (prevClientKind === undefined) delete process.env.OPL_CLIENT_KIND;
+    else process.env.OPL_CLIENT_KIND = prevClientKind;
+    await rm(sandbox, { recursive: true, force: true });
+  }
 });

@@ -151,7 +151,8 @@ def test_cli_connect_reads_and_writes_only_json_stdout(provider):
     command = [sys.executable, "-m", "codex_mail_workbench.cli", "--json", "--config", str(config),
                "--db", str(db), "--draft-db", str(ledger), "connect"]
     result = subprocess.run(command, input=json.dumps(envelope("list")), text=True, capture_output=True, check=False,
-                            env={"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "runtime")})
+                            env={"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "runtime"),
+                                 "PYTHONDONTWRITEBYTECODE": "1"})
     assert result.returncode == 0
     assert result.stderr == ""
     assert json.loads(result.stdout)["ok"] is True
