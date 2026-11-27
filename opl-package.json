@@ -2,7 +2,7 @@
   "schema_version": "opl.package.v2",
   "identity": {
     "id": "opl-relay",
-    "version": "0.7.10",
+    "version": "0.7.11",
     "intent": "app",
     "name": {
       "zh-CN": "OPL Relay",
