@@ -89,7 +89,7 @@ deletion, or credential values. Both invoke the same bounded Relay CLI actions.
 
 对应能力为 `mailbox.search`、`mailbox.read`、`draft.create`。已批准 grant 可直接调用；每次调用重新检查授权、连接版本和安装描述符。`connection_reply` 只建立原 owner 的本地审阅草稿，返回原 draft identity，不授予发送。未知结果保留 invocation ID，调用方先回读原 request。
 
-Framework 依赖由既有 `opl packages link-framework --agent-root <installed-opl-relay> --json` 建立；构建仅将该公共导出保留为外部依赖，不复制 Framework。缺少基座或不匹配的安装根返回修复提示。Relay 原有本地邮箱入口继续遵循自己的权限与草稿合同。
+Framework 依赖由 Framework v2 的 Package 注入边界与公共导出（`@opl/*` / `opl_client`）提供；构建仅保留该公共导出为外部依赖，不复制 Framework。缺少基座或不匹配的安装根返回修复提示。Relay 原有本地邮箱入口继续遵循自己的权限与草稿合同。
 
 
 ## Navigation continuity
