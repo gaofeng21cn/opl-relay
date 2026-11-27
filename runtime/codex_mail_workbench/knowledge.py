@@ -14,10 +14,11 @@ from .paths import default_profile_workspace
 from .schema import ensure_memory_schema
 
 try:
-    from opl_client import OplClient, OplClientError
+    from opl_client import OplClient, OplClientError, resolve_session_path
 except ImportError:  # pragma: no cover - optional thin SDK on PYTHONPATH/site-packages
     OplClient = None  # type: ignore[assignment]
     OplClientError = Exception  # type: ignore[assignment,misc]
+    resolve_session_path = None  # type: ignore[assignment]
 
 
 def utc_now() -> str:
@@ -87,10 +88,6 @@ class FrameworkKnowledge:
         if not self.command:
             raise ValueError("framework_command_missing")
 
-    def _session_file(self) -> Path:
-        state_dir = Path(os.environ.get("OPL_STATE_DIR") or (Path.home() / ".opl" / "state")).expanduser()
-        return state_dir / "run" / "opld.session.json"
-
     def _select_workspace_id(self, workspaces: list[dict[str, Any]]) -> str | None:
         targets = [str(p) for p in (self.project_root, self.workspace_root) if p is not None]
         for ws in workspaces:
@@ -104,9 +101,9 @@ class FrameworkKnowledge:
         return None
 
     def _call_opl_client(self, action: str, *, workspace_id: str | None = None, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        if self._explicit_command or OplClient is None:
+        if self._explicit_command or OplClient is None or resolve_session_path is None:
             return None
-        session_path = self._session_file()
+        session_path = resolve_session_path()
         if not session_path.is_file():
             return None
         try:
