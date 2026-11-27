@@ -38,6 +38,13 @@ function markUnavailable(error, message) {
   });
 }
 
+function unknownOutcome() {
+  const code = 'opld_response_unavailable';
+  return Object.assign(new Error('邮箱连接操作结果尚未确认，请核对同一请求的状态，避免重复提交。'), {
+    details: { code, disposition: 'unknown_after_dispatch' },
+  });
+}
+
 function createOpldSessionClient(options = {}) {
   const rpcTimeoutMs = options.rpcTimeoutMs ?? 10_000;
   let socket = null;
@@ -68,7 +75,7 @@ function createOpldSessionClient(options = {}) {
     const reason = err || new Error('opld connection closed');
     for (const entry of pending.values()) {
       clearTimeout(entry.timer);
-      entry.reject(markUnavailable(reason));
+      entry.reject(entry.mayMutate ? unknownOutcome() : markUnavailable(reason));
     }
     pending.clear();
   };
@@ -218,17 +225,18 @@ function createOpldSessionClient(options = {}) {
   return {
     get sessionId() { return sessionId; },
     get handshakeResult() { return handshakeResult; },
-    async call(method, params) {
+    async call(method, params, { mayMutate = false } = {}) {
       const activeSocket = await ensureConnected();
+      if (!activeSocket.writable) throw markUnavailable(new Error('opld connection closed'));
       return new Promise((resolvePromise, rejectPromise) => {
         const id = sendRaw(activeSocket, method, params);
         const timer = setTimeout(() => {
           pending.delete(id);
           updateRef();
-          rejectPromise(new Error(`opld RPC '${method}' timed out`));
+          rejectPromise(mayMutate ? unknownOutcome() : new Error(`opld RPC '${method}' timed out`));
         }, rpcTimeoutMs);
         timer.unref?.();
-        pending.set(id, { resolve: resolvePromise, reject: rejectPromise, timer });
+        pending.set(id, { resolve: resolvePromise, reject: rejectPromise, timer, mayMutate });
         updateRef();
       });
     },
@@ -277,7 +285,7 @@ export async function loadOpldConnectionHost(options = {}) {
               ...(client.sessionId ? { session_id: client.sessionId } : {}),
               connection_id: connectionId,
               capability_ids: capabilityIds,
-            });
+            }, { mayMutate: true });
           },
           async invoke(connectionId, capabilityId, input) {
             const token = resolveBindToken();
@@ -288,7 +296,7 @@ export async function loadOpldConnectionHost(options = {}) {
               connection_id: connectionId,
               capability_id: capabilityId,
               input,
-            });
+            }, { mayMutate: capabilityId === 'draft.create' });
           },
         },
       };
@@ -391,6 +399,10 @@ export function createRelayConnectionService({ packageRoot, loadHost = loadOpldC
               reason_code: reasonCode,
               disposition,
               invocation_id: invocationId,
+              ...(disposition === 'unknown_after_dispatch' ? {
+                connection_id: parsed.connection_id,
+                ...(parsed.request_id ? { request_id: parsed.request_id } : {}),
+              } : {}),
             },
           });
         }

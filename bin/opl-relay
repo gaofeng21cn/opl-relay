@@ -132,9 +132,17 @@ def _ensure_runtime_dependencies() -> None:
                 cmd.extend(["--with", spec])
             cmd.extend(["python", script, *sys.argv[1:]])
             env = {**os.environ, "_OPL_RELAY_UV_REEXEC": "1"}
+            env["_OPL_RELAY_UV_PYTHONPATH"] = env.pop("PYTHONPATH", "")
             os.execve(uv, cmd, env)
 
+    raise SystemExit("opl-relay: compatible Python dependencies are unavailable. Use the Relay virtual environment or install uv.")
 
+
+if os.environ.get("_OPL_RELAY_UV_REEXEC") == "1":
+    # Retain optional SDK paths without letting them shadow uv's dependencies.
+    for entry in os.environ.get("_OPL_RELAY_UV_PYTHONPATH", "").split(os.pathsep):
+        if entry:
+            sys.path.append(str(Path(entry).resolve()))
 _ensure_runtime_dependencies()
 sys.path.insert(0, str(RUNTIME_ROOT))
 runpy.run_module("codex_mail_workbench.cli", run_name="__main__")

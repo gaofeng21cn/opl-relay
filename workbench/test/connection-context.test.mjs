@@ -103,6 +103,62 @@ test('unknown invocation is returned once with its identity and is never retried
   assert.equal(count, 1);
 });
 
+test('socket loss and timeout preserve uncertainty for dispatched connection writes', async (t) => {
+  const sandbox = await mkdtemp('/tmp/relay-opld-loss-');
+  const runDir = join(sandbox, 'run');
+  await mkdir(runDir);
+  const socketPath = join(runDir, 'opld.sock');
+  const sockets = new Set();
+  const writes = [];
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    socket.setEncoding('utf8');
+    let buffer = '';
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      let end;
+      while ((end = buffer.indexOf('\n')) !== -1) {
+        const request = JSON.parse(buffer.slice(0, end));
+        buffer = buffer.slice(end + 1);
+        if (request.method === 'daemon.handshake' || request.method === 'daemon.health') {
+          socket.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { ok: true, session_id: 'demo' } }) + '\n');
+          continue;
+        }
+        writes.push(request);
+        if (request.method === 'connect.requestAccess') socket.destroy();
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const service = createRelayConnectionService({
+    packageRoot: root,
+    loadHost: () => loadOpldConnectionHost({ stateDir: sandbox, rpcTimeoutMs: 100 }),
+  });
+  t.after(async () => {
+    service.dispose();
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(sandbox, { recursive: true, force: true });
+  });
+
+  const accessRequest = { connection_id: 'mail', capability_ids: ['mailbox.read'] };
+  await assert.rejects(service.invoke('connection_request', accessRequest),
+    (error) => error.envelope?.disposition === 'not_dispatched');
+  assert.equal(writes.length, 0);
+
+  await writeFile(join(runDir, 'opld.session.json'), JSON.stringify({ socket_path: socketPath, token: 'test' }));
+  await assert.rejects(service.invoke('connection_request', accessRequest),
+    (error) => error.envelope?.disposition === 'unknown_after_dispatch' && error.envelope.connection_id === 'mail');
+  await assert.rejects(service.invoke('connection_reply', {
+    connection_id: 'mail', storage_ref: 'email-store://message', request_id: 'draft-request',
+  }), (error) => error.envelope?.disposition === 'unknown_after_dispatch' && error.envelope.request_id === 'draft-request');
+  assert.deepEqual(writes.map(({ method, params }) => [method, params.input?.request_id]), [
+    ['connect.requestAccess', undefined],
+    ['connect.invoke', 'draft-request'],
+  ]);
+});
+
 test('loadOpldConnectionHost uses one persistent handshake session, forwards session-bound token, and propagates opld errors', async () => {
   const sandbox = await mkdtemp('/tmp/relay-opld-ctx-');
   const runDir = join(sandbox, 'run');

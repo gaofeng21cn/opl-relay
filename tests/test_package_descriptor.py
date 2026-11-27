@@ -319,6 +319,7 @@ def test_launcher_rejects_incompatible_pydantic_v1_in_venv_and_current_interpret
     fake_bin = tmp_path / "bin"
     fake_uv = fake_bin / "uv"
     uv_log = tmp_path / "uv-argv.json"
+    uv_environment = tmp_path / "uv-environment.json"
     v1_site = tmp_path / "v1-site"
     v2_site = tmp_path / "v2-site"
 
@@ -336,9 +337,11 @@ def test_launcher_rejects_incompatible_pydantic_v1_in_venv_and_current_interpret
 
     fake_uv.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, sys\n"
+        "import json, os, sys\n"
         "from pathlib import Path\n"
-        f"Path({str(uv_log)!r}).write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n",
+        f"Path({str(uv_log)!r}).write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n"
+        "environment = [os.getenv('PYTHONPATH'), os.getenv('_OPL_RELAY_UV_PYTHONPATH')]\n"
+        f"Path({str(uv_environment)!r}).write_text(json.dumps(environment), encoding='utf-8')\n",
         encoding="utf-8",
     )
     fake_uv.chmod(0o755)
@@ -379,6 +382,7 @@ def test_launcher_rejects_incompatible_pydantic_v1_in_venv_and_current_interpret
     res_cur_v1 = subprocess.run([sys.executable, "-S", str(launcher), "--version"], check=False, capture_output=True, text=True, env=env_cur_v1)
     assert res_cur_v1.returncode == 0, res_cur_v1.stderr
     assert uv_log.is_file()
+    assert json.loads(uv_environment.read_text(encoding="utf-8")) == [None, str(v1_site)]
 
     # 3. .venv has compatible versions (pydantic 2.10.6 + pydantic_core) -> accept .venv without uv.
     uv_log.unlink()
