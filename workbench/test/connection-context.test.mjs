@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import test from 'node:test';
 import { createRelayConnectionService, loadOpldConnectionHost } from '../connection-context.mjs';
 
@@ -157,6 +157,55 @@ test('socket loss and timeout preserve uncertainty for dispatched connection wri
     ['connect.requestAccess', undefined],
     ['connect.invoke', 'draft-request'],
   ]);
+});
+
+test('default daemon discovery uses the Framework CLI session path', async (t) => {
+  const sandbox = await mkdtemp('/tmp/relay-opld-discovery-');
+  const socketPath = join(sandbox, 'opld.sock');
+  const sessionPath = join(sandbox, 'opld.session.json');
+  const invocationsPath = join(sandbox, 'argv.json');
+  const server = net.createServer((socket) => {
+    socket.setEncoding('utf8');
+    let buffer = '';
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      let end;
+      while ((end = buffer.indexOf('\n')) !== -1) {
+        const request = JSON.parse(buffer.slice(0, end));
+        buffer = buffer.slice(end + 1);
+        const result = request.method === 'connect.list'
+          ? { connections: [{ connection_id: 'demo', provider_type: 'opl-relay.mailbox' }] }
+          : { ok: true, session_id: 'demo-session' };
+        socket.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const service = createRelayConnectionService({ packageRoot: root });
+  const previousPath = process.env.PATH;
+  const previousStateDir = process.env.OPL_STATE_DIR;
+  t.after(async () => {
+    service.dispose();
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousStateDir === undefined) delete process.env.OPL_STATE_DIR;
+    else process.env.OPL_STATE_DIR = previousStateDir;
+    await new Promise((resolve) => server.close(resolve));
+    await rm(sandbox, { recursive: true, force: true });
+  });
+  await writeFile(sessionPath, JSON.stringify({ socket_path: socketPath, token: 'test' }));
+  await writeFile(join(sandbox, 'opl'), [
+    '#!/usr/bin/env node',
+    "const fs = require('node:fs');",
+    `fs.writeFileSync(${JSON.stringify(invocationsPath)}, JSON.stringify(process.argv.slice(2)));`,
+    `console.log(JSON.stringify({ session_file: ${JSON.stringify(sessionPath)} }));`,
+  ].join('\n'), { mode: 0o700 });
+  process.env.PATH = [sandbox, previousPath].filter(Boolean).join(delimiter);
+  delete process.env.OPL_STATE_DIR;
+
+  const result = await service.invoke('connections', {});
+  assert.equal(result.connections[0].connection_id, 'demo');
+  assert.deepEqual(JSON.parse(await readFile(invocationsPath, 'utf8')), ['daemon', 'status', '--json']);
 });
 
 test('loadOpldConnectionHost uses one persistent handshake session, forwards session-bound token, and propagates opld errors', async () => {

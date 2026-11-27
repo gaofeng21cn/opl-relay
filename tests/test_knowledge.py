@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from codex_mail_workbench import knowledge
 from codex_mail_workbench.knowledge import FrameworkKnowledge, KnowledgeIndex
 
 
@@ -54,3 +55,34 @@ def test_framework_adapter_fails_closed_for_invalid_command(tmp_path: Path):
         assert str(exc) == "framework_knowledge_unavailable"
     else:
         raise AssertionError("missing Framework command must fail closed")
+
+
+def test_framework_adapter_uses_sdk_session_path(tmp_path: Path, monkeypatch):
+    session_file = tmp_path / "platform-state" / "run" / "opld.session.json"
+    session_file.parent.mkdir(parents=True)
+    session_file.write_text("{}", encoding="utf-8")
+
+    class Client:
+        def __init__(self, *, session_file: Path):
+            assert session_file == sdk_path()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def workspace_list(self):
+            return {"workspaces": [{"workspace_id": "example", "root_path": str(tmp_path)}]}
+
+        def call(self, action, params):
+            assert action == "workspace.knowledge.list"
+            assert params == {"workspace_id": "example"}
+            return {"sources": []}
+
+    def sdk_path():
+        return session_file
+
+    monkeypatch.setattr(knowledge, "resolve_session_path", sdk_path)
+    monkeypatch.setattr(knowledge, "OplClient", Client)
+    assert FrameworkKnowledge(tmp_path).sources() == []

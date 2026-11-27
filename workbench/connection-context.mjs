@@ -1,10 +1,12 @@
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import net from 'node:net';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { z } from 'zod';
 
+const execFileAsync = promisify(execFile);
 const capabilities = ['mailbox.search', 'mailbox.read', 'draft.create'];
 const connection = { connection_id: z.string().min(1) };
 const source = { ...connection, storage_ref: z.string().startsWith('email-store://') };
@@ -98,10 +100,19 @@ function createOpldSessionClient(options = {}) {
     }
 
     connectPromise = (async () => {
-      const stateDir = options.stateDir || process.env.OPL_STATE_DIR || join(homedir(), '.opl', 'state');
-      const sessionPath = join(stateDir, 'run', 'opld.session.json');
       let session;
       try {
+        const stateDir = options.stateDir?.trim() || process.env.OPL_STATE_DIR?.trim();
+        let sessionPath;
+        if (stateDir) {
+          sessionPath = join(stateDir, 'run', 'opld.session.json');
+        } else {
+          const { stdout } = await execFileAsync('opl', ['daemon', 'status', '--json'], { timeout: 5000, windowsHide: true });
+          sessionPath = JSON.parse(stdout)?.session_file;
+          if (typeof sessionPath !== 'string' || !isAbsolute(sessionPath)) {
+            throw new Error('Invalid Framework daemon session path.');
+          }
+        }
         session = JSON.parse(await readFile(sessionPath, 'utf8'));
       } catch (err) {
         throw markUnavailable(err, 'Unable to read opld session descriptor.');
