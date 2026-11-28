@@ -60,8 +60,8 @@ Relay separates replaceable installation bytes from one user-owned Profile
 Workspace (`OPL_PROFILE_WORKSPACE`, defaulting to `~/OPL/profiles/<user>`),
 with Relay state stored solely under `<profile>/data/relay`. Framework owns
 the shared selector, marker, and initialization mechanics in
-`python/opl_framework/profile_workspace.py`; Relay embeds a generated copy in
-`plugins/opl-relay/runtime/codex_mail_workbench/_opl_profile_workspace.py` and
+`sdks/python-client` (`opl_client`); Relay embeds a generated helper in
+`runtime/codex_mail_workbench/_opl_profile_workspace.py` and
 passes `extra_dirs=("data/relay",)` from `workspace.py` so Relay initializes its
 own state directory independently. Operational setup and overlay migration live
 in [Local Data And Workspace](local-profile.md).
@@ -101,8 +101,8 @@ for cross-repository handoffs.
 
 ## Shared Mail Workbench
 
-`workbench/` owns the shared review UI and its Node adapter; the packaged
-`plugins/opl-relay/workbench/` contains a self-contained build. The official MCP
+`workbench/` owns the shared review UI and its Node adapter; `workbench-dist/`
+contains the packaged self-contained build. The official MCP
 SDK exposes a standard `ui://` App resource and bounded tools. The official
 `ext-apps` bridge connects UI events to those tools. The same UI runs from a
 loopback HTTP server for hosts without MCP App rendering. Both adapters call

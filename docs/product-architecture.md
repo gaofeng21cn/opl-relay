@@ -83,7 +83,7 @@ post-review fingerprint and authoritative send result.
 
 ## App Contributions
 
-The carrier-root `plugins/opl-relay/opl-package.json` declares the current
+The root `opl-package.json` (`opl.package.v2`) declares the current
 role-neutral `app_contributions` and `app-contribution` CLI ABI. App consumes
 structured data and opaque actions through Framework; it must not special-case
 Relay identity, require a `standard_agent` role or embed Package UI code.

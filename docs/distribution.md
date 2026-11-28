@@ -16,45 +16,33 @@ substitute for another.
 | Surface | Current authority | Status |
 | --- | --- | --- |
 | Source code | `https://github.com/gaofeng21cn/opl-relay` | Public Git repository |
-| Codex Marketplace | Repository `.agents/plugins/marketplace.json` | Usable from a local clone or as a Git-backed Marketplace |
-| Codex Plugin | `plugins/opl-relay` | Installable carrier containing Skill, metadata, and runtime |
-| OpenClaw adapter | `plugins/opl-relay/openclaw/SKILL.md` | Host instructions carried with the same versioned Plugin; no second mail engine |
-| Python engine | `plugins/opl-relay/runtime` | Carried by the Plugin; no source checkout required |
-| OPL Package descriptor | `plugins/opl-relay/opl-package.json` | Declares capability identity and App contributions |
+| OPL Package descriptor | Root `opl-package.json` (`opl.package.v2`) | Declares capability identity, Skills, MCP server, and App contributions |
+| Built workbench bundle | `workbench-dist/` | Built from `workbench/` and carried inside the Package payload |
+| OpenClaw adapter | `openclaw/SKILL.md` | Host instructions carried with the same versioned Package; no second mail engine |
+| Python engine | `runtime/` | Carried by the Package payload; no source checkout required |
 | OPL Package publication | Relay owner descriptor plus immutable GHCR payload | Publication comes from public immutable digest readback; it is separate from installed state |
 | User data | Selected Profile Workspace | Local and user-owned |
 
-The public Git repository is the source and Codex Git Marketplace authority.
-OPL App installation and updates use the separate GHCR Package channel.
-The owner descriptor declares Codex-only Skill synchronization; workspace and
-quest Skill copies are not implicit.
+The public Git repository holds the source and build input; `opl-catalog` /
+GHCR is the sole distribution channel, and Framework zero-copy carrier
+projection exposes `opl-relay` to configured hosts (such as Codex / Studio)
+without maintaining separate `.agents/plugins/marketplace.json` or
+`plugins/opl-relay/` mirrors. The owner descriptor declares Codex-only Skill
+synchronization; workspace and quest Skill copies are not implicit.
 
-## Codex Marketplace
+## Local Development Link
 
-Codex accepts a GitHub repository, Git URL, SSH URL, or local root as a
-Marketplace source. This repository keeps its Marketplace file at:
-
-```text
-.agents/plugins/marketplace.json
-```
-
-Its current entry points to the Plugin inside the same repository:
-
-```text
-plugins/opl-relay/
-```
-
-A user can add the Git Marketplace and install the Plugin:
+Developers testing against a local checkout can link this root directly into OPL
+Framework:
 
 ```bash
-codex plugin marketplace add gaofeng21cn/opl-relay --ref main --json
-codex plugin list --marketplace opl-relay --available --json
-codex plugin add opl-relay@opl-relay --json
+opl pack link . --json
+opl pack inspect opl-relay --json
 ```
 
-`codex plugin marketplace upgrade opl-relay` refreshes the configured Git
-snapshot. Reinstalling the Plugin selects the embedded engine and Skill bytes
-from that refreshed snapshot. Neither operation touches the Profile Workspace.
+Relinking or reinstalling selects the embedded engine, `workbench-dist/`
+assets, and `skills/` bytes from the active Package root. Neither operation
+touches the Profile Workspace.
 
 ## Shared Workbench And MCP App
 
@@ -147,8 +135,7 @@ portable installation and rendering do not remove that current dependency.
 
 ## Package Installation Is Separate
 
-The file `plugins/opl-relay/opl-package.json` is a Package owner descriptor. It
-declares:
+The root `opl-package.json` is the `opl.package.v2` Package owner descriptor. It declares:
 
 - Package identity and version;
 - stable Relay capabilities;
@@ -210,9 +197,8 @@ OCI Package. Publication requires the owner channel and immutable digest.
 - bilingual user-facing README;
 - stable logo and license;
 - full Python tests;
-- Package descriptor and content-lock tests;
-- Plugin manifest and Marketplace validation;
-- isolated Plugin discovery and install test in manual CI qualification;
+- `opl.package.v2` descriptor (`opl-package.json`) and DSH MCP qualification;
+- isolated Package discovery and install verification in Framework/CI;
 - no private Profile Workspace data in Git.
 
 Managed Package verification requires all of the following:

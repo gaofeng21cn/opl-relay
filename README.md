@@ -135,26 +135,22 @@ bodies may stay in an existing vault or project directory:
 Relay always uses `<profile>/data/relay`. Reinstalling or updating code must not
 move, replace, or publish that directory.
 
-## Install The Codex Plugin From GitHub
+## Install From OPL Catalog Or Local Source
 
-The public repository can be added as a Git-backed Codex Marketplace:
-
-```bash
-codex plugin marketplace add gaofeng21cn/opl-relay --ref main --json
-codex plugin list --marketplace opl-relay --available --json
-codex plugin add opl-relay@opl-relay --json
-codex plugin list --marketplace opl-relay --json
-```
-
-To refresh the Git marketplace and reinstall the current Plugin snapshot:
+Install the published Package through OPL Framework (`opld` / CLI) or Software Center in OPL App:
 
 ```bash
-codex plugin marketplace upgrade opl-relay --json
-codex plugin remove opl-relay@opl-relay --json
-codex plugin add opl-relay@opl-relay --json
+opl pack install ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable --json
+opl pack inspect opl-relay --json
 ```
 
-Start a new Codex task after installation so the new Plugin snapshot is loaded.
+For local source development against this checkout:
+
+```bash
+opl pack link . --json
+```
+
+Start a new host session after installation or relinking so the host loads the updated carrier snapshot.
 
 ## Use With OpenClaw
 
@@ -165,10 +161,9 @@ the conversation channel; Relay remains the only mailbox store, review ledger,
 and draft operator. A source checkout or a second IMAP plugin is not required
 for normal mail work.
 
-> **Distribution boundary:** this command installs the Codex Plugin directly
-> from GitHub. OPL App uses the separate GHCR Package channel described below;
-> both deliver the same public Relay carrier but have independent lifecycle
-> authorities.
+> **Distribution boundary:** `opl pack link .` binds a developer checkout as a
+> temporary local development override; normal users install from
+> `opl-catalog` / GHCR Package channels (`ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable`).
 
 ## Start With A New Profile
 
@@ -384,7 +379,7 @@ The contracted stable Package source is
 Package publication must be read from the public immutable GHCR digest.
 Installed/current state must be read separately from the configured native
 carrier; Framework only delegates actions and aggregates that readback for App.
-GitHub remains the source and Codex Plugin Marketplace input; GitHub Releases
+GitHub remains the source repository and release build input; GitHub Releases
 are not part of Relay distribution. See
 [Distribution](docs/distribution.md) for the authority and availability
 boundaries.

@@ -111,26 +111,22 @@ Apple Mail 草稿和最终发送门仍由 Relay 单独负责。
 Relay 固定使用 `<profile>/data/relay`。重新安装、升级代码或清理插件缓存，都不应该
 移动、覆盖或上传这个目录。
 
-## 从 GitHub 安装 Codex 插件
+## 通过 OPL 安装或本地挂载开发版
 
-当前公开仓库可以直接作为 Git Marketplace 添加到 Codex：
-
-```bash
-codex plugin marketplace add gaofeng21cn/opl-relay --ref main --json
-codex plugin list --marketplace opl-relay --available --json
-codex plugin add opl-relay@opl-relay --json
-codex plugin list --marketplace opl-relay --json
-```
-
-刷新 Git Marketplace 并重新安装当前插件快照：
+日常用户推荐直接通过 OPL App 软件中心或 OPL CLI 从官方 GHCR 渠道安装已发布的能力包：
 
 ```bash
-codex plugin marketplace upgrade opl-relay --json
-codex plugin remove opl-relay@opl-relay --json
-codex plugin add opl-relay@opl-relay --json
+opl pack install ghcr.io/gaofeng21cn/one-person-lab-packages/opl-relay:latest-stable --json
+opl pack inspect opl-relay --json
 ```
 
-安装后请新建一个 Codex 任务，让新任务加载刚安装的插件快照。
+本地源码开发与联调时，可直接将当前工作区注册为本地覆盖来源：
+
+```bash
+opl pack link . --json
+```
+
+安装或更新本地链接后，请新建一次宿主会话，以加载最新的载体与 Skill 快照。
 
 ## 在 OpenClaw 中使用
 
@@ -139,8 +135,8 @@ codex plugin add opl-relay@opl-relay --json
 OpenClaw 负责微信等对话入口；邮件库、处理进度和草稿操作仍由 Relay 统一维护。
 日常使用不需要依赖源码仓库，也不需要另装一套 IMAP 插件。
 
-> **分发边界：** 上述命令由 Codex 直接从 GitHub 安装插件。OPL App 使用下文说明的
-> GHCR 能力包通道；两条路径交付同一套 Relay 载体，但安装、更新和状态权威彼此独立。
+> **分发边界：** `opl pack link .` 仅用于本地源码调试；普通用户统一从官方目录 / GHCR
+> 能力包渠道安装与更新，载体状态与更新回读由 Framework 与原生宿主统一投影。
 
 ## 新用户首次配置
 
